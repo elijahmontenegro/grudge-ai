@@ -1,0 +1,86 @@
+= Spidey RRC Service
+:project-name: Spidey
+:module-name: RRC Service
+:rrc-full: Retrieval-Restored Continuation
+:lang: Go 1.26+
+:api-protocol: GraphQL
+:codegen: gqlgen, go generate
+
+== Context
+
+=== Identity
+
+*Name:* {project-name} {module-name}
+
+*Paradigm:* Stateless RRC Proxy + System Tray Service
+
+The RRC service is the engine that implements {rrc-full}. It runs as a background process in the OS system tray and exposes two interfaces:
+
+1. **LLM Proxy** -- An HTTP endpoint that accepts standard LLM API requests. Clients send full conversation history as they normally would. The service intercepts, selects prerequisites, assembles the payload, forwards to the actual LLM, parses the response stream, and caches reasoning for warm carry-forward. The client does not change. The model does not know.
+
+2. **GraphQL API** -- A query interface for the agentic tool (and any privileged client) to access RRC introspection data: what was selected, what was excluded, prerequisite scores, prompt derivation, carry-forward state.
+
+=== Stack
+
+*Language:* {lang}
+
+*API Layer:* {api-protocol} via {codegen}
+
+*Code Generation:* {codegen}
+
+*Depends on:* `spec/core` (truth types, LLM interface, embedder interface)
+
+=== RRC Reference
+
+The four properties, delivery model, and RRC-vs-RAG distinction are defined in the project root spec:
+
+include::../MANIFEST.adoc[tag=rrc]
+
+=== Scope
+
+==== In Scope
+
+- RRC engine: prerequisite detection, selection scoring, payload assembly, native format restoration, bounded assembly
+- Warm carry-forward: response stream parsing, reasoning content extraction, carry-forward cache, selection enrichment
+- LLM proxy: HTTP endpoint accepting standard LLM API requests, transparent forwarding
+- Embedding pipeline: embed conversation messages using core embedder interface
+- GraphQL API: schema and resolvers for RRC introspection (selection results, scores, exclusions, prompt derivation)
+- System tray integration (Windows primary, cross-platform later)
+- Service lifecycle: start, stop, health check, configuration
+- Serving the agentic tool's static assets (Web UI)
+
+==== Out of Scope
+
+- Conversation storage (the client owns its corpus; RRC receives it per-request)
+- Upstream summarization or entity extraction (violates lossless corpus property)
+- LLM interface or provider adapter definitions (belongs to `spec/core`)
+- Embedder interface or adapter definitions (belongs to `spec/core`)
+- Agentic UI, tool visualization, or interaction patterns (belongs to `spec/agent`)
+- Agent orchestration / agent loop (belongs to `spec/agent`)
+- Provider-specific preferential treatment
+
+== Implementation
+
+// Implementation sections to be specified:
+//
+// --- RRC Engine ---
+// - Prerequisite Detection (algorithm, scoring model, dependency vs similarity distinction)
+// - Selection Scoring (score types, thresholds, bounded assembly rules)
+// - Payload Assembly (native format restoration, message ordering, token budget)
+// - Warm Carry-Forward (reasoning extraction from response stream, cache structure, enrichment strategy)
+//
+// --- LLM Proxy ---
+// - HTTP Proxy Architecture (request interception, response stream passthrough)
+// - Request Pipeline (receive -> embed -> select -> assemble -> forward -> parse -> cache -> respond)
+// - Provider Routing (which upstream LLM to forward to, configuration)
+// - Streaming (SSE/chunked response passthrough with concurrent parsing)
+//
+// --- GraphQL API ---
+// - Schema (introspection types: SelectionResult, Score, ExclusionReason, PromptDerivation, CarryForwardState)
+// - Resolvers
+// - Subscriptions (live introspection during streaming responses)
+//
+// --- System Tray Service ---
+// - Tray Integration (Windows systray, menu, status)
+// - Service Lifecycle (start, stop, health, config reload)
+// - Static Asset Serving (Web UI files)

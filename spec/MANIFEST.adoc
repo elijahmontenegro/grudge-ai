@@ -22,13 +22,26 @@
 
 *Paradigm:* {project-paradigm}
 
-{project-name} is an agentic software system built natively for {rrc-full} (RRC). Three deliverables:
+{project-name} is an agentic software system built natively for {rrc-full} (RRC). Three deliverables, three specs:
 
-1. **Core Library** -- A Go library providing provider-agnostic abstractions for language models, embeddings, tool execution, and agentic orchestration. This is the foundational dependency. Everything else is a consumer of it.
+1. **Core Library** (`spec/core`) -- A Go library providing provider-agnostic abstractions for language models, embeddings, tool execution, and agentic orchestration. The foundational dependency. Everything else is a consumer.
 
-2. **System Tray Service** -- The RRC engine. A background service that runs in the OS system tray. It performs embedding, prerequisite selection, payload assembly, warm carry-forward, and LLM forwarding. Any client -- the native Web UI, third-party tools, any HTTP client -- points at this service and gets RRC transparently. The service is stateless per-request; the client owns its conversation corpus.
+2. **RRC Service** (`spec/rrc`) -- The RRC engine. A background service running in the OS system tray. It performs embedding, prerequisite selection, payload assembly, warm carry-forward, and LLM forwarding. Any client points at this service and gets RRC transparently. Stateless per-request; the client owns its conversation corpus.
 
-3. **Web UI** -- The native RRC client with full introspection. A locally-served React application that provides the agentic interface -- not a chat clone. What a CLI agentic tool would be if it had a full graphical surface: tool visualization, agent state, execution traces, and rich interaction. Critically, it exposes what RRC selected, what it excluded, prerequisite scores, and prompt derivation. This visibility is the product differentiator. Served by the tray service; no Electron.
+3. **Agentic Tool** (`spec/agent`) -- The native RRC client with full introspection. A locally-served React application providing the agentic interface -- not a chat clone. Exposes what RRC selected, what it excluded, prerequisite scores, and prompt derivation. This visibility is the product differentiator. Served by the RRC service; no Electron.
+
+=== Dependency Graph
+
+----
+core  <──  rrc  <──  agent
+  │                    │
+  └────────────────────┘
+       (also direct)
+----
+
+- `core` depends on nothing internal. It defines interfaces and types.
+- `rrc` depends on `core` for types, LLM interfaces, and embedder interfaces.
+- `agent` depends on `core` for types and tool abstractions, and on `rrc` for the GraphQL API and RRC introspection data.
 
 === Stack
 
@@ -50,7 +63,7 @@
 
 Code generation is a first-class architectural concern, not a convenience. It serves two purposes:
 
-1. **Source of truth for consumers** -- Generated types, schemas, and client code ensure all layers (core library, service, UI) share a single contract.
+1. **Source of truth for consumers** -- Generated types, schemas, and client code ensure all layers share a single contract.
 2. **Maintainability** -- When truth types change, downstream code regenerates. No manual sync. This extends to generating bindings for different codebases and languages.
 
 ==== Agnostic Boundaries
@@ -70,11 +83,12 @@ Existing agentic frameworks are either:
 - Language-model wrappers with bolted-on agent patterns (LangChain, LlamaIndex)
 - Research prototypes not built for production use (AutoGen, CrewAI)
 
-{project-name} addresses the gap: a production-grade, provider-agnostic agentic framework built natively for {rrc-full}. The core library provides clean abstractions. The system tray service runs the RRC engine as invisible infrastructure -- any client gets selective memory by pointing at it. The web UI is the native RRC client with full introspection into selection, scoring, and prompt derivation.
+{project-name} addresses the gap: a production-grade, provider-agnostic agentic framework built natively for {rrc-full}. The core library provides clean abstractions. The RRC service runs the engine as invisible infrastructure -- any client gets selective memory by pointing at it. The agentic tool is the native RRC client with full introspection into selection, scoring, and prompt derivation.
 
-=== Approach
+Specific third-party products are mentioned as examples only, with no preferential treatment.
 
-==== {rrc-full} (RRC)
+// tag::rrc[]
+=== {rrc-full} (RRC)
 
 LLMs are stateless. Every API call is an independent forward pass. The standard approach is brute force: the client sends the full conversation history every request. This works until attention dilutes across hundreds of messages and the model loses coherence.
 
@@ -82,77 +96,14 @@ RRC replaces brute force with selective assembly. The client sends its full conv
 
 **RRC is not RAG.** RAG retrieves from external knowledge bases and injects labeled context ("here is relevant information"). RRC retrieves from the conversation the client already sent and restores native messages -- structurally indistinguishable from session history. Different corpus, different format, different model perception.
 
-===== Four Properties
+==== Four Properties
 
 1. **Lossless corpus.** RRC expects the conversation it receives to be complete and unmodified. No summarization, no entity extraction upstream. This is a constraint on the client, not a service RRC provides. RRC does not own storage.
 2. **Prerequisite detection.** Selection targets the messages the prompt depends on, not topically similar content. A 1000-message conversation has many messages about the same topic -- the prompt depends on maybe 3.
 3. **Native format restoration.** Selected messages are placed in the model's input as ordinary conversation entries. No template, no label. The model processes them through standard attention.
 4. **Bounded selective assembly.** Zero-return is valid -- the model is capable without augmentation for a novel prompt.
 
-===== Delivery Model
+==== Delivery Model
 
 RRC is delivered as a stateless service that sits between the client and the model. The client does not change. The model does not know. Each request is independent -- the proxy embeds, selects, assembles, forwards. The proxy also parses the model's response stream and caches reasoning content. That reasoning enriches the selection prompt on the next request -- warm carry-forward.
-
-===== Relationship Between Deliverables
-
-The **system tray service** runs the RRC engine -- embedding, selection, payload assembly, warm carry-forward, forwarding to the LLM. Any client gets memory for free by pointing at it.
-
-The **web UI** is the native client built FOR RRC -- it has full introspection into what was selected, what was excluded, the scores, the prompt derivation. That visibility is the product differentiator. Nothing else has it because RRC is novel.
-
-Third-party clients (any tool that speaks HTTP to an LLM) get RRC transparently by routing through the service. They are not special-cased. Specific products are mentioned as examples only, with no preferential treatment.
-
-=== Scope
-
-==== In Scope
-
-- Core Go library with provider-agnostic abstractions (LLM, embedder, provider interfaces)
-- RRC engine: embedding, prerequisite selection, payload assembly, warm carry-forward, LLM forwarding
-- System tray service (Windows primary, cross-platform later) running the RRC engine
-- Web UI served locally by the tray service with full RRC introspection
-- GraphQL API between service and UI (including RRC introspection queries)
-- Code generation pipeline (Go truth types -> GraphQL schema -> TypeScript client types)
-- Provider adapters: Ollama, Anthropic, OpenAI, Google AI, vLLM, any OpenAI-compatible endpoint
-- Embedder adapters: TEI, OpenAI embeddings
-- Agentic patterns: tool use, planning, execution, self-correction
-- Third-party client transparency (any HTTP client gets RRC by routing through the service)
-- Monorepo with Go module boundaries
-
-==== Out of Scope
-
-- Cloud-hosted / multi-tenant deployment
-- Electron or native desktop UI framework
-- Mobile clients
-- Training or fine-tuning models
-- Building a chat interface (this is an agentic interface)
-- Conversation storage (RRC does not own storage; the client owns its corpus)
-- Upstream summarization or entity extraction (violates lossless corpus property)
-- Provider-specific preferential treatment
-
-== Implementation
-
-// Implementation sections to be specified:
-//
-// --- Core Library ---
-// - Core Types (truth types: Message, Conversation, SelectionResult, etc.)
-// - Provider Abstraction Layer (LLM interface, provider adapters)
-// - Embedding Abstraction Layer (embedder interface, adapter implementations)
-// - RRC Engine (prerequisite detection, selection scoring, payload assembly, native format restoration, bounded assembly, warm carry-forward)
-// - Tool System (tool definitions, execution, result handling)
-// - Agent Loop (RRC-native orchestration)
-//
-// --- System Tray Service ---
-// - Service Architecture (HTTP proxy, request interception, response stream parsing)
-// - RRC Request Pipeline (embed -> select -> assemble -> forward -> parse -> cache)
-// - Warm Carry-Forward Cache (reasoning content extraction, enrichment)
-// - Tray Integration (Windows systray, lifecycle management)
-// - GraphQL API (schema, resolvers, RRC introspection queries)
-//
-// --- Web UI ---
-// - UI Architecture (React, Apollo Client, local serving)
-// - RRC Introspection Views (selection visualization, score display, prompt derivation, exclusion rationale)
-// - Agentic Interface (tool state, execution traces, agent orchestration surface)
-//
-// --- Infrastructure ---
-// - Code Generation Pipeline (Go truth types -> GraphQL schema -> TypeScript types)
-// - Project Structure (monorepo layout, Go module boundaries)
-// - Development Environment (Ollama, TEI, local workflow)
+// end::rrc[]

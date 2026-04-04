@@ -1,0 +1,58 @@
+= Spidey Core Library
+:project-name: Spidey
+:module-name: Core Library
+:lang: Go 1.26+
+:codegen: go generate
+
+== Context
+
+=== Identity
+
+*Name:* {project-name} {module-name}
+
+*Paradigm:* Provider-Agnostic Abstraction Library
+
+The core library is the foundational Go module. It defines the truth types, abstraction interfaces, and provider adapters that all other deliverables consume. It has no opinion on RRC, UI, or deployment topology. It answers one question: how does a Go program talk to language models and embedders without knowing which ones?
+
+=== Stack
+
+*Language:* {lang}
+
+*Code Generation:* {codegen}
+
+*Dependencies:* Minimal. Standard library where possible. No framework dependencies.
+
+=== Scope
+
+==== In Scope
+
+- Truth types: Message, Conversation, Role, ToolCall, ToolResult, Embedding, and related structures
+- LLM interface: completion, streaming completion, tool use
+- Embedder interface: single embed, batch embed
+- Provider interface: lifecycle, capability discovery, configuration
+- Provider adapters: Ollama, Anthropic, OpenAI, Google AI, vLLM, any OpenAI-compatible endpoint
+- Embedder adapters: TEI, OpenAI embeddings
+- Tool system: tool definition, execution contract, result types
+- Code generation: truth types as the source from which downstream schemas and client types are derived
+
+==== Out of Scope
+
+- RRC engine logic (belongs to `spec/rrc`)
+- Agent orchestration / agent loop (belongs to `spec/agent`)
+- HTTP server, proxy, or service concerns (belongs to `spec/rrc`)
+- UI, GraphQL schema, or presentation (belongs to `spec/agent`)
+- Conversation storage or persistence
+- Configuration UI or management interface
+
+== Implementation
+
+// Implementation sections to be specified:
+//
+// - Truth Types (Message, Conversation, Role, ToolCall, ToolResult, Embedding, etc.)
+// - LLM Interface (Completer: complete, stream, tool use, capability reporting)
+// - Embedder Interface (Embedder: single, batch, dimensionality)
+// - Provider Interface (Provider: lifecycle, config, capability discovery)
+// - Provider Adapters (Ollama, Anthropic, OpenAI, Google AI, vLLM, OpenAI-compatible)
+// - Embedder Adapters (TEI, OpenAI embeddings)
+// - Tool System (ToolDef, Executor, Result contract)
+// - Code Generation (go generate directives, truth type -> downstream pipeline)

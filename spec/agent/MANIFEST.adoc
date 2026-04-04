@@ -1,0 +1,85 @@
+= Spidey Agentic Tool
+:project-name: Spidey
+:module-name: Agentic Tool
+:rrc-full: Retrieval-Restored Continuation
+:lang: Go 1.26+
+:ui-framework: React 19
+:api-protocol: GraphQL
+:api-framework: Apollo GraphQL (Apollo Client)
+:codegen: gqlgen, graphql-codegen, go generate
+
+== Context
+
+=== Identity
+
+*Name:* {project-name} {module-name}
+
+*Paradigm:* RRC-Native Agentic Interface with Full Introspection
+
+The agentic tool is the native client built FOR {rrc-full}. It is a locally-served {ui-framework} application -- what a CLI agentic tool would be if it had a full graphical surface. Not a chat clone.
+
+Two things make this different from every other agentic UI:
+
+1. **RRC introspection.** It sees what RRC selected, what it excluded, the prerequisite scores, and the prompt derivation. No other client has this because RRC is novel.
+2. **Conversation ownership.** It owns the lossless conversation corpus and provides it to the RRC service on every request. It is responsible for satisfying the lossless corpus property.
+
+Served by the RRC service (no Electron, no standalone server). The UI is static assets; the RRC service serves them alongside its proxy and GraphQL endpoints.
+
+=== Stack
+
+*Language (backend):* {lang}
+
+*UI:* {ui-framework}
+
+*API Client:* {api-framework}
+
+*Code Generation:* {codegen} (GraphQL schema -> TypeScript types via graphql-codegen)
+
+*Depends on:* `spec/core` (truth types, tool system), `spec/rrc` (GraphQL API, RRC introspection data)
+
+=== Scope
+
+==== In Scope
+
+- Conversation storage: persistent, complete, unmodified conversation history (lossless corpus)
+- RRC introspection views: selection visualization, score display, prompt derivation, exclusion rationale
+- Agentic interface: tool visualization, agent state, execution traces, rich interaction
+- Agent orchestration: agent loop, planning, execution, self-correction (using core tool system)
+- Apollo Client integration: queries, mutations, subscriptions against the RRC service GraphQL API
+- Code generation: GraphQL schema -> TypeScript client types
+- Responsive web UI served as static assets by the RRC service
+
+==== Out of Scope
+
+- Standalone server (served by the RRC service)
+- Electron or native desktop framework
+- Chat interface (this is an agentic interface)
+- RRC engine logic (belongs to `spec/rrc`; this is a consumer)
+- LLM/embedder provider management (belongs to `spec/core` and `spec/rrc`)
+- Mobile clients
+
+== Implementation
+
+// Implementation sections to be specified:
+//
+// --- Conversation Storage ---
+// - Storage Model (format, persistence, lossless corpus guarantee)
+// - Corpus Delivery (how full conversation is sent to RRC service per request)
+//
+// --- RRC Introspection ---
+// - Selection View (which messages were selected, which excluded, why)
+// - Score Display (prerequisite scores, confidence, thresholds)
+// - Prompt Derivation View (what the model actually received vs what the client sent)
+// - Carry-Forward View (warm carry-forward state, reasoning cache)
+//
+// --- Agentic Interface ---
+// - Agent Loop (RRC-native orchestration cycle)
+// - Tool Visualization (tool definitions, in-flight executions, results)
+// - Execution Traces (step-by-step agent reasoning and action history)
+// - Agent State (current plan, progress, decision points)
+//
+// --- UI Architecture ---
+// - Component Structure (React, state management)
+// - Apollo Client Setup (queries, mutations, subscriptions)
+// - Code Generation (graphql-codegen config, generated types)
+// - Build + Static Asset Output (served by RRC service)
