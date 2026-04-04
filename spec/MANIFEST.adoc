@@ -104,7 +104,10 @@ RRC replaces brute force with selective assembly. The client sends its full conv
 3. **Native format restoration.** Selected messages are placed in the model's input as ordinary conversation entries. No template, no label. The model processes them through standard attention.
 4. **Bounded selective assembly.** Zero-return is valid -- the model is capable without augmentation for a novel prompt.
 
+// end::rrc[]
+
 ==== Delivery Model
 
-RRC is delivered as a stateless proxy within the service, sitting between the client and the model. The client does not change. The model does not know. Each request is independent -- the proxy calls the RRC engine to embed, select, and assemble, then forwards to the LLM. The proxy also parses the model's response stream and feeds reasoning content back to the RRC engine for warm carry-forward.
-// end::rrc[]
+The service delivers RRC transparently. It runs a proxy that accepts standard LLM API requests from any client. The client sends its full conversation as it normally would. The proxy extracts the conversation, calls the RRC engine to select prerequisites and assemble the payload, then forwards the assembled payload to the upstream LLM. On the response path, the proxy parses the model's output stream and feeds extracted reasoning content back to the RRC engine for warm carry-forward.
+
+The client does not change. The model does not know. Each request is independent.
