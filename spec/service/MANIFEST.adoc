@@ -1,0 +1,88 @@
+= Spidey Service
+:project-name: Spidey
+:module-name: Service
+:rrc-full: Retrieval-Restored Continuation
+:lang: Go 1.26+
+:api-protocol: GraphQL
+:api-server: gqlgen
+:codegen: gqlgen, go generate
+
+== Context
+
+=== Identity
+
+*Name:* {project-name} {module-name}
+
+*Paradigm:* System Tray Application
+
+The service is the application binary. It runs as a system tray process and is the single backend for everything:
+
+- **RRC proxy** -- Accepts standard LLM API requests from any client. Calls the RRC engine to select prerequisites, assembles the payload, forwards to the actual LLM, parses the response stream, and feeds reasoning content back to the RRC engine for warm carry-forward. Third-party clients point here and get RRC transparently.
+- **Agent orchestration** -- Runs the agent loop: planning, tool execution, self-correction. Uses the core library's tool system and LLM interface.
+- **Conversation storage** -- Owns persistent, complete, unmodified conversation history. Satisfies the lossless corpus property on behalf of the web UI.
+- **{api-protocol} API** -- The contract between the service and the web UI. Covers everything: agent orchestration, conversation management, RRC introspection, service configuration.
+- **Static asset serving** -- Serves the web UI on localhost. The user opens their browser.
+- **Service management UI** -- Lightweight tray-accessible interface for status, config, health. Independent of the full agentic web UI.
+
+=== Stack
+
+*Language:* {lang}
+
+*API Layer:* {api-protocol} via {api-server}
+
+*Code Generation:* {codegen}
+
+*Depends on:* `spec/core` (truth types, LLM/embedder interfaces, tool system), `spec/rrc` (RRC engine)
+
+=== Scope
+
+==== In Scope
+
+- System tray integration (Windows primary, cross-platform later)
+- Service lifecycle: start, stop, health check, configuration
+- RRC proxy: HTTP endpoint accepting standard LLM API requests, transparent forwarding via RRC engine
+- Response stream parsing: SSE/chunked passthrough with concurrent extraction of reasoning content for warm carry-forward
+- Agent orchestration: agent loop, planning, tool execution, self-correction
+- Conversation storage: persistent, complete, unmodified history (lossless corpus guarantee)
+- {api-protocol} API: full schema and resolvers (orchestration, conversations, RRC introspection, config)
+- Static asset serving: web UI files on localhost
+- Service management UI: lightweight status/config accessible from tray
+- Provider routing: configuration for which upstream LLM to forward to
+
+==== Out of Scope
+
+- The RRC algorithm itself (belongs to `spec/rrc`; the service calls it)
+- LLM/embedder interface or adapter definitions (belongs to `spec/core`)
+- Proto truth type definitions (belongs to `spec/core`)
+- Agentic UI, RRC introspection views, UX patterns (belongs to `spec/web`)
+- Cloud deployment or multi-tenancy
+
+== Implementation
+
+// Implementation sections to be specified:
+//
+// --- RRC Proxy ---
+// - HTTP Proxy (request interception, response stream passthrough + parsing)
+// - Request Pipeline (receive -> call RRC engine -> assemble -> forward -> parse -> feed back)
+// - Provider Routing (upstream LLM configuration, endpoint management)
+// - Streaming (SSE/chunked passthrough with concurrent reasoning extraction)
+//
+// --- Agent Orchestration ---
+// - Agent Loop (plan -> execute -> evaluate -> continue/correct)
+// - Tool Execution (using core tool system, sandboxing, result handling)
+// - Planning Strategy (how the agent decomposes tasks)
+//
+// --- Conversation Storage ---
+// - Storage Model (format, persistence mechanism, lossless guarantee)
+// - Corpus Delivery (how stored conversations are provided to RRC engine per request)
+//
+// --- GraphQL API ---
+// - Schema (full: orchestration, conversations, RRC introspection, config)
+// - Resolvers
+// - Subscriptions (live agent state, streaming responses, RRC introspection during execution)
+//
+// --- System Tray ---
+// - Tray Integration (Windows systray, menu, status indicators)
+// - Service Lifecycle (start, stop, health, config reload)
+// - Management UI (lightweight config/status surface, not the agentic UI)
+// - Static Asset Serving (web UI files on localhost)

@@ -1,0 +1,89 @@
+= Spidey Web UI
+:project-name: Spidey
+:module-name: Web UI
+:rrc-full: Retrieval-Restored Continuation
+:ui-framework: React 19
+:api-protocol: GraphQL
+:api-client: Apollo Client
+:codegen: graphql-codegen
+
+== Context
+
+=== Identity
+
+*Name:* {project-name} {module-name}
+
+*Paradigm:* RRC-Native Agentic Interface
+
+The web UI is a {ui-framework} application served by the service on localhost. The user opens their browser. It is the agentic interface -- not a chat clone. What a CLI agentic tool would be if it had a full graphical surface.
+
+Two things make this different from every other agentic UI:
+
+1. **RRC introspection.** It sees what RRC selected, what it excluded, the prerequisite scores, and the prompt derivation. No other client has this because RRC is novel. This visibility is the product differentiator.
+2. **Agentic surface.** Tool visualization, agent state, execution traces, planning views. The user sees what the agent is doing, why, and can intervene.
+
+=== Stack
+
+*UI Framework:* {ui-framework}
+
+*API Client:* {api-client}
+
+*Code Generation:* {codegen} ({api-protocol} schema -> TypeScript types)
+
+*Served by:* `spec/service` (static assets on localhost)
+
+*Depends on:* `spec/service` ({api-protocol} API)
+
+=== Scope
+
+==== In Scope
+
+- RRC introspection views: selection visualization, prerequisite scores, prompt derivation, exclusion rationale, carry-forward state
+- Agentic interface: tool visualization, agent state, execution traces, planning views
+- Conversation interface: message display, input, history navigation (not a chat clone -- the agentic context is primary)
+- {api-client} integration: queries, mutations, subscriptions against the service {api-protocol} API
+- Code generation: {api-protocol} schema -> TypeScript client types via {codegen}
+- UX design: interaction patterns, layout, information architecture, responsiveness
+- Build output: static assets (HTML/JS/CSS) served by the service
+
+==== Out of Scope
+
+- Backend logic (belongs to `spec/service`)
+- Agent orchestration or tool execution (belongs to `spec/service`; this is the visualization surface)
+- Conversation storage (belongs to `spec/service`; the UI reads/writes via {api-protocol})
+- RRC engine or algorithm (belongs to `spec/rrc`; the UI displays results)
+- Standalone server or hosting (served by the service)
+- Mobile layout
+
+== Implementation
+
+// Implementation sections to be specified:
+//
+// --- RRC Introspection ---
+// - Selection View (which messages were selected as prerequisites, which excluded)
+// - Score Display (prerequisite scores, confidence, thresholds, ranking)
+// - Prompt Derivation View (what the model actually received vs what the full corpus contained)
+// - Exclusion Rationale (why specific messages were not selected)
+// - Carry-Forward View (warm carry-forward state, cached reasoning content)
+//
+// --- Agentic Interface ---
+// - Tool Visualization (tool definitions, in-flight executions, results, errors)
+// - Execution Traces (step-by-step agent reasoning and action history)
+// - Agent State (current plan, progress, decision points, intervention surface)
+// - Planning View (task decomposition, dependencies, status)
+//
+// --- Conversation Interface ---
+// - Message Display (rich content, code, tool results -- not a plain chat list)
+// - Input (prompt composition, context awareness)
+// - History Navigation (conversation list, search, corpus browsing)
+//
+// --- UI Architecture ---
+// - Component Structure ({ui-framework}, state management approach)
+// - {api-client} Setup (queries, mutations, subscriptions, cache strategy)
+// - Code Generation ({codegen} config, generated TypeScript types)
+// - Build Pipeline (static asset output for service to serve)
+//
+// --- UX ---
+// - Information Architecture (how RRC introspection, agent state, and conversation relate spatially)
+// - Interaction Patterns (when/how the user intervenes in agent execution)
+// - Layout Strategy (responsive, but desktop-primary since this is a local tool)
