@@ -125,10 +125,16 @@ Independent of either request flow:
 // - RRC Engine Integration (shared instance, both paths call the same engine with the same cached artifacts)
 // - Conversation Storage (format, persistence, lossless guarantee, how proxy path receives corpus vs agent path reads from storage)
 // - Provider Routing (upstream LLM config, endpoint management, shared across both paths)
-// - Cache Management (cross-encoder scores, QUD graph, edge log -- all append-only, all shared)
-//   - Prerequisite DAG persistence: append-only edge log. Each new edge appended as a record. On startup, replay the log to rebuild the engine's in-memory graph.
-//   - Score cache persistence: append-only, keyed by message pair
-//   - QUD graph persistence: serialized alongside other caches
+// - Storage (SQLite, single embedded database for all persistent state)
+//   - Conversations table (lossless corpus)
+//   - Prerequisite edges table (indexed on both from and to message IDs)
+//   - Score cache table (keyed by message pair)
+//   - QUD graph table
+//   - On startup: load into RRC engine's in-memory structures
+// - Session Management
+//   - Session binds a browser tab to service state (active conversation, agent loop, subscriptions)
+//   - Reconnection: tab closes and reopens, UI reconnects to same session seamlessly
+//   - Service owns all state; UI is a view into it. No client-side persistence beyond session ID.
 //
 // --- Infrastructure ---
 // - Tray Integration (Windows systray, menu, status indicators)

@@ -106,7 +106,8 @@ spidey/
 │   ├── cmd/spidey/            #   main entrypoint
 │   ├── proxy/                 #   RRC proxy path (HTTP, stream parsing)
 │   ├── agent/                 #   Agent path (orchestration, GraphQL resolvers)
-│   ├── storage/               #   Conversation storage, score cache, edge log
+│   ├── storage/               #   SQLite: conversations, edges, scores, QUD graph
+│   ├── session/               #   Session management (browser tab ↔ service state)
 │   ├── graph/                 #   GraphQL schema + resolvers (gqlgen)
 │   └── tray/                  #   System tray integration
 ├── web/                       # React app: agentic interface
