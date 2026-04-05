@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package spidey.v1;
+
+option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+
+import "google/protobuf/timestamp.proto";
+
+// Prerequisite DAG edge. Produced by cross-encoder or QUD carry-forward.
+
+enum EdgeSource {
+  EDGE_SOURCE_UNSPECIFIED = 0;
+  EDGE_SOURCE_CROSS_ENCODER = 1;
+  EDGE_SOURCE_QUD = 2;
+  EDGE_SOURCE_BOTH = 3;
+}
+
+message Edge {
+  string from_message_id = 1;
+  string to_message_id = 2;
+  float score = 3;
+  EdgeSource source = 4;
+  float cross_encoder_score = 5;
+  float qud_weight = 6;
+  float temporal_proximity = 7;
+  google.protobuf.Timestamp detected_at = 8;
+}
+
+// QUD graph. Built from warm carry-forward over the conversation's lifetime.
+
+enum QUDStatus {
+  QUD_STATUS_UNSPECIFIED = 0;
+  QUD_STATUS_OPEN = 1;
+  QUD_STATUS_PARTIALLY_ADDRESSED = 2;
+  QUD_STATUS_RESOLVED = 3;
+}
+
+message QUD {
+  string id = 1;
+  string question = 2;
+  string established_by = 3;
+  string parent_qud_id = 4;
+  QUDStatus status = 5;
+  repeated string addressed_by = 6;
+}
+
+message QUDGraph {
+  repeated QUD quds = 1;
+  repeated string active_stack = 2;
+}
+
+// Selection result. What the RRC engine returns. What introspection exposes.
+
+enum ExclusionReason {
+  EXCLUSION_UNSPECIFIED = 0;
+  EXCLUSION_BELOW_THRESHOLD = 1;
+  EXCLUSION_BUDGET_EXHAUSTED = 2;
+  EXCLUSION_TRANSITIVE_REDUCTION = 3;
+  EXCLUSION_DEPTH_LIMIT = 4;
+}
+
+message SelectedMessage {
+  string message_id = 1;
+  float effective_score = 2;
+  int32 hop_depth = 3;
+  repeated Edge via_edges = 4;
+}
+
+message ExcludedMessage {
+  string message_id = 1;
+  ExclusionReason reason = 2;
+  float score = 3;
+}
+
+message SelectionResult {
+  repeated SelectedMessage selected = 1;
+  repeated ExcludedMessage excluded = 2;
+  int32 token_budget = 3;
+  int32 tokens_used = 4;
+}

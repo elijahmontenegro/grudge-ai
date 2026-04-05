@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package spidey.v1;
+
+option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+
+// LLM interface types. Provider-agnostic completion.
+
+message CompletionRequest {
+  repeated Message messages = 1;
+  string model = 2;
+  optional int32 max_tokens = 3;
+  optional float temperature = 4;
+}
+
+message CompletionResponse {
+  string id = 1;
+  Message message = 2;
+  Usage usage = 3;
+}
+
+message Usage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+}
+
+// Streaming variant. Each chunk is a partial response.
+
+message StreamChunk {
+  string delta = 1;
+  bool done = 2;
+  optional Usage usage = 3;
+}
