@@ -28,15 +28,14 @@ The core library is the foundational Go module. It defines the proto truth types
 
 ==== In Scope
 
-- Proto truth types: Message, Conversation, Role, ToolCall, ToolResult, Embedding, and related structures
-- LLM interface: completion, streaming completion, tool use
+- Proto truth types: Message, Conversation, Role, Embedding, and related structures
+- LLM interface: completion, streaming completion
 - Embedder interface: single embed, batch embed
 - Classifier interface: pairwise text classification (cross-encoder pattern -- takes two texts, returns class probabilities)
 - Provider interface: lifecycle, capability discovery, configuration
 - Provider adapters: Ollama, Anthropic, OpenAI, Google AI, vLLM, any OpenAI-compatible endpoint
 - Embedder adapters: TEI, OpenAI embeddings
 - Classifier adapters: TEI rerank/predict endpoint, custom inference endpoints
-- Tool system: tool definition, execution contract, result types
 - Code generation pipeline: proto -> Go types, proto -> downstream schema fragments
 
 ==== Out of Scope
@@ -51,8 +50,8 @@ The core library is the foundational Go module. It defines the proto truth types
 
 // Implementation sections to be specified:
 //
-// - Proto Truth Types (.proto definitions: Message, Conversation, Role, ToolCall, ToolResult, Embedding, etc.)
-// - LLM Interface (Completer: complete, stream, tool use, capability reporting)
+// - Proto Truth Types (.proto definitions: Message, Conversation, Role, Embedding, etc.)
+// - LLM Interface (Completer: complete, stream, capability reporting)
 // - Embedder Interface (Embedder: single, batch, dimensionality)
 // - Classifier Interface (Classifier: pairwise text classification, returns class probabilities.
 //   Covers cross-encoder reranking, NLI classification, discourse relation classification,
@@ -62,5 +61,4 @@ The core library is the foundational Go module. It defines the proto truth types
 // - Provider Adapters (Ollama, Anthropic, OpenAI, Google AI, vLLM, OpenAI-compatible)
 // - Embedder Adapters (TEI, OpenAI embeddings)
 // - Classifier Adapters (TEI rerank/predict, custom inference endpoints)
-// - Tool System (ToolDef, Executor, Result contract)
 // - Code Generation Pipeline (proto -> Go, proto -> downstream)

@@ -60,7 +60,7 @@ Independent of either request flow:
 
 *Code Generation:* {codegen}
 
-*Depends on:* `spec/core` (truth types, LLM/embedder interfaces, tool system), `spec/rrc` (RRC engine)
+*Depends on:* `spec/core` (truth types, LLM/embedder/classifier interfaces), `spec/rrc` (RRC engine)
 
 === Scope
 
@@ -118,7 +118,7 @@ Independent of either request flow:
 // - GraphQL API (schema, resolvers, subscriptions)
 // - Agent Loop (plan -> execute tool -> call RRC engine -> call LLM -> evaluate -> continue/correct)
 // - Agent Request Pipeline (GraphQL mutation -> load conversation -> call RRC engine -> orchestrate -> respond + push subscriptions)
-// - Tool Execution (using core tool system, sandboxing, result handling)
+// - Tool Execution (deferred -- tool system not yet defined)
 // - Planning Strategy (how the agent decomposes tasks)
 // - RRC Introspection Data (expose prerequisite DAG, QUD graph, scores, selection rationale via GraphQL)
 //
