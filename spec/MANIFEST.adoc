@@ -43,7 +43,7 @@ core  <──  rrc  <──  service  ──>  web
 ----
 
 - `core` depends on nothing internal. Proto truth types, interfaces, adapters.
-- `rrc` depends on `core` for types and embedder interface. Pure algorithm library.
+- `rrc` depends on `core` for types and classifier interface. Pure algorithm library.
 - `service` depends on `core` + `rrc`. The application binary. Runs the RRC engine, orchestrates agents, serves the web UI, exposes proxy and {api-protocol} API.
 - `web` is a {ui-framework} app. Talks to the service via {api-protocol} ({api-client}). Served as static assets by the service.
 
@@ -76,6 +76,72 @@ The core library defines the abstraction interfaces. Provider implementations ar
 ==== Development Environment
 
 The development environment uses {dev-lm-runtime} for local language model serving and {dev-embedder-runtime} for local embedding. These are development tools, not product dependencies. The product is agnostic to both.
+
+=== Repository Structure
+
+----
+spidey/
+├── proto/spidey/v1/          # Truth types. Canonical source for all generated code.
+│   ├── conversation.proto     #   Message, Role, ContentBlock, Conversation
+│   ├── rrc.proto              #   Edge, QUD, QUDGraph, SelectionResult
+│   ├── classifier.proto       #   ClassifyRequest/Response
+│   └── llm.proto              #   LLMMessage, CompletionRequest/Response, StreamChunk
+├── gen/                       # Generated code output (not checked in)
+│   ├── go/spidey/v1/          #   Generated Go types from proto
+│   └── ts/                    #   Generated TypeScript types from GraphQL
+├── core/                      # Go module: abstractions, interfaces, adapters
+│   ├── go.mod
+│   ├── llm/                   #   LLM interface + provider adapters
+│   ├── classifier/            #   Classifier interface + adapters
+│   └── provider/              #   Provider lifecycle, config, capability discovery
+├── rrc/                       # Go module: RRC engine
+│   ├── go.mod
+│   ├── engine.go              #   Public API surface
+│   ├── dag.go                 #   Prerequisite DAG (dual adjacency list)
+│   ├── qud.go                 #   QUD graph operations
+│   ├── scorer.go              #   Score fusion
+│   └── assembler.go           #   Payload assembly + transitive reduction
+├── service/                   # Go module: the application binary
+│   ├── go.mod
+│   ├── cmd/spidey/            #   main entrypoint
+│   ├── proxy/                 #   RRC proxy path (HTTP, stream parsing)
+│   ├── agent/                 #   Agent path (orchestration, GraphQL resolvers)
+│   ├── storage/               #   Conversation storage, score cache, edge log
+│   ├── graph/                 #   GraphQL schema + resolvers (gqlgen)
+│   └── tray/                  #   System tray integration
+├── web/                       # React app: agentic interface
+│   ├── package.json
+│   ├── src/
+│   ├── codegen.ts             #   graphql-codegen config
+│   └── dist/                  #   Build output (static assets served by service)
+├── spec/                      # CCA specifications
+│   ├── MANIFEST.adoc          #   Root context (this file)
+│   ├── core/MANIFEST.adoc
+│   ├── rrc/MANIFEST.adoc
+│   ├── service/MANIFEST.adoc
+│   └── web/MANIFEST.adoc
+├── go.work                    # Go workspace linking core, rrc, service modules
+└── buf.yaml                   # Protobuf build config (buf)
+----
+
+=== Scope
+
+==== In Scope (project-wide)
+
+- Provider-agnostic abstractions for LLMs, embedders, and classifiers
+- RRC engine: cross-encoder prerequisite detection, QUD graph via carry-forward, prerequisite DAG, payload assembly
+- System tray service: RRC proxy for third-party clients, agent orchestration for native client, conversation storage, {api-protocol} API
+- Web UI: agentic interface with RRC introspection, served on localhost
+- Code generation pipeline: proto -> Go, GraphQL schema -> TypeScript
+- Monorepo with Go workspace (`go.work`) linking discrete modules
+
+==== Out of Scope (project-wide)
+
+- Cloud-hosted or multi-tenant deployment
+- Mobile clients
+- Chat interface (this is an agentic interface)
+- Training or fine-tuning models
+- Provider-specific preferential treatment
 
 === Abstract
 
