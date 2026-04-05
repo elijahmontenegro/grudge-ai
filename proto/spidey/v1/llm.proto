@@ -4,21 +4,38 @@ package spidey.v1;
 
 option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
 
+import "google/protobuf/struct.proto";
 import "spidey/v1/conversation.proto";
 
 // LLM interface types. Provider-agnostic completion.
+//
+// LLMMessage is the wire format — role + content blocks, no corpus metadata.
+// The service converts between corpus Message and LLMMessage at the boundary.
+
+message LLMMessage {
+  Role role = 1;
+  repeated ContentBlock content = 2;
+}
 
 message CompletionRequest {
-  repeated Message messages = 1;
+  repeated LLMMessage messages = 1;
   string model = 2;
   optional int32 max_tokens = 3;
   optional float temperature = 4;
+  optional float top_p = 5;
+  repeated string stop = 6;
+  bool stream = 7;
+  // Provider-specific parameters. Passed through to the upstream API.
+  // Avoids leaking the abstraction when a provider supports options
+  // we don't model explicitly.
+  google.protobuf.Struct provider_options = 8;
 }
 
 message CompletionResponse {
   string id = 1;
-  Message message = 2;
+  LLMMessage message = 2;
   Usage usage = 3;
+  string model = 4;
 }
 
 message Usage {

@@ -15,13 +15,7 @@ enum Role {
   ROLE_SYSTEM = 3;
 }
 
-message Message {
-  string id = 1;
-  Role role = 2;
-  repeated ContentBlock content = 3;
-  int64 position = 4;
-  google.protobuf.Timestamp created_at = 5;
-}
+// Content block types. A message contains one or more of these.
 
 message ContentBlock {
   oneof block {
@@ -56,6 +50,17 @@ message ToolResultContent {
 message ImageContent {
   string media_type = 1;
   bytes data = 2;
+}
+
+// Corpus message. The persistent record in a conversation.
+// Has identity and position metadata beyond what the LLM sees.
+
+message Message {
+  string id = 1;
+  Role role = 2;
+  repeated ContentBlock content = 3;
+  int64 position = 4;
+  google.protobuf.Timestamp created_at = 5;
 }
 
 message Conversation {
