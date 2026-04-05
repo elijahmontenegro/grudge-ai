@@ -20,7 +20,7 @@ The service imports this library. The engine does not know it runs inside a prox
 
 *Language:* {lang}
 
-*Dependencies:* `spec/core` (truth types, LLM interface, embedder interface, classifier interface)
+*Dependencies:* `spec/core` (truth types, LLM interface, classifier interface)
 
 === RRC Reference
 
@@ -35,8 +35,7 @@ include::../MANIFEST.adoc[tag=rrc]
 - QUD (Questions Under Discussion) graph: incremental construction via core LLM interface, maintenance, edge derivation
 - Prerequisite DAG: dual adjacency list, incremental edge construction, subgraph extraction
 - Score cache operations: reading and writing cross-encoder pairwise scores
-- Embedding cache operations: reading and writing vectors per message
-- Selection scoring: multi-signal score fusion, thresholds, ranking
+- Selection scoring: score fusion (cross-encoder + QUD), thresholds, ranking
 - Payload assembly: best-first backward traversal, token budget, bounded assembly, native format restoration
 - Warm carry-forward: ingesting reasoning content and QUD signals from parsed responses, enriching future selection
 - Transitive reduction: computed on demand during subgraph extraction
@@ -99,11 +98,7 @@ Research basis: Roberts (1996) QUD stack theory, Riester (2019) QUD tree constru
 
 === Data Structures
 
-The engine operates on four data structures. The service owns their persistence; the engine reads and writes them.
-
-==== Embedding Cache
-
-One vector per message, computed on arrival via core embedder interface. Vectors are fixed-size, pre-computed, and never become stale (messages are immutable in a conversation).
+The engine operates on three data structures. The service owns their persistence; the engine reads and writes them.
 
 ==== Score Cache
 
@@ -138,9 +133,8 @@ Each prerequisite edge carries scores from the signals that produced it:
 
 - **Cross-encoder dependency score** -- Pairwise classification confidence
 - **QUD edge weight** -- Structural dependency derived from QUD graph (established->addressed, raised->resolved)
-- **Temporal proximity** -- Decay function over message distance
 
-Final edge score is a weighted combination. Signal weights are a tuning parameter.
+Final edge score is a weighted combination of the signals that produced it. Signal weights are a tuning parameter.
 
 ==== Bounded Selective Assembly
 

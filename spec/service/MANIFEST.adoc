@@ -102,7 +102,6 @@ Independent of either request flow:
 // Implementation sections to be specified:
 //
 // --- Message Arrival Pipeline (shared, runs on every new message) ---
-// - Embedding: compute and cache vector via core embedder interface
 // - Cross-encoder scoring: evaluate new message against all predecessors via core classifier interface, cache scores, add edges to RRC engine's prerequisite DAG
 // - QUD analysis: LLM call via core LLM interface, update QUD graph, derive edges
 // - Edge persistence: append new edges to RRC engine's edge log
@@ -126,7 +125,7 @@ Independent of either request flow:
 // - RRC Engine Integration (shared instance, both paths call the same engine with the same cached artifacts)
 // - Conversation Storage (format, persistence, lossless guarantee, how proxy path receives corpus vs agent path reads from storage)
 // - Provider Routing (upstream LLM config, endpoint management, shared across both paths)
-// - Cache Management (embedding vectors, cross-encoder scores, QUD graph, edge log -- all append-only, all shared)
+// - Cache Management (cross-encoder scores, QUD graph, edge log -- all append-only, all shared)
 //
 // --- Infrastructure ---
 // - Tray Integration (Windows systray, menu, status indicators)
