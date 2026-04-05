@@ -2,7 +2,7 @@
 :project-name: Spidey
 :module-name: Core Library
 :lang: Go 1.26+
-:codegen: protoc, go generate
+:codegen: protoc (buf), go generate
 
 == Context
 
@@ -20,15 +20,15 @@ The core library is the foundational Go module. It defines the proto truth types
 
 *Code Generation:* {codegen}
 
-*Truth Types:* Protocol Buffers (`.proto` files are the canonical source; Go types, GraphQL schema fragments, and TypeScript types are all generated downstream)
+*Truth Types:* Protocol Buffers (`.proto` files in `proto/spidey/v1/` are the canonical source; Go types generate to `gen/go/spidey/v1/`)
 
-*Dependencies:* Minimal. Standard library where possible. No framework dependencies.
+*Dependencies:* Standard library plus: `google.golang.org/protobuf`, `modernc.org/sqlite` (for adapters that need local state). No framework dependencies.
 
 === Scope
 
 ==== In Scope
 
-- Proto truth types: Message, Conversation, Role, Embedding, and related structures
+- Proto truth types: Message, LLMMessage, ContentBlock (Text, Thinking, ToolCall, ToolResult, Image), Conversation, Role, Edge, QUD, QUDGraph, SelectionResult, ClassifyRequest/Response, CompletionRequest/Response, StreamChunk, Usage
 - LLM interface: completion, streaming completion
 - Embedder interface: single embed, batch embed
 - Classifier interface: pairwise text classification (cross-encoder pattern -- takes two texts, returns class probabilities)
@@ -36,7 +36,7 @@ The core library is the foundational Go module. It defines the proto truth types
 - Provider adapters: Ollama, Anthropic, OpenAI, Google AI, vLLM, any OpenAI-compatible endpoint
 - Embedder adapters: TEI, OpenAI embeddings
 - Classifier adapters: TEI rerank/predict endpoint, custom inference endpoints
-- Code generation pipeline: proto -> Go types, proto -> downstream schema fragments
+- Code generation pipeline: proto -> Go types via buf
 
 ==== Out of Scope
 
@@ -48,17 +48,109 @@ The core library is the foundational Go module. It defines the proto truth types
 
 == Implementation
 
-// Implementation sections to be specified:
-//
-// - Proto Truth Types (.proto definitions: Message, Conversation, Role, Embedding, etc.)
-// - LLM Interface (Completer: complete, stream, capability reporting)
-// - Embedder Interface (Embedder: single, batch, dimensionality)
-// - Classifier Interface (Classifier: pairwise text classification, returns class probabilities.
-//   Covers cross-encoder reranking, NLI classification, discourse relation classification,
-//   dependency detection. Provider-agnostic -- the RRC engine uses this without knowing
-//   whether the backend is TEI, a custom model server, or an API.)
-// - Provider Interface (Provider: lifecycle, config, capability discovery)
-// - Provider Adapters (Ollama, Anthropic, OpenAI, Google AI, vLLM, OpenAI-compatible)
-// - Embedder Adapters (TEI, OpenAI embeddings)
-// - Classifier Adapters (TEI rerank/predict, custom inference endpoints)
-// - Code Generation Pipeline (proto -> Go, proto -> downstream)
+=== Proto Truth Types
+
+Defined in `proto/spidey/v1/`. Generated Go types in `gen/go/spidey/v1/`. Four files:
+
+- **conversation.proto** -- Message, Role, ContentBlock (TextContent, ThinkingContent, ToolCallContent, ToolResultContent, ImageContent), Conversation
+- **rrc.proto** -- Edge, EdgeSource, QUD, QUDStatus, QUDGraph, SelectedMessage, ExcludedMessage, ExclusionReason, SelectionResult
+- **classifier.proto** -- ClassifyRequest, ClassifyResponse, ClassLabel, BatchClassifyRequest, BatchClassifyResponse
+- **llm.proto** -- LLMMessage, CompletionRequest, CompletionResponse, Usage, StreamChunk
+
+Message is the corpus record (id, role, content blocks, position, created_at). LLMMessage is the wire format (role, content blocks only). The service converts between them at the boundary.
+
+CompletionRequest includes `provider_options` (`google.protobuf.Struct`) as an escape hatch for provider-specific parameters the abstraction does not model explicitly.
+
+=== Go Interfaces
+
+Three provider-agnostic interfaces. The RRC engine and service consume these without knowing the backend.
+
+==== LLM
+
+[source,go]
+----
+type Completer interface {
+    Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error)
+    Stream(ctx context.Context, req *pb.CompletionRequest) (<-chan *pb.StreamChunk, error)
+}
+----
+
+==== Embedder
+
+[source,go]
+----
+type Embedder interface {
+    Embed(ctx context.Context, text string) ([]float32, error)
+    EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+}
+----
+
+==== Classifier
+
+[source,go]
+----
+type Classifier interface {
+    Classify(ctx context.Context, req *pb.ClassifyRequest) (*pb.ClassifyResponse, error)
+    ClassifyBatch(ctx context.Context, req *pb.BatchClassifyRequest) (*pb.BatchClassifyResponse, error)
+}
+----
+
+=== Provider Interface
+
+Every adapter (LLM, embedder, classifier) is created through a provider. The provider handles lifecycle and configuration.
+
+[source,go]
+----
+type Provider interface {
+    ID() string
+    Completer(model string) (Completer, error)
+    Embedder(model string) (Embedder, error)
+    Classifier(model string) (Classifier, error)
+    Close() error
+}
+----
+
+Not every provider supports all three capabilities. `Completer()` on a TEI provider returns an error. `Classifier()` on a pure LLM provider returns an error. The caller checks.
+
+=== Provider Adapters
+
+Each adapter implements `Provider` for a specific backend. Configuration is adapter-specific.
+
+==== Ollama
+- Supports: Completer, Embedder
+- Endpoint: configurable HTTP base URL
+- Models: whatever is pulled locally
+
+==== Anthropic
+- Supports: Completer
+- Endpoint: Anthropic Messages API
+- Auth: API key
+
+==== OpenAI
+- Supports: Completer, Embedder
+- Endpoint: OpenAI API (or any OpenAI-compatible endpoint -- configurable base URL)
+- Auth: API key
+
+==== Google AI
+- Supports: Completer, Embedder
+- Endpoint: Gemini API
+- Auth: API key
+
+==== vLLM
+- Supports: Completer
+- Endpoint: OpenAI-compatible API (configurable base URL)
+- Auth: optional API key
+
+==== TEI
+- Supports: Embedder, Classifier
+- Endpoint: configurable HTTP base URL
+- Embedder uses `/embed`, Classifier uses `/rerank` or `/predict`
+
+=== Code Generation Pipeline
+
+Proto compilation via `buf`. Configuration in `buf.yaml` at the repository root.
+
+Input: `proto/spidey/v1/*.proto`
+Output: `gen/go/spidey/v1/*.go`
+
+Downstream: GraphQL schema (in service spec) and TypeScript types (in web spec) generate from these Go types, not directly from proto.
