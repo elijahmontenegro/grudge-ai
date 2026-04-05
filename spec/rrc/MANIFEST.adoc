@@ -131,8 +131,9 @@ Temporal ordering guarantees acyclicity: edges only point from earlier messages 
 
 Each prerequisite edge carries scores from the signals that produced it:
 
-- **Cross-encoder dependency score** -- Pairwise classification confidence
+- **Cross-encoder dependency score** -- Pairwise classification confidence from the NLI cross-encoder
 - **QUD edge weight** -- Structural dependency derived from QUD graph (established->addressed, raised->resolved)
+- **Temporal proximity** -- Positional signal. The cross-encoder sees message content but not position. In conversation, "that function" more likely refers to message N-3 than message N-300 even with identical content. Position is a real signal the cross-encoder cannot see.
 
 Final edge score is a weighted combination of the signals that produced it. Signal weights are a tuning parameter.
 
@@ -164,14 +165,28 @@ Selected messages are ordered chronologically and placed in the model's input as
 
 === Warm Carry-Forward
 
-The service parses the LLM's response stream and feeds extracted content back to the engine. Two forms:
+The service parses the LLM's response stream and feeds extracted content back to the engine. The model's reasoning reveals what IT found relevant -- implicit prerequisite signals from the model's own perspective.
+
+==== Response Reasoning Extraction
+
+The model's response contains reasoning content: chain-of-thought, decision rationale, explicit references to prior context ("as we discussed when designing the auth module"). This content reveals the conversation's dependency structure from the model's perspective -- prerequisites the cross-encoder and QUD may have missed.
+
+The service extracts this content from the response stream. Whether extraction requires an LLM call or direct parsing depends on the response format (structured thinking vs embedded natural language). This is an implementation detail, not an architecture decision.
 
 ==== QUD Enrichment
 
-The LLM's response is analyzed for QUDs it addresses and raises. This feeds back into the QUD graph, improving future prerequisite detection. Every RRC request is also a QUD analysis opportunity.
+Extracted reasoning feeds into the next QUD analysis call as additional context. The QUD analysis becomes progressively better because it learns from what the model actually found useful.
 
 Enrichment is additive only -- it adds edges and updates QUD status toward resolution. It never removes edges or re-opens resolved QUDs. This prevents oscillation.
 
-==== Reasoning Cache
+==== Feedback Loop
 
-Reasoning content extracted from the LLM's response (chain-of-thought, decision rationale, identified relationships) is cached and available to enrich the selection prompt on subsequent requests.
+The carry-forward is "warm" because it improves with use:
+
+1. RRC selects prerequisites and forwards to the model
+2. The model reasons about the conversation, producing a response
+3. The response reveals what the model found relevant
+4. That signal feeds back into the QUD graph and enriches future selection
+5. Next request benefits from what the model learned
+
+The model's own reasoning is a signal source for the prerequisite graph.
