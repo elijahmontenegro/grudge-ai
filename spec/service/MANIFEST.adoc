@@ -101,11 +101,18 @@ Independent of either request flow:
 
 // Implementation sections to be specified:
 //
+// --- Message Arrival Pipeline (shared, runs on every new message) ---
+// - Embedding: compute and cache vector via core embedder interface
+// - Cross-encoder scoring: evaluate new message against all predecessors via core classifier interface, cache scores, add edges to RRC engine's prerequisite DAG
+// - QUD analysis: LLM call via core LLM interface, update QUD graph, derive edges
+// - Edge persistence: append new edges to RRC engine's edge log
+//
 // --- Proxy Path ---
 // - HTTP Proxy (endpoint, request interception, LLM API format compatibility)
-// - Proxy Request Pipeline (receive -> extract corpus -> call RRC engine -> assemble -> forward -> stream back)
+// - Proxy Request Pipeline (receive -> extract corpus -> trigger message arrival pipeline for new messages -> call RRC engine for subgraph extraction -> assemble payload -> forward -> stream back)
 // - Response Stream Parsing (SSE/chunked passthrough with concurrent reasoning extraction)
-// - Proxy-Specific Constraints (stateless, client-owned corpus, transparent to client)
+// - Warm Carry-Forward Feeding (extract reasoning content + QUD signals from response, feed to RRC engine)
+// - Proxy-Specific Constraints (stateless per-request, client-owned corpus, transparent to client)
 //
 // --- Agent Path ---
 // - GraphQL API (schema, resolvers, subscriptions)
@@ -113,12 +120,13 @@ Independent of either request flow:
 // - Agent Request Pipeline (GraphQL mutation -> load conversation -> call RRC engine -> orchestrate -> respond + push subscriptions)
 // - Tool Execution (using core tool system, sandboxing, result handling)
 // - Planning Strategy (how the agent decomposes tasks)
+// - RRC Introspection Data (expose prerequisite DAG, QUD graph, scores, selection rationale via GraphQL)
 //
 // --- Shared Foundation ---
-// - RRC Engine Integration (how both paths call the library, shared instance management)
-// - Conversation Storage (format, persistence, lossless guarantee, how proxy path receives vs agent path reads)
+// - RRC Engine Integration (shared instance, both paths call the same engine with the same cached artifacts)
+// - Conversation Storage (format, persistence, lossless guarantee, how proxy path receives corpus vs agent path reads from storage)
 // - Provider Routing (upstream LLM config, endpoint management, shared across both paths)
-// - Warm Carry-Forward (cache structure, how both paths feed reasoning back, shared state)
+// - Cache Management (embedding vectors, cross-encoder scores, QUD graph, edge log -- all append-only, all shared)
 //
 // --- Infrastructure ---
 // - Tray Integration (Windows systray, menu, status indicators)

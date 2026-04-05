@@ -60,11 +60,13 @@ Two things make this different from every other agentic UI:
 // Implementation sections to be specified:
 //
 // --- RRC Introspection ---
-// - Selection View (which messages were selected as prerequisites, which excluded)
-// - Score Display (prerequisite scores, confidence, thresholds, ranking)
+// - Prerequisite DAG View (the full dependency graph -- nodes are messages, edges are prerequisite relationships with scores and signals)
+// - Selection View (which messages were selected for this prompt, the traversal path through the DAG, score decay per hop)
+// - Score Breakdown (per-edge signal decomposition: cross-encoder score, QUD edge weight, embedding similarity, temporal proximity)
 // - Prompt Derivation View (what the model actually received vs what the full corpus contained)
-// - Exclusion Rationale (why specific messages were not selected)
-// - Carry-Forward View (warm carry-forward state, cached reasoning content)
+// - Exclusion Rationale (why specific messages were not selected -- below threshold, outside token budget, pruned by transitive reduction)
+// - QUD Graph View (the Questions Under Discussion graph -- open/resolved QUDs, which messages establish and address each QUD, QUD tree hierarchy)
+// - Carry-Forward View (warm carry-forward state: QUD enrichment history, reasoning cache contents)
 //
 // --- Agentic Interface ---
 // - Tool Visualization (tool definitions, in-flight executions, results, errors)

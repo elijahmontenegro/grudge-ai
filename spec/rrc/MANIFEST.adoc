@@ -20,7 +20,7 @@ The service imports this library. The engine does not know it runs inside a prox
 
 *Language:* {lang}
 
-*Dependencies:* `spec/core` (truth types, embedder interface)
+*Dependencies:* `spec/core` (truth types, LLM interface, embedder interface, classifier interface)
 
 === RRC Reference
 
@@ -30,12 +30,16 @@ include::../MANIFEST.adoc[tag=rrc]
 
 ==== In Scope
 
-- Prerequisite detection algorithm: identifying which messages the prompt depends on
-- Selection scoring: scoring model, thresholds, ranking
-- Payload assembly: selecting messages, ordering, token budget, bounded assembly
-- Native format restoration: outputting selected messages as standard conversation entries
-- Warm carry-forward: accepting reasoning content from parsed responses, enriching future selection
-- Embedding pipeline: embedding conversation messages via core embedder interface
+- Prerequisite detection: four complementary techniques (coreference resolution, discourse relation classification, prerequisite chain analysis, QUD tracking)
+- Cross-encoder pairwise dependency classification via core classifier interface
+- QUD (Questions Under Discussion) graph: incremental construction, maintenance, traversal
+- Prerequisite DAG: dual adjacency list, incremental edge construction, subgraph extraction
+- Score cache: cross-encoder pairwise scores, computed incrementally on message arrival
+- Embedding cache: vectors per message, computed on arrival via core embedder interface
+- Selection scoring: multi-signal score fusion, thresholds, ranking
+- Payload assembly: best-first backward traversal, token budget, bounded assembly, native format restoration
+- Warm carry-forward: ingesting reasoning content and QUD signals from parsed responses, enriching future selection
+- Transitive reduction: computed on demand during subgraph extraction
 
 ==== Out of Scope
 
@@ -43,20 +47,154 @@ include::../MANIFEST.adoc[tag=rrc]
 - Response stream parsing (belongs to `spec/service`; the engine receives extracted reasoning)
 - Agent orchestration (belongs to `spec/service`)
 - Conversation storage (belongs to `spec/service`)
-- LLM interface or provider adapters (belongs to `spec/core`)
-- Embedder interface or adapter definitions (belongs to `spec/core`)
+- LLM, embedder, or classifier interface definitions (belongs to `spec/core`)
+- Provider or adapter definitions (belongs to `spec/core`)
 - UI or introspection presentation (belongs to `spec/web`)
+- Model selection, sizing, or deployment topology
 
 == Implementation
 
-// Implementation sections to be specified:
-//
-// - Prerequisite Detection (algorithm: dependency analysis vs similarity, how the prompt's
-//   dependencies on prior messages are identified)
-// - Selection Scoring (score model, confidence, thresholds, bounded assembly rules,
-//   zero-return validity)
-// - Payload Assembly (message ordering, native format output, token budget management)
-// - Warm Carry-Forward (reasoning content ingestion, cache structure, how cached reasoning
-//   enriches the next selection pass)
-// - Embedding Pipeline (how conversation messages are embedded for selection, caching
-//   of embeddings across requests)
+=== Prerequisite Detection
+
+Four complementary techniques identify which messages the current prompt depends on. Each produces edges in the prerequisite DAG. They run on message arrival, not at query time.
+
+==== Coreference Resolution
+
+Identifies entity and concept references across messages. When the prompt says "that function" or "the approach we discussed," coreference links it to the message(s) that define those entities.
+
+- Uses the cross-encoder (via core classifier interface) to score (prompt, candidate_message) pairs for entity-reference dependency
+- Discourse deixis -- references to propositions, events, or abstract concepts -- is the hardest case and the most valuable for RRC
+
+Research basis: SpanBERT-coref architecture, CODI-CRAC shared tasks for dialogue coreference, fastcoref (LingMess). No existing model handles long conversations natively; the cross-encoder pairwise approach sidesteps this by evaluating pairs rather than the full corpus.
+
+==== Discourse Relation Classification
+
+Classifies the relationship between two messages using the PDTB (Penn Discourse TreeBank) framework. Filters to dependency relations only.
+
+- Uses the cross-encoder (via core classifier interface) to classify message pairs into discourse relation types
+- **Dependency relations:** Contingency.* (cause, condition, purpose), Expansion.Level-of-detail, Expansion.Instantiation
+- **Non-dependency relations:** Comparison.* (contrast, concession), Expansion.Equivalence
+- **Ambiguous:** Temporal.*, Expansion.Conjunction (context-dependent)
+- SDRT (Segmented Discourse Representation Theory) adds dialogue-specific relations: Question-Answer Pair, Acknowledgment, Correction
+
+Research basis: PDTB 3.0, Molweni (dialogue discourse corpus), STAC (strategic conversation corpus). Cross-encoders are the only viable architecture -- bi-encoder embeddings cannot distinguish discourse relation types. Fine-tuning DeBERTa-v3 on PDTB + dialogue corpora is the established path.
+
+==== Prerequisite Chain Analysis
+
+Models the conversation as a directed acyclic graph where edges represent "concept introduced in A, used in B" relationships.
+
+- Uses the cross-encoder (via core classifier interface) to classify whether message A introduces information that message B depends on
+- NLI (Natural Language Inference) cross-encoders are the starting architecture -- entailment direction approximates dependency direction
+- Temporal ordering of conversations guarantees acyclicity and halves the search space
+- The DAG structure enables multi-hop: walk backwards from the prompt through chains of dependencies
+
+Research basis: Liang et al. (2015, 2018) RefD metric, Gordon et al. (2016) concept dependencies, Li et al. (2020-2021) BERT-based prerequisite classification. NLI cross-encoders (`cross-encoder/nli-deberta-v3-base`) are the viable starting point for fine-tuning.
+
+==== QUD (Questions Under Discussion) Tracking
+
+Identifies the implicit questions that messages address and raise. The QUD graph is a structural compression of the conversation's discourse flow.
+
+- Uses an LLM (via core LLM interface) for QUD analysis
+- Each message is analyzed for: which existing QUDs it addresses (partially or fully), and what new QUDs it raises
+- The QUD graph is maintained incrementally: one LLM call per new message
+- The LLM receives: current QUD graph state (~500-2000 tokens) + recent message window + the new message. It never needs the full conversation.
+- QUD's unique value: long-range prerequisite edges. A QUD persists in the graph until resolved, creating direct edges from raiser to resolver regardless of distance. Embeddings decay with distance; cross-encoders evaluate pairs but need candidates; QUD bridges the gap.
+
+Research basis: Roberts (1996) QUD stack theory, Riester (2019) QUD tree construction, Benz & Jasinskaja (2017) mapping discourse relations to QUD. No automatic QUD system exists in the literature -- this is novel.
+
+QUD graph state:
+
+- QUDs: question text, established-by message, parent QUD, status (open/partially-addressed/resolved), addressed-by messages
+- Active stack: open QUDs ordered by recency
+- Resolved set: closed QUDs retained for graph completeness
+- Derived edges: source message → target message, via QUD, with type (establishes→addresses, raises→resolves)
+
+=== Cached Artifacts
+
+Three append-only cached artifacts, matching the append-only nature of conversations:
+
+==== Embedding Cache
+
+One vector per message, computed on arrival via core embedder interface. Vectors are fixed-size, pre-computed, and never become stale (messages are immutable in a conversation).
+
+==== Score Cache
+
+Cross-encoder pairwise dependency scores, computed incrementally on message arrival. When message M_n arrives, the cross-encoder evaluates every (M_i, M_n) pair for i < n. Scores are cached. At query time, pairwise scores are already available -- no cross-encoder inference needed.
+
+Conversations are append-only. Message content never changes. Cached scores do not become stale.
+
+==== QUD Graph
+
+Structural compression of conversation flow. Maintained incrementally by an LLM call per new message. Compact: ~50KB for a 1000-message conversation. Persisted alongside embedding and score caches.
+
+=== Prerequisite DAG
+
+The central data structure tying all detection techniques together.
+
+==== Structure
+
+Dual adjacency list -- two indexes over the same edge set:
+
+- **Backward:** message → its prerequisites (messages it depends on). The primary traversal direction for RRC.
+- **Forward:** message → its dependents (messages that depend on it). Used for impact analysis and introspection.
+
+Edges carry: source, target, score, detection signals (which techniques fired), detection timestamp.
+
+Temporal ordering guarantees acyclicity: edges only point from earlier messages to later messages. No cycle detection needed.
+
+==== Persistence
+
+Append-only edge log. Each new edge is appended as a record. On startup, replay the log to rebuild the in-memory graph. Aligns with the append-only nature of conversations.
+
+=== Selection Scoring
+
+==== Multi-Signal Score Fusion
+
+Each prerequisite edge carries scores from multiple signals:
+
+- **Cross-encoder dependency score** -- Pairwise classification confidence from the cross-encoder
+- **QUD edge weight** -- Structural dependency derived from QUD graph (established→addressed, raised→resolved)
+- **Embedding similarity** -- Cosine similarity between message vectors
+- **Temporal proximity** -- Decay function over message distance
+
+Final edge score is a weighted combination. Signal weights are a tuning parameter.
+
+==== Bounded Selective Assembly
+
+Zero-return is valid. If no message scores above threshold, the prompt is novel and the model receives it without augmentation.
+
+=== Payload Assembly
+
+==== Subgraph Extraction
+
+Best-first backward traversal from the prompt through the prerequisite DAG:
+
+1. Seed priority queue with direct prerequisites of the prompt, ordered by edge score
+2. Pop highest-score message, add to selection, subtract its tokens from budget
+3. Push its prerequisites with multiplicatively decayed scores (effective_score = edge_score × parent_score)
+4. Repeat until token budget exhausted or queue empty
+5. Depth limit as safety bound
+
+==== Transitive Reduction
+
+Computed on demand over the selected subgraph, not maintained globally. The selected subgraph is small (typically 5-30 messages); reduction runs in microseconds.
+
+Removes redundant edges: if A→B→C and A→C, remove A→C from the selection. The minimal chain is what the model needs.
+
+==== Native Format Restoration
+
+Selected messages are ordered chronologically and placed in the model's input as ordinary conversation entries. No template, no label. Structurally indistinguishable from session history.
+
+=== Warm Carry-Forward
+
+The service parses the LLM's response stream and feeds extracted content back to the engine. Two forms:
+
+==== QUD Enrichment
+
+The LLM's response is analyzed for QUDs it addresses and raises. This feeds back into the QUD graph, improving future prerequisite detection. Every RRC request is also a QUD analysis opportunity.
+
+Enrichment is additive only -- it adds edges and updates QUD status toward resolution. It never removes edges or re-opens resolved QUDs. This prevents oscillation.
+
+==== Reasoning Cache
+
+Reasoning content extracted from the LLM's response (chain-of-thought, decision rationale, identified relationships) is cached and available to enrich the selection prompt on subsequent requests.

@@ -12,7 +12,7 @@
 
 *Paradigm:* Provider-Agnostic Abstraction Library
 
-The core library is the foundational Go module. It defines the proto truth types, abstraction interfaces, and provider/embedder adapters that all other modules consume. It has no opinion on RRC, orchestration, UI, or deployment. It answers one question: how does a Go program talk to language models and embedders without knowing which ones?
+The core library is the foundational Go module. It defines the proto truth types, abstraction interfaces, and provider/embedder/classifier adapters that all other modules consume. It has no opinion on RRC, orchestration, UI, or deployment.
 
 === Stack
 
@@ -31,9 +31,11 @@ The core library is the foundational Go module. It defines the proto truth types
 - Proto truth types: Message, Conversation, Role, ToolCall, ToolResult, Embedding, and related structures
 - LLM interface: completion, streaming completion, tool use
 - Embedder interface: single embed, batch embed
+- Classifier interface: pairwise text classification (cross-encoder pattern -- takes two texts, returns class probabilities)
 - Provider interface: lifecycle, capability discovery, configuration
 - Provider adapters: Ollama, Anthropic, OpenAI, Google AI, vLLM, any OpenAI-compatible endpoint
 - Embedder adapters: TEI, OpenAI embeddings
+- Classifier adapters: TEI rerank/predict endpoint, custom inference endpoints
 - Tool system: tool definition, execution contract, result types
 - Code generation pipeline: proto -> Go types, proto -> downstream schema fragments
 
@@ -52,8 +54,13 @@ The core library is the foundational Go module. It defines the proto truth types
 // - Proto Truth Types (.proto definitions: Message, Conversation, Role, ToolCall, ToolResult, Embedding, etc.)
 // - LLM Interface (Completer: complete, stream, tool use, capability reporting)
 // - Embedder Interface (Embedder: single, batch, dimensionality)
+// - Classifier Interface (Classifier: pairwise text classification, returns class probabilities.
+//   Covers cross-encoder reranking, NLI classification, discourse relation classification,
+//   dependency detection. Provider-agnostic -- the RRC engine uses this without knowing
+//   whether the backend is TEI, a custom model server, or an API.)
 // - Provider Interface (Provider: lifecycle, config, capability discovery)
 // - Provider Adapters (Ollama, Anthropic, OpenAI, Google AI, vLLM, OpenAI-compatible)
 // - Embedder Adapters (TEI, OpenAI embeddings)
+// - Classifier Adapters (TEI rerank/predict, custom inference endpoints)
 // - Tool System (ToolDef, Executor, Result contract)
 // - Code Generation Pipeline (proto -> Go, proto -> downstream)
