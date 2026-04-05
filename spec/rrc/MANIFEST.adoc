@@ -12,7 +12,7 @@
 
 *Paradigm:* Stateful Algorithm Library
 
-The RRC engine is a Go library implementing the {rrc-full} algorithm. It operates on data structures (prerequisite DAG, QUD graph, score cache, embedding cache) that the service owns and persists. The engine reads and writes these structures; the service is responsible for their storage and lifecycle.
+The RRC engine is a Go library implementing the {rrc-full} algorithm. It operates on data structures (prerequisite DAG, QUD graph, score cache) that the service owns and persists. The engine reads and writes these structures; the service is responsible for their storage and lifecycle.
 
 The service imports this library. The engine does not know it runs inside a proxy.
 
@@ -20,7 +20,7 @@ The service imports this library. The engine does not know it runs inside a prox
 
 *Language:* {lang}
 
-*Dependencies:* `spec/core` (truth types, LLM interface, classifier interface)
+*Dependencies:* `spec/core` (truth types, classifier interface)
 
 === RRC Reference
 
@@ -30,25 +30,24 @@ include::../MANIFEST.adoc[tag=rrc]
 
 ==== In Scope
 
-- Prerequisite detection via two mechanisms: cross-encoder pairwise dependency classification, and QUD graph tracking
-- Cross-encoder dependency scoring: one forward pass per message pair via core classifier interface
-- QUD (Questions Under Discussion) graph: incremental construction via core LLM interface, maintenance, edge derivation
+- Prerequisite detection: cross-encoder pairwise dependency classification on message arrival
+- QUD (Questions Under Discussion) graph: built from warm carry-forward, not dedicated LLM calls
 - Prerequisite DAG: dual adjacency list, incremental edge construction, subgraph extraction
 - Score cache operations: reading and writing cross-encoder pairwise scores
-- Selection scoring: score fusion (cross-encoder + QUD), thresholds, ranking
+- Warm carry-forward ingestion: accepting extracted reasoning from the service, updating QUD graph and DAG
+- Selection scoring: score fusion (cross-encoder + QUD + temporal proximity), thresholds, ranking
 - Payload assembly: best-first backward traversal, token budget, bounded assembly, native format restoration
-- Warm carry-forward: ingesting reasoning content and QUD signals from parsed responses, enriching future selection
 - Transitive reduction: computed on demand during subgraph extraction
 
 ==== Out of Scope
 
-- Ownership or persistence of cached artifacts (belongs to `spec/service`; the engine operates on structures the service provides)
-- HTTP proxy or network concerns (belongs to `spec/service`)
+- Calling LLMs (the service makes LLM calls; the engine receives extracted reasoning via carry-forward)
+- Ownership or persistence of data structures (belongs to `spec/service`)
 - Response stream parsing (belongs to `spec/service`; the engine receives extracted reasoning)
+- HTTP proxy or network concerns (belongs to `spec/service`)
 - Agent orchestration (belongs to `spec/service`)
 - Conversation storage (belongs to `spec/service`)
-- LLM, embedder, or classifier interface definitions (belongs to `spec/core`)
-- Provider or adapter definitions (belongs to `spec/core`)
+- Interface definitions for LLM, embedder, or classifier (belongs to `spec/core`)
 - UI or introspection presentation (belongs to `spec/web`)
 - Model selection, sizing, deployment topology, or fine-tuning
 
@@ -56,11 +55,9 @@ include::../MANIFEST.adoc[tag=rrc]
 
 === Prerequisite Detection
 
-Two mechanisms produce edges in the prerequisite DAG. Both run on message arrival, not at query time.
-
 ==== Cross-Encoder Pairwise Dependency Classification
 
-A single cross-encoder classifies the dependency relationship between two messages. One model, one forward pass per pair.
+A single cross-encoder classifies the dependency relationship between two messages. One model, one forward pass per pair, via the core classifier interface.
 
 When message M_n arrives, the cross-encoder evaluates every (M_i, M_n) pair for i < n. Each pair produces a dependency score. Pairs scoring above threshold become edges in the prerequisite DAG.
 
@@ -82,10 +79,9 @@ The QUD graph captures what the cross-encoder cannot: long-range structural depe
 
 Every message addresses an implicit question and may raise new ones. If message M_47 raises a question and message M_312 answers it, M_47 is a prerequisite of M_312 -- even if they share no surface similarity and the cross-encoder would not score them highly as a pair.
 
-- Uses an LLM (via core LLM interface) for QUD analysis. The model is provider-agnostic.
-- Each message is analyzed for: which existing QUDs it addresses (partially or fully), and what new QUDs it raises
-- The QUD graph is maintained incrementally: one LLM call per new message
-- The LLM receives: current QUD graph state (~500-2000 tokens) + recent message window + the new message. It never needs the full conversation. The graph IS the conversation's structural memory.
+The QUD graph is NOT built by dedicated LLM calls. It builds organically from warm carry-forward. The model is already the best QUD analyzer in the system -- it reasons about the conversation on every request. Its thinking blocks expose reasoning that disambiguates and contains QUD information. Making that reasoning a signal source is the mechanism.
+
+The graph starts cold. First few requests have no carry-forward data -- the cross-encoder is the only signal. As the model responds and reasoning accumulates, QUD edges appear and the graph gets richer. Natural warm-up, no bootstrapping needed.
 
 QUD graph state:
 
@@ -94,7 +90,7 @@ QUD graph state:
 - Resolved set: closed QUDs retained for graph completeness
 - Derived edges: source message -> target message, via QUD, with type (establishes->addresses, raises->resolves)
 
-Research basis: Roberts (1996) QUD stack theory, Riester (2019) QUD tree construction, Benz & Jasinskaja (2017) mapping discourse relations to QUD. No automatic QUD system exists in the literature -- this is novel.
+Research basis: Roberts (1996) QUD stack theory, Riester (2019) QUD tree construction, Benz & Jasinskaja (2017) mapping discourse relations to QUD.
 
 === Data Structures
 
@@ -108,11 +104,11 @@ Conversations are append-only. Message content never changes. Cached scores do n
 
 ==== QUD Graph
 
-Structural compression of conversation flow. Maintained incrementally by an LLM call per new message. Compact: ~50KB for a 1000-message conversation.
+Structural compression of conversation flow. Built incrementally from warm carry-forward as the model responds over time. Starts empty, grows richer with use. Compact: ~50KB for a 1000-message conversation.
 
 ==== Prerequisite DAG
 
-The central data structure tying both detection mechanisms together.
+The central data structure. Cross-encoder edges and QUD edges both feed into it.
 
 **Structure:** Dual adjacency list -- two indexes over the same edge set:
 
@@ -165,17 +161,21 @@ Selected messages are ordered chronologically and placed in the model's input as
 
 === Warm Carry-Forward
 
-The service parses the LLM's response stream and feeds extracted content back to the engine. The model's reasoning reveals what IT found relevant -- implicit prerequisite signals from the model's own perspective.
+The service parses the LLM's response stream and feeds extracted content back to the engine. The engine never calls an LLM directly.
 
 ==== Response Reasoning Extraction
 
-The model's response contains reasoning content: chain-of-thought, decision rationale, explicit references to prior context ("as we discussed when designing the auth module"). This content reveals the conversation's dependency structure from the model's perspective -- prerequisites the cross-encoder and QUD may have missed.
+The model's response contains reasoning: thinking blocks, chain-of-thought, decision rationale, explicit references to prior context ("as we discussed when designing the auth module"). This reasoning reveals the conversation's dependency structure from the model's perspective -- prerequisites the cross-encoder may have missed.
 
-The service extracts this content from the response stream. Whether extraction requires an LLM call or direct parsing depends on the response format (structured thinking vs embedded natural language). This is an implementation detail, not an architecture decision.
+The service extracts this content from the response stream and passes it to the engine. Whether extraction requires an LLM call or direct parsing depends on the response format (structured thinking vs embedded natural language). This is the service's concern, not the engine's.
 
-==== QUD Enrichment
+==== QUD Graph Update
 
-Extracted reasoning feeds into the next QUD analysis call as additional context. The QUD analysis becomes progressively better because it learns from what the model actually found useful.
+Extracted reasoning is the signal source for the QUD graph. The engine processes it to identify:
+
+- Questions the model's response addresses (QUD status updates)
+- Questions the model's response raises (new QUDs)
+- Prior messages the model found relevant (new edges in the DAG)
 
 Enrichment is additive only -- it adds edges and updates QUD status toward resolution. It never removes edges or re-opens resolved QUDs. This prevents oscillation.
 
@@ -186,7 +186,7 @@ The carry-forward is "warm" because it improves with use:
 1. RRC selects prerequisites and forwards to the model
 2. The model reasons about the conversation, producing a response
 3. The response reveals what the model found relevant
-4. That signal feeds back into the QUD graph and enriches future selection
+4. That signal feeds back into the QUD graph and DAG
 5. Next request benefits from what the model learned
 
-The model's own reasoning is a signal source for the prerequisite graph.
+The model's own reasoning is a signal source for the prerequisite graph. The system gets better at selecting prerequisites the more it's used.
