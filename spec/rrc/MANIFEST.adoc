@@ -119,7 +119,7 @@ Edges carry: source, target, score, detection source (cross-encoder, QUD, or bot
 
 Temporal ordering guarantees acyclicity: edges only point from earlier messages to later messages. No cycle detection needed.
 
-**Persistence:** Append-only edge log. Each new edge is appended as a record. On startup, replay the log to rebuild the in-memory graph.
+The engine defines the in-memory structures. The service decides how to persist and restore them.
 
 === Selection Scoring
 
