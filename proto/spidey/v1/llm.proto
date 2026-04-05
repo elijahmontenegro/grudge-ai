@@ -4,6 +4,8 @@ package spidey.v1;
 
 option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
 
+import "spidey/v1/conversation.proto";
+
 // LLM interface types. Provider-agnostic completion.
 
 message CompletionRequest {
@@ -24,10 +26,14 @@ message Usage {
   int32 completion_tokens = 2;
 }
 
-// Streaming variant. Each chunk is a partial response.
+// Streaming. Each chunk carries a content block delta.
 
 message StreamChunk {
-  string delta = 1;
-  bool done = 2;
-  optional Usage usage = 3;
+  oneof delta {
+    TextContent text = 1;
+    ThinkingContent thinking = 2;
+    ToolCallContent tool_call = 3;
+  }
+  bool done = 4;
+  optional Usage usage = 5;
 }

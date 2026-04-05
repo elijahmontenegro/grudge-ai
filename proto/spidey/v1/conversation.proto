@@ -18,9 +18,44 @@ enum Role {
 message Message {
   string id = 1;
   Role role = 2;
-  string content = 3;
+  repeated ContentBlock content = 3;
   int64 position = 4;
   google.protobuf.Timestamp created_at = 5;
+}
+
+message ContentBlock {
+  oneof block {
+    TextContent text = 1;
+    ThinkingContent thinking = 2;
+    ToolCallContent tool_call = 3;
+    ToolResultContent tool_result = 4;
+    ImageContent image = 5;
+  }
+}
+
+message TextContent {
+  string text = 1;
+}
+
+message ThinkingContent {
+  string text = 1;
+}
+
+message ToolCallContent {
+  string id = 1;
+  string name = 2;
+  string arguments = 3; // JSON-encoded arguments
+}
+
+message ToolResultContent {
+  string tool_call_id = 1;
+  string content = 2;
+  bool is_error = 3;
+}
+
+message ImageContent {
+  string media_type = 1;
+  bytes data = 2;
 }
 
 message Conversation {
