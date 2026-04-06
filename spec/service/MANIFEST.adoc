@@ -116,6 +116,12 @@ Per-turn sections (recomputed each request):
 
 Templates are not user-facing. They are engineering artifacts maintained in the codebase.
 
+**Design principle: don't put discoverable information in the prompt.** The system prompt contains only what the model cannot figure out on its own. User identity, thread name, mounted directories, SPIDEY.md instructions, active plan content — these are non-discoverable. Git status, file trees, directory listings, file contents — the model discovers these through tools. The prompt is lean.
+
+==== SPIDEY.md
+
+Any mounted directory can contain a `SPIDEY.md` file. The template system picks it up automatically and injects its content into the system prompt. Project-level instructions without configuration. Multiple mounted directories can each have their own `SPIDEY.md` — all are injected. This is the abstraction for project-specific prompt injection: drop a file, it works.
+
 ==== User Profile
 
 User identity lives in the system prompt as a stable section. Captured during onboarding, injected into prompt templates on every request. Updated from time to time — by the user directly or via the small fast model when it detects relevant preference changes. Not a memory system. A supplementary system instruction that evolves.
@@ -182,6 +188,8 @@ Permission levels:
 Permissions are configurable per-thread. A thread working on a production codebase might deny destructive operations. A sandbox thread might allow everything. The sandbox itself provides a safety boundary — even "allow all" is contained.
 
 The default permission set: read tools allowed, write tools ask, destructive tools (rm, git push, etc.) ask with warning.
+
+**Auto-approve mode:** A permission mode where configured tool categories are pre-approved without prompting. For users who want reduced friction without full autonomous mode. Configured per-thread — which tools auto-approve, which still ask. Autonomous mode implies auto-approve for all tools. Auto-approve without autonomous means the user is still driving, just with fewer interruptions.
 
 ==== Model Roles
 
