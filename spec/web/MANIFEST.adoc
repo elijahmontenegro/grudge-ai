@@ -27,7 +27,7 @@ Three things make this different from every other agentic UI:
 
 *UI Framework:* {ui-framework}
 
-*Component Primitives:* shadcn/ui (Radix UI + Tailwind CSS, source-owned — copied into project, not installed as dependency)
+*Component Primitives:* shadcn/ui (Radix UI + Tailwind CSS, source-owned -- copied into project, not installed as dependency)
 
 *Design System:* Atomic design (atoms, molecules, organisms, templates, pages)
 
@@ -47,13 +47,12 @@ Three things make this different from every other agentic UI:
 - Per-prompt scope control: thread-scoped selection by default, toggle to all-threads for a specific prompt
 - Citations per message: every message that triggered an RRC selection event carries citation metadata (selected prerequisites, scores, thread origin, cross-thread indicator)
 - RRC introspection: drill into citations to see full selection detail, QUD graph state, carry-forward history
-- Agentic interface: tool visualization, agent state, execution traces, planning views
+- Agentic interface: tool visualization, agent state, execution traces
 - Message display: rich content (text, code, tool results, images) -- not a plain chat list
 - Home page: landing view when opening Spidey
+- Autonomous mode controls: duration picker, play/pause/stop, progress display, thread state in sidebar
 - {api-client} integration: queries, mutations, subscriptions against the service {api-protocol} API
 - Code generation: {api-protocol} schema -> TypeScript client types via {codegen}
-- UX design: interaction patterns, layout, information architecture
-- Autonomous mode controls: duration picker, play/pause/stop, progress display, thread state in sidebar
 - Build output: static assets (HTML/JS/CSS) served by the service
 
 ==== Out of Scope
@@ -65,76 +64,133 @@ Three things make this different from every other agentic UI:
 - Standalone server or hosting (served by the service)
 - Mobile layout
 
+== User Stories
+
+=== Thread Management
+
+- User opens Spidey -> sees thread list with state indicators (idle, running, paused) -> picks a thread or creates one
+- User creates a thread -> types a name or starts with a prompt (thread auto-named from first prompt)
+- User sees which threads are running/paused/idle from any view via the persistent sidebar
+
+=== Normal Interaction
+
+- User types a prompt -> chooses scope (thread or all-threads) -> sends
+- Agent works -> user sees streaming response, tool executions and thinking blocks expand/collapse inline
+- User stops the agent mid-execution -> agent halts, partial work preserved in thread
+
+=== Citations
+
+- User sees citation count on every message that went through an RRC selection event
+- User expands citations inline -> sees listed prerequisites with score, source (cross-encoder / QUD / both), thread origin
+- User clicks a cited message -> navigates to it (scrolls within thread or jumps to other thread)
+- User sees outbound indicator on messages -> "referenced by N later messages"
+- Cross-thread citations are visually distinct from same-thread citations
+
+=== Autonomous Mode
+
+- User switches to autonomous mode -> duration picker appears
+- User types initial prompt -> sets duration (5m to 2w) -> hits play
+- Agent runs -> user sees progress (round count, elapsed time, current activity)
+- User pauses -> input area appears for course correction -> types correction -> resumes
+- User stops -> agent halts -> thread shows final state
+- Timer expires -> agent stops naturally
+- User can navigate to other threads while autonomous agent runs -- progress visible in sidebar
+
+=== Cross-Thread
+
+- User toggles scope to all-threads for a specific prompt -> agent draws from all threads
+- User sees cross-thread citations highlighted distinctly in citation expansion
+- User navigates from a cross-thread citation to the source thread and back without losing state
+
+=== Introspection (drill-down from citations)
+
+- User expands a citation -> sees score breakdown (cross-encoder, QUD, temporal proximity)
+- User views the QUD graph state at the time of that selection event
+- User sees what the model actually received (assembled payload) vs the full thread
+
+== Prerequisites
+
+These are not features. They are conditions the user stories depend on.
+
+=== State Persistence Across Navigation
+
+Thread view state survives navigation -- scroll position, expanded/collapsed sections, input draft. Leave and come back, it's the same. This is session state managed by the service, not the browser. Tab close and reopen restores it.
+
+=== Service Restart Resilience
+
+If the service restarts, all persistent state survives (threads, messages, DAG, scores, QUD graphs in SQLite). Session view state is reconstructable. Running autonomous agents resume or show their last state. The browser reconnects automatically.
+
+=== Concurrent Thread Awareness
+
+Multiple threads can be active simultaneously. Navigating between threads does not affect running agents. The sidebar reflects all thread states in real time regardless of which thread the user is in.
+
+=== Real-Time Updates Across Views
+
+Agent progress updates in the sidebar even when the user is in a different thread. Cross-thread citations appearing in the home activity feed while the user is in a thread. All via {api-protocol} subscriptions.
+
+=== Navigation History
+
+Citation jumps are navigation events. Browser back/forward work naturally. `spidey.localhost/thread/{id}` is a real URL. Back returns to the same scroll position and expanded state.
+
+=== Offline Resilience
+
+If the browser disconnects (network blip, tab backgrounded), the session reconnects and rehydrates from the service. No data loss. The service is the source of truth.
+
+=== Input Draft Persistence
+
+User starts typing, navigates away, comes back -- draft is still there. Per-thread.
+
 == Implementation
 
-// Implementation sections to be specified:
-//
-// --- Thread Model ---
-// - Thread list (home page sidebar or main view)
-// - Create / rename / delete threads
-// - Thread switching
-// - Per-thread identity emergence (visible through carry-forward history and selection patterns)
-//
-// --- Citations ---
-// - Citation indicator per message (count of selected prerequisites)
-// - Expand to see: message preview, score, source (cross-encoder / QUD / both), thread origin
-// - Cross-thread citations highlighted (selected from a different thread)
-// - Outbound indicator: "referenced by N later messages" (shows which messages this one informed)
-//
-// --- Per-Prompt Scope Control ---
-// - Scope toggle on input: thread-scoped (default) or all-threads
-// - Visual indicator of current scope
-//
-// --- RRC Introspection (drill-down from citations) ---
-// - Selection detail: full ranked list, scores, traversal path through DAG
-// - Score breakdown per edge: cross-encoder score, QUD edge weight, temporal proximity
-// - Exclusion rationale: why specific messages were not selected (below threshold, transitive reduction, depth limit)
-// - QUD graph view: open/resolved QUDs, which messages establish and address each, tree hierarchy
-// - Carry-forward view: accumulated reasoning, QUD enrichment history
-// - DAG neighborhood view: for a given message, its prerequisites and dependents (ego graph, not full DAG)
-//
-// --- Agentic Interface ---
-// - Tool visualization (tool definitions, in-flight executions, results, errors)
-// - Execution traces (step-by-step agent reasoning and action history)
-// - Agent state (current plan, progress, decision points, intervention surface)
-//
-// --- Thread View (main area when inside a thread) ---
-// - Single column message stream, vertical scroll
-// - Tool executions and thinking blocks expand/collapse inline (standard agentic pattern)
-// - Citation indicator per message — expand inline to see RRC selection detail
-// - Streaming: tokens arrive in real time via subscription
-// - Rich content: text, code blocks, tool results, images
-//
-// --- Layout ---
-// - Persistent sidebar (always visible): thread list with state indicators (idle, running, paused)
-// - Main area changes based on context: home feed when no thread selected, thread view when inside a thread
-// - Sidebar shows: thread name, last activity, autonomous state (running 47m, paused, idle)
-//
-// --- Home Page (main area when no thread selected) ---
-// - Activity feed: recent cross-thread citations, completed autonomous runs, thread warmth
-// - Quick start: prompt input that creates a new thread and sends in one action
-// - New thread button
-//
-// --- Input ---
-// - Two modes:
-//   - Normal: prompt input, send button
-//   - Autonomous: duration picker (5m, 30m, 2h, 8h, up to 2w), play/pause/stop controls
-// - Scope toggle (thread / all-threads) — available in both modes
-// - Mode switching (normal <-> autonomous) — input area transforms
-// - Thread context indicator
-//
-// --- Autonomous Mode UI ---
-// - Duration picker (microwave-style — user picks how long the agent runs)
-// - Play: start autonomous execution
-// - Pause: halt execution, user reviews and course corrects, resume continues
-// - Stop: end autonomous mode
-// - Progress: elapsed time, round count, current activity
-// - Thread list shows running/paused state for autonomous threads
-//
-// --- UI Architecture ---
-// - shadcn/ui — source-owned Radix UI + Tailwind primitives. Copied into project, modified directly. These are the atoms.
-// - Strict atomic design: atoms (Button, Badge, Input), molecules (CitationIndicator, ThreadListItem, DurationPicker), organisms (MessageStream, Sidebar, InputArea), templates (ThreadView, HomeView), pages (Home, Thread, Settings)
-// - Component structure: each component is self-contained, composable, no prop drilling beyond one level
-// - {api-client} setup (queries, mutations, subscriptions, cache strategy)
-// - Code generation ({codegen} config, generated TypeScript types)
-// - Build pipeline (static asset output for service to serve)
+=== Layout
+
+Persistent sidebar (always visible): thread list with state indicators (idle, running, paused, with elapsed time for running threads). Main area changes based on context: home feed when no thread selected, thread view when inside a thread.
+
+=== Home Page
+
+Main area when no thread selected. Activity feed: recent cross-thread citations, completed autonomous runs, thread warmth. Quick start: prompt input that creates a new thread and sends in one action. New thread button.
+
+=== Thread View
+
+Single column message stream, vertical scroll. Tool executions and thinking blocks expand/collapse inline (standard agentic pattern). Citation indicator per message -- expand inline to see RRC selection detail. Streaming tokens arrive in real time via subscription. Rich content: text, code blocks, tool results, images.
+
+=== Citations
+
+Citation indicator per message: count of selected prerequisites. Expand inline to see: message preview, score, source (cross-encoder / QUD / both), thread origin if cross-thread. Cross-thread citations visually distinct. Click a cited message to navigate to it. Outbound indicator: "referenced by N later messages."
+
+=== Introspection
+
+Drill-down from citation expansion. Selection detail: full ranked list, scores, traversal path through DAG. Score breakdown per edge: cross-encoder score, QUD edge weight, temporal proximity. Exclusion rationale: why specific messages were not selected (below threshold, transitive reduction, depth limit). QUD graph view: open/resolved QUDs, which messages establish and address each. Carry-forward view: accumulated reasoning. DAG neighborhood: for a given message, its prerequisites and dependents.
+
+=== Input Area
+
+Two modes driven by user's cognitive state:
+
+**Idle:** Text area, send button, scope toggle (thread / all-threads), mode switch (normal / autonomous).
+
+**Autonomous setup:** When autonomous mode selected, duration picker appears (5m to 2w). Text area stays for the initial prompt. Send becomes play.
+
+**Agent working (normal):** Stop button appears. Text area available for interruption.
+
+**Agent working (autonomous):** Pause + stop. Duration countdown. Progress: round count, elapsed time, current activity.
+
+**Agent paused (autonomous):** Text area returns for course correction. Resume + stop. User types correction, hits resume, correction enters the thread, agent continues.
+
+=== Settings
+
+Minimal. The system should just work. Configuration required on first run:
+
+- Provider endpoint (where is the LLM? Ollama at localhost, Anthropic API, etc.)
+- Model selection
+- API key (for cloud providers)
+- Classifier endpoint (where is the cross-encoder? TEI at localhost, etc.)
+
+Smart detection: if Ollama and TEI are running at default localhost ports, detect and offer them. Reduce first-run friction to confirmation, not configuration.
+
+Accessible from tray menu ("Settings...") and from within the web UI.
+
+=== UI Architecture
+
+shadcn/ui source-owned Radix UI + Tailwind primitives. Copied into project, modified directly. Strict atomic design methodology: atoms compose into molecules, molecules into organisms, organisms into templates, templates into pages. Each component self-contained and composable.
+
+{api-client} for all service communication: queries, mutations, subscriptions. Generated TypeScript types from {api-protocol} schema via {codegen}. Static asset build output served by the service.

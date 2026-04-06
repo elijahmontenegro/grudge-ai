@@ -93,9 +93,10 @@ Independent of either request flow:
 ==== In Scope
 
 ===== Proxy Path
-- HTTP endpoint accepting standard LLM API requests
-- Transparent forwarding via RRC engine
-- Response stream parsing: SSE/chunked passthrough with concurrent extraction of reasoning content
+- HTTP endpoint accepting LLM API requests in any format the core library has an adapter for (Anthropic Messages, OpenAI Chat Completions, Ollama, etc.)
+- The client does not change -- it sends requests in its native format, the proxy accepts and translates via core provider adapters
+- Transparent forwarding via RRC engine (stateless mode)
+- Response stream parsing: passthrough with concurrent extraction of reasoning content
 - Stateless per-request handling (client provides corpus)
 
 ===== Agent Path
