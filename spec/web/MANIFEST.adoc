@@ -97,6 +97,15 @@ Three things make this different from every other agentic UI:
 - Timer expires -> agent stops naturally
 - User can navigate to other threads while autonomous agent runs -- progress visible in sidebar
 
+=== Subagents
+
+- Parent model spawns a subagent -> user sees the task and a progress indicator
+- Subagent works in the background -> user can navigate to other threads, subagent progress visible in sidebar
+- Subagent finishes -> result appears inline in parent thread
+- User expands to see the subagent's intermediate work (tool calls, reasoning, file reads) in a collapsible sub-view
+- Multiple subagents can run concurrently (ParallelAgent) -> each shows progress independently
+- User can message a running subagent (SendMessage) -> course correction without stopping it
+
 === Plan Mode
 
 - User requests a plan -> agent reasons without executing tools, produces structured steps with dependencies

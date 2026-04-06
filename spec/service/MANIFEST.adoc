@@ -48,6 +48,21 @@ Both paths share:
 - **RRC engine** -- The same engine code, two modes. The proxy path runs it statelessly (no persistence). The agent path runs it statefully (global DAG, per-thread QUD, compounding carry-forward).
 - **Provider routing** -- Both paths forward to the same upstream LLM, configured the same way.
 
+==== Subagents (Ephemeral Thread Forks)
+
+A subagent is an ephemeral thread fork. The parent model spawns it with a task via ADK's AgentTool. The subagent inherits a snapshot of the parent thread's DAG and score cache at fork time — warm start. It runs RRC per-event against its own forked corpus (parent's messages at fork time + its own new messages). Its carry-forward builds its own QUD graph — identity diverges from the parent through its own reasoning trajectory.
+
+When the subagent finishes, its messages and DAG edges merge back into the parent's corpus. The subagent's intermediate work (file reads, analysis, tool results) is available for future selection in the parent thread. Like a git branch that merges back — the work product reunites. The cross-encoder scores from the subagent transfer (messages are immutable, scores are valid). The parent only needs to score the subagent's messages against any parent messages that arrived after the fork.
+
+The subagent's result enters the parent thread as a message. In the UI, the subagent's intermediate work is collapsible — the user sees the result inline, expands to see the process.
+
+ADK agent types map to this model:
+
+- **AgentTool** -- Ephemeral thread fork. Task in, result out. Messages merge back.
+- **ParallelAgent** -- Multiple forks running concurrently. Each fork has its own RRC state. All merge back on completion.
+- **LoopAgent** -- Sequential execution within the same thread. No fork needed.
+- **SendMessage** -- Message a running fork. The fork continues with the new input. Another RRC selection event in the fork.
+
 ==== Plan Mode
 
 The agent reasons without executing tools. Tools are unavailable — the model can only think and produce a structured plan (steps with dependencies). The plan is a message in the thread. On approval, the service restores tools and the agent executes.
@@ -227,6 +242,9 @@ Independent of either request flow:
 - {api-protocol} subscriptions: live agent state, streaming responses, RRC introspection during execution
 - Agent orchestration via ADK Go: LlmAgent, SequentialAgent, ParallelAgent, LoopAgent, agent transfer
 - Tool system via ADK Go: FunctionTool (auto-declaration from Go functions), Toolset (dynamic tool groups), MCP integration
+- Built-in tools: Bash, FileRead, FileEdit, FileWrite, Glob, Grep, NotebookEdit, WebSearch, WebFetch, AskUserQuestion, Skill, TodoWrite, EnterPlanMode, ExitPlanMode. All execute in thread's Docker sandbox.
+- Agent tools: Agent (spawn subagent as ephemeral thread fork), SendMessage (message a running subagent), TaskCreate/Get/Update/List/Stop/Output (task management)
+- MCP tools: dynamic tools from configured MCP servers via ADK's McpToolset
 - Plugin system via ADK Go: lifecycle hooks (before/after agent, model, tool execution)
 - Thread storage: persistent, complete, unmodified history (lossless corpus guarantee)
 - RRC-as-LLM adapter: implements ADK's `model.LLM` interface, routes through RRC engine to actual LLM via core Completer

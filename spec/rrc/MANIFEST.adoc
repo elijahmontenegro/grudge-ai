@@ -130,6 +130,14 @@ Temporal ordering guarantees acyclicity: edges only point from earlier messages 
 
 The engine defines the in-memory structures. The service decides how to persist and restore them.
 
+=== Forked Threads (Subagents)
+
+The engine supports ephemeral thread forks for subagent execution. A fork inherits a snapshot of the parent thread's DAG and score cache at fork time. The forked thread runs RRC per-event against its own corpus (parent's messages at fork time + its own new messages). Carry-forward builds its own QUD graph — identity diverges.
+
+On merge: the fork's messages and edges enter the parent's corpus. Cached scores transfer (messages are immutable). The parent only needs to score the fork's messages against any parent messages that arrived after the fork. The fork's QUD graph does not merge — the parent builds its own understanding of the fork's output through carry-forward.
+
+The engine does not know about "subagents." It operates on threads — fork is a thread created from another thread's snapshot. Merge is messages and edges entering the parent thread's data structures. The service orchestrates the fork/merge lifecycle.
+
 === Selection Scoring
 
 ==== Score Fusion
