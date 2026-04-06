@@ -1,8 +1,9 @@
 = Spidey Core Library
 :project-name: Spidey
 :module-name: Core Library
-:lang: Go 1.26+
-:codegen: protoc (buf), go generate
+:lang: Go 1.26.1
+:codegen: buf v1.67.0, go generate
+:proto-syntax: proto3
 
 == Context
 
@@ -22,7 +23,9 @@ The core library is the foundational Go module. It defines the proto truth types
 
 *Truth Types:* Protocol Buffers (`.proto` files in `proto/spidey/v1/` are the canonical source; Go types generate to `gen/go/spidey/v1/`)
 
-*Dependencies:* Standard library plus: `google.golang.org/protobuf`, `modernc.org/sqlite` (for adapters that need local state). No framework dependencies.
+*Proto Syntax:* {proto-syntax}
+
+*Dependencies:* Standard library plus: `google.golang.org/protobuf v1.36.3`. No framework dependencies.
 
 === Scope
 
@@ -35,7 +38,7 @@ The core library is the foundational Go module. It defines the proto truth types
 - Provider interface: lifecycle, capability discovery, configuration
 - Provider adapters: Ollama, Anthropic, OpenAI, Google AI, vLLM, any OpenAI-compatible endpoint
 - Embedder adapters: TEI, OpenAI embeddings
-- Classifier adapters: TEI rerank/predict endpoint, custom inference endpoints
+- Classifier adapters: TEI `/predict` endpoint
 - Code generation pipeline: proto -> Go types via buf
 
 ==== Out of Scope
@@ -63,7 +66,9 @@ CompletionRequest includes `provider_options` (`google.protobuf.Struct`) as an e
 
 === Go Interfaces
 
-Provider-agnostic interfaces. The RRC engine and service consume these without knowing the backend. The service configures two LLM roles: the **main model** (user's model for reasoning, tool use, responses) and the **small fast model** (internal utility for QUD extraction, annotations, autocomplete, tool rationale — needs to be near-free per call). Both use the same Completer interface with different provider/model configurations.
+Provider-agnostic interfaces. The service consumes these without knowing the backend. The RRC engine defines its own consumer interfaces (Classifier, Completer) via Go structural typing -- any core adapter satisfies them.
+
+The service configures two LLM roles: the **main model** (user's model for reasoning, tool use, responses) and the **small fast model** (internal utility for QUD extraction, annotations, autocomplete, tool rationale). Both use the same Completer interface with different provider/model configurations. The small fast model requires sub-second inference latency for autocomplete; QUD extraction tolerates multi-second latency. User selects a model matching these constraints during onboarding. Recommended models for the small fast role: sub-1B extraction-focused (Osmosis-Structure-0.6B, NuExtract-tiny, Qwen3.5-0.8B).
 
 ==== LLM
 
@@ -139,18 +144,354 @@ Each adapter implements `Provider` for a specific backend. Configuration is adap
 ==== vLLM
 - Supports: Completer
 - Endpoint: OpenAI-compatible API (configurable base URL)
-- Auth: optional API key
+- Auth: API key is a string config field. Empty string: adapter sends no `Authorization` header.
 
 ==== TEI
 - Supports: Embedder, Classifier
 - Endpoint: configurable HTTP base URL
-- Embedder uses `/embed`, Classifier uses `/rerank` or `/predict`
+- Embedder uses `/embed`, Classifier uses `/predict`
+
+=== File Tree
+
+----
+core/
+├── go.mod
+├── completer.go          # Completer interface
+├── embedder.go           # Embedder interface
+├── classifier.go         # Classifier interface
+├── provider.go           # Provider interface + registry
+├── errors.go             # Sentinel errors
+├── adapter/
+│   ├── ollama/
+│   │   └── ollama.go     # Completer, Embedder
+│   ├── anthropic/
+│   │   └── anthropic.go  # Completer
+│   ├── openai/
+│   │   └── openai.go     # Completer, Embedder (configurable base URL)
+│   ├── googleai/
+│   │   └── googleai.go   # Completer, Embedder
+│   ├── vllm/
+│   │   └── vllm.go       # Completer
+│   └── tei/
+│       └── tei.go        # Embedder (/embed), Classifier (/predict)
+└── internal/
+    └── httpc/
+        └── client.go     # Shared HTTP client, timeout, auth header logic
+----
+
+=== Adapter Configuration
+
+Each adapter package exports a `Config` struct (Go convention: `ollama.Config`, not `ollama.OllamaConfig`). Configuration is injected at provider construction.
+
+[source,go]
+----
+// adapter/ollama
+type Config struct {
+    BaseURL string // e.g., "http://localhost:11434"
+}
+
+// adapter/anthropic
+type Config struct {
+    APIKey  string
+    BaseURL string // default: "https://api.anthropic.com"
+}
+
+// adapter/openai
+type Config struct {
+    APIKey  string
+    BaseURL string // default: "https://api.openai.com"; configurable for compatible endpoints
+}
+
+// adapter/googleai
+type Config struct {
+    APIKey string
+}
+
+// adapter/vllm
+type Config struct {
+    BaseURL string
+    APIKey  string // empty string: adapter sends no Authorization header
+}
+
+// adapter/tei
+type Config struct {
+    BaseURL string // e.g., "http://localhost:8080"
+}
+----
+
+=== Error Types
+
+Sentinel errors. No retries -- the caller handles all error policy.
+
+[source,go]
+----
+var (
+    ErrUnsupported        = errors.New("capability not supported by provider")
+    ErrAuth               = errors.New("authentication failed")
+    ErrProviderUnavailable = errors.New("provider endpoint unreachable")
+)
+----
+
+`Completer()` on a TEI provider returns `ErrUnsupported`. `Classifier()` on Anthropic returns `ErrUnsupported`. Network failures return `ErrProviderUnavailable`. Invalid or expired API keys return `ErrAuth`.
+
+=== Stream Contract
+
+The adapter closes the channel when the stream ends or the context is cancelled. Channel is unbuffered. All `Provider`, `Completer`, `Embedder`, and `Classifier` implementations must be safe for concurrent use by multiple goroutines.
 
 === Code Generation Pipeline
 
-Proto compilation via `buf`. Configuration in `buf.yaml` at the repository root.
+Proto compilation via `buf v1.67.0`. Configuration in `buf.yaml` at the repository root.
 
 Input: `proto/spidey/v1/*.proto`
 Output: `gen/go/spidey/v1/*.go`
 
+Generated Go types live in the `gen/go` module (its own `go.mod`, depends on `google.golang.org/protobuf v1.36.3` only). All other Go modules import from `gen/go`.
+
 Downstream: GraphQL schema (in service spec) and TypeScript types (in web spec) generate from these Go types, not directly from proto.
+
+=== Proto Truth Type Definitions
+
+The proto files below are the canonical source for all generated code. Syntax: {proto-syntax}.
+
+==== thread.proto
+
+[source,protobuf]
+----
+syntax = "proto3";
+package spidey.v1;
+option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+import "google/protobuf/timestamp.proto";
+
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_USER = 1;
+  ROLE_ASSISTANT = 2;
+  ROLE_SYSTEM = 3;
+}
+
+message ContentBlock {
+  oneof block {
+    TextContent text = 1;
+    ThinkingContent thinking = 2;
+    ToolCallContent tool_call = 3;
+    ToolResultContent tool_result = 4;
+    ImageContent image = 5;
+  }
+}
+
+message TextContent { string text = 1; }
+message ThinkingContent { string text = 1; }
+message ToolCallContent { string id = 1; string name = 2; string arguments = 3; }
+message ToolResultContent { string tool_call_id = 1; string content = 2; bool is_error = 3; }
+message ImageContent { string media_type = 1; bytes data = 2; }
+
+message Message {
+  string id = 1;
+  Role role = 2;
+  repeated ContentBlock content = 3;
+  int64 position = 4;
+  string thread_id = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message Thread {
+  string id = 1;
+  string name = 2;
+  repeated string working_dirs = 3;
+  bool sandboxed = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+enum SelectionScope {
+  SELECTION_SCOPE_UNSPECIFIED = 0;
+  SELECTION_SCOPE_THREAD = 1;
+  SELECTION_SCOPE_ALL_THREADS = 2;
+}
+----
+
+==== rrc.proto
+
+[source,protobuf]
+----
+syntax = "proto3";
+package spidey.v1;
+option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+import "google/protobuf/timestamp.proto";
+import "spidey/v1/thread.proto";
+
+enum EdgeSource {
+  EDGE_SOURCE_UNSPECIFIED = 0;
+  EDGE_SOURCE_CROSS_ENCODER = 1;
+  EDGE_SOURCE_QUD = 2;
+  EDGE_SOURCE_BOTH = 3;
+}
+
+message Edge {
+  string from_message_id = 1;
+  string to_message_id = 2;
+  float score = 3;
+  EdgeSource source = 4;
+  float cross_encoder_score = 5;
+  float qud_weight = 6;
+  float temporal_proximity = 7;
+  google.protobuf.Timestamp detected_at = 8;
+  string from_thread_id = 9;
+  string to_thread_id = 10;
+}
+
+enum QUDStatus {
+  QUD_STATUS_UNSPECIFIED = 0;
+  QUD_STATUS_OPEN = 1;
+  QUD_STATUS_PARTIALLY_ADDRESSED = 2;
+  QUD_STATUS_RESOLVED = 3;
+}
+
+message QUD {
+  string id = 1;
+  string question = 2;
+  string established_by = 3;
+  string parent_qud_id = 4;
+  QUDStatus status = 5;
+  repeated string addressed_by = 6;
+}
+
+message QUDGraph {
+  repeated QUD quds = 1;
+  repeated string active_stack = 2;
+}
+
+message SelectedMessage {
+  string message_id = 1;
+  float effective_score = 2;
+  int32 hop_depth = 3;
+  repeated Edge via_edges = 4;
+  string thread_id = 5;
+  bool cross_thread = 6;
+}
+
+enum ExclusionReason {
+  EXCLUSION_UNSPECIFIED = 0;
+  EXCLUSION_BELOW_THRESHOLD = 1;
+  EXCLUSION_TRANSITIVE_REDUCTION = 2;
+  EXCLUSION_DEPTH_LIMIT = 3;
+}
+
+message ExcludedMessage {
+  string message_id = 1;
+  ExclusionReason reason = 2;
+  float score = 3;
+}
+
+message SelectionResult {
+  string event_id = 1;
+  SelectionScope scope = 2;
+  string thread_id = 3;
+  repeated SelectedMessage selected = 4;
+  repeated ExcludedMessage excluded = 5;
+}
+
+message CarryForwardInput {
+  string event_id = 1;
+  string thread_id = 2;
+  repeated ThinkingContent thinking_blocks = 3;
+}
+----
+
+==== classifier.proto
+
+[source,protobuf]
+----
+syntax = "proto3";
+package spidey.v1;
+option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+
+message ClassifyRequest { string text_a = 1; string text_b = 2; }
+message ClassifyResponse { repeated ClassLabel labels = 1; }
+message ClassLabel { string name = 1; float probability = 2; }
+message BatchClassifyRequest { repeated ClassifyRequest pairs = 1; }
+message BatchClassifyResponse { repeated ClassifyResponse results = 1; }
+----
+
+==== llm.proto
+
+[source,protobuf]
+----
+syntax = "proto3";
+package spidey.v1;
+option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+import "google/protobuf/struct.proto";
+import "spidey/v1/thread.proto";
+
+message LLMMessage {
+  Role role = 1;
+  repeated ContentBlock content = 2;
+}
+
+message CompletionRequest {
+  repeated LLMMessage messages = 1;
+  string model = 2;
+  optional int32 max_tokens = 3;
+  optional float temperature = 4;
+  optional float top_p = 5;
+  repeated string stop = 6;
+  bool stream = 7;
+  google.protobuf.Struct provider_options = 8;
+}
+
+message CompletionResponse {
+  string id = 1;
+  LLMMessage message = 2;
+  Usage usage = 3;
+  string model = 4;
+}
+
+message Usage { int32 prompt_tokens = 1; int32 completion_tokens = 2; }
+
+message StreamChunk {
+  oneof delta {
+    TextContent text = 1;
+    ThinkingContent thinking = 2;
+    ToolCallContent tool_call = 3;
+  }
+  bool done = 4;
+  optional Usage usage = 5;
+}
+----
+
+=== Example Data
+
+==== CompletionRequest
+
+[source,json]
+----
+{
+  "messages": [
+    {"role": "ROLE_USER", "content": [{"text": {"text": "What is the auth module's retry policy?"}}]},
+    {"role": "ROLE_ASSISTANT", "content": [{"text": {"text": "The auth module retries failed token refreshes up to 3 times with exponential backoff."}}]},
+    {"role": "ROLE_USER", "content": [{"text": {"text": "Does that apply to the OAuth flow too?"}}]}
+  ],
+  "model": "claude-sonnet-4-20250514",
+  "max_tokens": 4096,
+  "stream": true
+}
+----
+
+==== ClassifyRequest / ClassifyResponse
+
+[source,json]
+----
+// Request: does message B depend on message A?
+{
+  "text_a": "The auth module retries failed token refreshes up to 3 times with exponential backoff.",
+  "text_b": "Does that apply to the OAuth flow too?"
+}
+
+// Response: entailment (dependency) probability 0.87
+{
+  "labels": [
+    {"name": "entailment", "probability": 0.87},
+    {"name": "neutral", "probability": 0.11},
+    {"name": "contradiction", "probability": 0.02}
+  ]
+}
+----
