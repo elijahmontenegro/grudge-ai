@@ -7,7 +7,7 @@
 :lang: Go 1.26.1
 :ui-framework: React 19.2.4
 :api-protocol: GraphQL
-:api-client: Apollo Client 4
+:api-client: Apollo Client 4.1.6
 :api-server: gqlgen v0.17.89
 :codegen: buf v1.67.0, gqlgen v0.17.89, graphql-codegen v6.2.1, go generate
 :repo-layout: Monorepo with discrete Go modules
@@ -163,6 +163,7 @@ spidey/
 - Web UI: agentic interface with RRC introspection, served on localhost
 - Code generation pipeline: proto -> Go, GraphQL schema -> TypeScript
 - Monorepo with Go workspace (`go.work`) linking discrete modules
+- Concurrency model specified in `spec/service` (RRC engine not goroutine-safe, service serializes access, RWMutex on global DAG/score cache, SQLite WAL mode)
 
 ==== Out of Scope (project-wide)
 
