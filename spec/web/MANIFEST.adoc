@@ -27,6 +27,10 @@ Three things make this different from every other agentic UI:
 
 *UI Framework:* {ui-framework}
 
+*Component Library:* shadcn/ui (Tailwind CSS, copy-paste primitives)
+
+*Design System:* Atomic design (atoms, molecules, organisms, templates, pages)
+
 *API Client:* {api-client}
 
 *Code Generation:* {codegen} ({api-protocol} schema -> TypeScript types)
@@ -128,7 +132,9 @@ Three things make this different from every other agentic UI:
 // - Thread list shows running/paused state for autonomous threads
 //
 // --- UI Architecture ---
-// - Component structure ({ui-framework}, state management)
+// - shadcn/ui component library — copy-paste primitives, not a dependency. Tailwind CSS.
+// - Strict atomic design: atoms (Button, Badge, Input), molecules (CitationIndicator, ThreadListItem, DurationPicker), organisms (MessageStream, Sidebar, InputArea), templates (ThreadView, HomeView), pages (Home, Thread, Settings)
+// - Component structure: each component is self-contained, composable, no prop drilling beyond one level
 // - {api-client} setup (queries, mutations, subscriptions, cache strategy)
 // - Code generation ({codegen} config, generated TypeScript types)
 // - Build pipeline (static asset output for service to serve)
