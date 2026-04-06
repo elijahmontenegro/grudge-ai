@@ -28,10 +28,16 @@ A transparent RRC proxy. Third-party clients send standard LLM API requests -- t
 
 ==== Agent Path (native web UI)
 
-An orchestrated agentic loop with full RRC introspection. The web UI issues {api-protocol} requests. The service runs the agent loop -- plan, call RRC engine, call LLM, execute tools, evaluate, decide next step. Conversation storage is persistent and server-owned. RRC introspection data (what was selected, excluded, scores, prompt derivation) flows back to the web UI via {api-protocol} subscriptions.
+Orchestrated by Google ADK (Agent Development Kit) Go. The RRC engine integrates as an implementation of ADK's `model.LLM` interface -- ADK calls what it thinks is an LLM, and RRC intercepts transparently. Same pattern as the proxy path: the caller doesn't change, the model doesn't know.
+
+ADK provides: agent orchestration (sequential, parallel, loop agents), tool system (function tools with auto-declaration, toolsets, MCP integration), plugin lifecycle hooks, session/event model with state management, multi-agent patterns with agent transfer.
+
+RRC provides: prerequisite selection on every LLM call, carry-forward on every LLM response, compounding within tool chains. ADK doesn't know this is happening.
+
+The web UI issues {api-protocol} requests. ADK runs the agent loop. RRC sits between ADK and the LLM. Conversation storage is persistent and server-owned. RRC introspection data flows to the web UI via {api-protocol} subscriptions.
 
 - **Entry point:** {api-protocol} API (queries, mutations, subscriptions)
-- **State model:** Stateful. The service owns conversation history, agent state, and carry-forward cache.
+- **State model:** Stateful. The service owns conversation history, agent state, carry-forward cache, and ADK session state.
 - **Client awareness:** Full. The web UI sees everything RRC does.
 - **Response:** Structured {api-protocol} responses + live subscriptions for streaming, agent state, and introspection.
 
@@ -60,7 +66,9 @@ Independent of either request flow:
 
 *Code Generation:* {codegen}
 
-*Depends on:* `spec/core` (truth types, LLM/embedder/classifier interfaces), `spec/rrc` (RRC engine)
+*Agent Framework:* Google ADK Go (`google.golang.org/adk`, Apache 2.0)
+
+*Depends on:* `spec/core` (truth types, LLM/embedder/classifier interfaces), `spec/rrc` (RRC engine), ADK Go (agent orchestration, tool system, plugin system, session management)
 
 === Scope
 
@@ -75,8 +83,11 @@ Independent of either request flow:
 ===== Agent Path
 - {api-protocol} API: full schema and resolvers (orchestration, conversations, RRC introspection, config)
 - {api-protocol} subscriptions: live agent state, streaming responses, RRC introspection during execution
-- Agent orchestration: agent loop, planning, tool execution, self-correction
+- Agent orchestration via ADK Go: LlmAgent, SequentialAgent, ParallelAgent, LoopAgent, agent transfer
+- Tool system via ADK Go: FunctionTool (auto-declaration from Go functions), Toolset (dynamic tool groups), MCP integration
+- Plugin system via ADK Go: lifecycle hooks (before/after agent, model, tool execution)
 - Conversation storage: persistent, complete, unmodified history (lossless corpus guarantee)
+- RRC-as-LLM adapter: implements ADK's `model.LLM` interface, routes through RRC engine to actual LLM via core Completer
 
 ===== Shared
 - RRC engine integration (calling `spec/rrc` library for both paths)
@@ -103,8 +114,7 @@ Independent of either request flow:
 //
 // --- Message Arrival Pipeline (shared, runs on every new message) ---
 // - Cross-encoder scoring: evaluate new message against all predecessors via core classifier interface, cache scores, add edges to RRC engine's prerequisite DAG
-// - QUD analysis: LLM call via core LLM interface, update QUD graph, derive edges
-// - Edge persistence: append new edges to RRC engine's edge log
+// - Persist new edges and scores to SQLite
 //
 // --- Proxy Path ---
 // - HTTP Proxy (endpoint, request interception, LLM API format compatibility)
@@ -114,15 +124,24 @@ Independent of either request flow:
 // - Proxy-Specific Constraints (stateless per-request, client-owned corpus, transparent to client)
 //
 // --- Agent Path ---
+// - RRC-as-LLM Adapter
+//   - Implements ADK's model.LLM interface
+//   - ADK calls GenerateContent() -> adapter calls RRC engine for selection -> assembles payload -> forwards to real LLM via core Completer
+//   - Parses response stream for thinking blocks -> feeds carry-forward to RRC engine
+//   - Returns response to ADK. ADK never knows RRC was involved.
+//   - Adapter converts between ADK genai types <-> Spidey proto types (core handles the actual provider abstraction)
+// - ADK Agent Configuration
+//   - LlmAgent as primary agent type
+//   - Tool registration: FunctionTools for built-in capabilities, McpToolset for MCP servers
+//   - Plugin registration: RRC introspection plugin (exposes selection data per round), logging plugin
+//   - Session service: backed by SQLite (shared with conversation storage)
 // - GraphQL API (schema, resolvers, subscriptions)
-// - Agent Loop (per-round RRC cycle: RRC select -> LLM call -> carry-forward from thinking -> execute tools -> repeat)
-//   - Every LLM call is an RRC selection event
-//   - Every LLM response (including tool-calling responses) is a carry-forward event
-//   - Thinking blocks extracted and fed to RRC engine every round
-//   - Tool results batched into one message per round -> one RRC selection -> one LLM call
-// - Agent Request Pipeline (GraphQL mutation -> load conversation -> enter agent loop -> push results via subscription each round)
-// - Tool Execution (deferred -- tool system not yet defined)
-// - Planning Strategy (how the agent decomposes tasks)
+//   - Per-round events pushed via subscription: streaming tokens, tool executions, RRC selection results, agent state
+// - Agent Loop (driven by ADK runner, per-round RRC cycle happens inside the LLM adapter)
+//   - Every LLM call is an RRC selection event (inside the adapter)
+//   - Every LLM response is a carry-forward event (inside the adapter)
+//   - Tool execution handled by ADK's tool system (FunctionTool, concurrency via ADK)
+//   - Tool results batched by ADK -> next LLM call -> adapter runs RRC again
 // - RRC Introspection Data (expose prerequisite DAG, QUD graph, scores, selection rationale via GraphQL)
 //
 // --- Shared Foundation ---

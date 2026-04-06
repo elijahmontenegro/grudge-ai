@@ -105,7 +105,8 @@ spidey/
 │   ├── go.mod
 │   ├── cmd/spidey/            #   main entrypoint
 │   ├── proxy/                 #   RRC proxy path (HTTP, stream parsing)
-│   ├── agent/                 #   Agent path (orchestration, GraphQL resolvers)
+│   ├── agent/                 #   Agent path (ADK runner, RRC-as-LLM adapter)
+│   ├── adapter/               #   ADK genai <-> Spidey proto type conversion
 │   ├── storage/               #   SQLite: conversations, edges, scores, QUD graph
 │   ├── session/               #   Session management (browser tab ↔ service state)
 │   ├── graph/                 #   GraphQL schema + resolvers (gqlgen)
