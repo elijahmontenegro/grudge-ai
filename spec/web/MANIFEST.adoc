@@ -27,7 +27,7 @@ Three things make this different from every other agentic UI:
 
 *UI Framework:* {ui-framework}
 
-*Component Library:* shadcn/ui (Tailwind CSS, copy-paste primitives)
+*Component Primitives:* shadcn/ui (Radix UI + Tailwind CSS, source-owned — copied into project, not installed as dependency)
 
 *Design System:* Atomic design (atoms, molecules, organisms, templates, pages)
 
@@ -132,7 +132,7 @@ Three things make this different from every other agentic UI:
 // - Thread list shows running/paused state for autonomous threads
 //
 // --- UI Architecture ---
-// - shadcn/ui component library — copy-paste primitives, not a dependency. Tailwind CSS.
+// - shadcn/ui — source-owned Radix UI + Tailwind primitives. Copied into project, modified directly. These are the atoms.
 // - Strict atomic design: atoms (Button, Badge, Input), molecules (CitationIndicator, ThreadListItem, DurationPicker), organisms (MessageStream, Sidebar, InputArea), templates (ThreadView, HomeView), pages (Home, Thread, Settings)
 // - Component structure: each component is self-contained, composable, no prop drilling beyond one level
 // - {api-client} setup (queries, mutations, subscriptions, cache strategy)
