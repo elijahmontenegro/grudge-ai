@@ -99,10 +99,15 @@ Three things make this different from every other agentic UI:
 // - Per-message citation indicator
 // - Streaming: tokens arrive in real time via subscription
 //
-// --- Home Page ---
-// - Landing view when opening spidey.localhost
-// - Thread list with recent activity
-// - Quick actions: new thread, continue recent thread
+// --- Layout ---
+// - Persistent sidebar (always visible): thread list with state indicators (idle, running, paused)
+// - Main area changes based on context: home feed when no thread selected, thread view when inside a thread
+// - Sidebar shows: thread name, last activity, autonomous state (running 47m, paused, idle)
+//
+// --- Home Page (main area when no thread selected) ---
+// - Activity feed: recent cross-thread citations, completed autonomous runs, thread warmth
+// - Quick start: prompt input that creates a new thread and sends in one action
+// - New thread button
 //
 // --- Input ---
 // - Two modes:
