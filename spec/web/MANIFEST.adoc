@@ -2,10 +2,12 @@
 :project-name: Spidey
 :module-name: Web UI
 :rrc-full: Retrieval-Restored Continuation
-:ui-framework: React 19
+:ui-framework: React 19.2.4
 :api-protocol: GraphQL
-:api-client: Apollo Client
-:codegen: graphql-codegen
+:api-client: Apollo Client 4.1.6
+:codegen: graphql-codegen v6.2.1
+:build-tool: Vite 8.0.5
+:css-framework: Tailwind CSS 4.2.2
 
 == Context
 
@@ -27,7 +29,9 @@ Three things make this different from every other agentic UI:
 
 *UI Framework:* {ui-framework}
 
-*Component Primitives:* shadcn/ui (Radix UI + Tailwind CSS, source-owned -- copied into project, not installed as dependency)
+*Component Primitives:* shadcn/ui (Radix UI + {css-framework}, source-owned -- copied into project, not installed as dependency)
+
+*Build Tool:* {build-tool}
 
 *Design System:* Atomic design (atoms, molecules, organisms, templates, pages)
 
@@ -223,9 +227,9 @@ Two modes driven by user's cognitive state:
 
 === Settings
 
-Minimal. The system should just work. Configuration required on first run:
+Minimal. The system works without configuration when providers are detected at default ports. Configuration required on first run:
 
-- Provider endpoint (where is the LLM? Ollama at localhost, Anthropic API, etc.)
+- Provider endpoint (supported: Ollama, Anthropic, OpenAI/compatible, Google AI, vLLM, TEI)
 - Model selection
 - API key (for cloud providers)
 - Classifier endpoint (where is the cross-encoder? TEI at localhost, etc.)
@@ -241,3 +245,142 @@ Accessible from tray menu ("Settings...") and from within the web UI.
 shadcn/ui source-owned Radix UI + Tailwind primitives. Copied into project, modified directly. Strict atomic design methodology: atoms compose into molecules, molecules into organisms, organisms into templates, templates into pages. Each component self-contained and composable.
 
 {api-client} for all service communication: queries, mutations, subscriptions. Generated TypeScript types from {api-protocol} schema via {codegen}. Static asset build output served by the service.
+
+=== File Tree
+
+----
+web/
+├── package.json
+├── vite.config.ts
+├── codegen.ts                    # graphql-codegen config
+├── dist/                         # Build output (served by service)
+├── src/
+│   ├── main.tsx                  # Entry point
+│   ├── App.tsx                   # Root layout, router, Apollo provider
+│   ├── graphql/
+│   │   ├── queries.ts            # GraphQL query documents
+│   │   ├── mutations.ts          # GraphQL mutation documents
+│   │   ├── subscriptions.ts      # GraphQL subscription documents
+│   │   └── generated/            # graphql-codegen output (TypeScript types)
+│   ├── components/
+│   │   ├── ui/                   # shadcn/ui primitives (source-copied)
+│   │   ├── atoms/                # Smallest composable units
+│   │   ├── molecules/            # Composed atoms
+│   │   ├── organisms/            # Complex composed components
+│   │   └── templates/            # Page-level layout compositions
+│   ├── pages/
+│   │   ├── Home.tsx              # Home feed, quick start
+│   │   ├── Thread.tsx            # Thread view, message stream
+│   │   └── Settings.tsx          # Provider config, permissions
+│   ├── hooks/                    # React hooks (subscriptions, state)
+│   └── lib/                      # Utilities, Apollo client config
+└── tailwind.config.ts
+----
+
+=== Build Tooling
+
+{build-tool}. Output to `web/dist/`. The service serves static files at `/` with SPA fallback to `index.html`. Dev workflow: Vite dev server proxying `/{api-protocol}` to the service.
+
+=== TypeScript Types
+
+All domain types generated from {api-protocol} schema via {codegen}. No hand-defined TypeScript domain types. Component props use generated types directly. Output in `src/graphql/generated/`.
+
+=== {api-protocol} Operations Consumed
+
+Operations reference the service spec's {api-protocol} schema (`spec/service`).
+
+==== Home Page
+
+- `threads` query, `threadStateChanges` subscription, `createThread` mutation
+
+==== Thread View
+
+- `messages` query, `messageStream` subscription
+- `sendMessage`, `stopAgent`, `pauseAgent`, `resumeAgent`, `startAutonomous` mutations
+- `agentState`, `toolExecution`, `subagentProgress` subscriptions
+- `approveToolCall`, `denyToolCall` mutations
+
+==== Citations / Introspection
+
+- `selectionResult` query, `qudGraph` query
+
+==== Settings
+
+- `settings` query, `updateSettings` mutation
+
+==== View State
+
+- `viewState` query, `saveViewState` mutation
+
+=== Error Handling
+
+Errors display inline in the message stream (not modal or toast) -- errors are thread-scoped. Subscription disconnection: reconnect with exponential backoff (1s initial, 30s max). {api-protocol} errors: display `error.message` in thread. Network errors: display connection status banner, auto-retry subscription.
+
+=== View State Persistence
+
+`ViewState` type:
+
+[source,typescript]
+----
+interface ViewState {
+  scrollPosition: number;
+  expandedMessageIds: string[];
+  inputDraft: string;
+  citationExpansionState: Record<string, boolean>;
+}
+----
+
+Persisted via `saveViewState` mutation, debounced 500ms after change + save on navigation. Restored on thread switch via `viewState` query. The service is the source of truth -- tab close and reopen restores full view state.
+
+=== Thread Warmth
+
+Warmth is unbounded (count of carry-forward events). 0 = cold (cross-encoder edges only, no structural understanding). Display: numeric count in sidebar per thread. Visual indicator intensity scales logarithmically -- the difference between 0→10 is more visually significant than 100→110.
+
+=== Autonomous Duration
+
+5m minimum: shortest useful autonomous exploration. 2w maximum: practical upper bound for unattended local workstation operation. Freeform duration input, not preset options.
+
+=== Example Data
+
+==== Message with Citations Expanded
+
+[source,json]
+----
+{
+  "id": "msg-5",
+  "role": "ROLE_USER",
+  "content": [{"text": "Does that apply to the initial OAuth flow too?"}],
+  "citations": {
+    "count": 4,
+    "selected": [
+      {
+        "message_id": "msg-4",
+        "preview": "Token refresh retries 3 times with exponential backoff: 1s, 2s, 4s.",
+        "effective_score": 0.87,
+        "source": "cross-encoder",
+        "thread_origin": "thread-auth",
+        "cross_thread": false
+      },
+      {
+        "message_id": "msg-2",
+        "preview": "I'll set up the OAuth flow with PKCE...",
+        "effective_score": 0.73,
+        "source": "cross-encoder",
+        "thread_origin": "thread-auth",
+        "cross_thread": false
+      }
+    ]
+  }
+}
+----
+
+==== Thread List with Warmth
+
+[source,json]
+----
+[
+  {"id": "thread-auth", "name": "Auth Module", "state": "running", "warmth": 47, "elapsed": "12m"},
+  {"id": "thread-api", "name": "API Design", "state": "idle", "warmth": 203},
+  {"id": "thread-new", "name": "New Thread", "state": "idle", "warmth": 0}
+]
+----
