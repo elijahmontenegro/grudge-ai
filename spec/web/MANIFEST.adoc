@@ -112,12 +112,11 @@ Three things make this different from every other agentic UI:
 
 === Plan Mode
 
-- User requests a plan -> agent reasons without executing tools, produces structured steps with dependencies
-- UI renders the plan as a structured view (steps, dependencies, status)
-- User reviews -> modifies steps (reorder, add, remove) -> approves
-- User chooses execution: manual (step by step with confirmation) or autonomous (set duration, let it run)
-- During execution, steps update status (pending, in progress, done, failed)
-- The plan is a message in the thread. RRC selects it as a prerequisite during execution — the agent doesn't lose the plan across rounds.
+- User requests a plan -> agent enters plan mode (read-only), explores codebase, writes a plan as an AsciiDoc document
+- UI surfaces the plan for review -- user reads, edits the text, approves or rejects
+- On approval -> agent exits plan mode (write tools restored), implements according to the plan
+- The plan enters the thread as a corpus message on approval. RRC selects it as a prerequisite during execution -- the agent doesn't lose the plan across rounds.
+- The plan is a design artifact, not a step tracker. Progress is implicit in the work being done.
 
 === Tool Permissions
 
