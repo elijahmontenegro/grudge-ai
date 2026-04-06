@@ -8,7 +8,7 @@
 :api-client: Apollo Client 4
 :codegen: gqlgen v0.17.89, go generate
 :agent-framework: Google ADK Go v1.0.0 (google.golang.org/adk, Apache 2.0)
-:tray-lib: fyne.io/systray v1.10.0
+:tray-lib: fyne.io/systray v1.12.0
 :port: 8420
 
 == Context
@@ -163,7 +163,7 @@ Configured in settings (`$XDG_CONFIG_HOME/spidey/settings.json`), per-thread or 
 
 ==== Plans
 
-Plans are living documents stored as files, not messages. Per-thread: `$XDG_DATA_HOME/spidey/threads/{thread_id}/plan.md`. Structured markdown (steps with dependencies, status per step).
+Plans are living documents stored as files, not messages. Per-thread: `$XDG_DATA_HOME/spidey/plans/{slug}.adoc` with slug generated per plan. AsciiDoc format -- plans operate in the same regime as specifications. Structured sections (steps with dependencies, status per step).
 
 Plan content is injected into the system prompt as a per-turn section — the agent always sees the current plan. The agent updates the plan by writing to the file. The plan evolves during execution.
 
@@ -454,10 +454,13 @@ CREATE TABLE quds (
 CREATE INDEX idx_quds_thread ON quds(thread_id);
 
 CREATE TABLE plans (
-    thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
-    content TEXT NOT NULL,
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL UNIQUE,
+    file_path TEXT NOT NULL,  -- absolute path to .adoc file
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX idx_plans_thread ON plans(thread_id);
 
 CREATE TABLE view_state (
     thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,

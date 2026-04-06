@@ -242,7 +242,7 @@ Accessible from tray menu ("Settings...") and from within the web UI.
 
 === UI Architecture
 
-shadcn/ui source-owned Radix UI + Tailwind primitives. Copied into project, modified directly. Strict atomic design methodology: atoms compose into molecules, molecules into organisms, organisms into templates, templates into pages. Each component self-contained and composable.
+shadcn/ui source-owned primitives built on the unified `radix-ui` package + {css-framework}. Copied into project, modified directly. {css-framework} v4 uses CSS-first configuration via `@theme` directives in CSS -- no `tailwind.config.ts`. Strict atomic design methodology: atoms compose into molecules, molecules into organisms, organisms into templates, templates into pages. Each component self-contained and composable.
 
 {api-client} for all service communication: queries, mutations, subscriptions. Generated TypeScript types from {api-protocol} schema via {codegen}. Static asset build output served by the service.
 
@@ -274,7 +274,7 @@ web/
 │   │   └── Settings.tsx          # Provider config, permissions
 │   ├── hooks/                    # React hooks (subscriptions, state)
 │   └── lib/                      # Utilities, Apollo client config
-└── tailwind.config.ts
+└── app.css                       # Tailwind v4 entry: @import "tailwindcss" + @theme directives
 ----
 
 === Build Tooling
