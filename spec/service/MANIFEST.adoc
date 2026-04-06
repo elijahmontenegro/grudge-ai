@@ -50,13 +50,19 @@ Both paths share:
 - **Provider routing** -- Both paths forward to the same upstream LLM, configured the same way.
 - **Warm carry-forward** -- Reasoning extracted from LLM responses enriches future selection for both paths.
 
+==== Payload Sizing
+
+The RRC engine returns a ranked selection -- every message that passes the score threshold, ordered by effective score. The engine is agnostic to model context windows and tokenizers. The service decides how many messages to actually send.
+
+The service sends the full selection to the LLM. If the model returns a context-length error, the service drops the lowest-scored message from the selection and retries. Repeat until the payload fits. Error-driven backoff -- no tokenizer, no estimation, no guessing. The model tells you when it's too much.
+
 ==== Service Infrastructure
 
 Independent of either request flow:
 
-- **System tray** -- Tray icon, lifecycle management, status indicators.
-- **Service management UI** -- Lightweight config/status surface accessible from the tray. Not the agentic web UI.
-- **Static asset serving** -- Serves the web UI on localhost. The user opens their browser.
+- **System tray** -- Tray icon (spider), lifecycle management, status indicators. On launch: service starts, tray icon appears, browser opens automatically to `spidey.localhost`. Context menu: Open Spidey, Settings, Quit Spidey. Double-click opens browser.
+- **Local DNS** -- The service binds to `spidey.localhost` (RFC 6761 reserves `.localhost` for loopback; modern browsers resolve it natively). No DNS configuration needed.
+- **Static asset serving** -- Serves the web UI at `spidey.localhost`. The browser opens automatically on launch.
 
 === Stack
 
@@ -159,8 +165,15 @@ Independent of either request flow:
 //   - Reconnection: tab closes and reopens, UI reconnects to same session seamlessly
 //   - Service owns all state; UI is a view into it. No client-side persistence beyond session ID.
 //
+// --- Payload Sizing ---
+// - Send full ranked selection from RRC engine to LLM
+// - On context-length error: drop lowest-scored message, retry
+// - Repeat until payload fits (error-driven backoff)
+// - No tokenizer, no token estimation, no context window assumptions
+//
 // --- Infrastructure ---
-// - Tray Integration (Windows systray, menu, status indicators)
+// - Tray Integration (Windows systray, spider icon, context menu: Open Spidey / Settings / Quit Spidey)
+// - Launch Behavior (service starts -> tray icon appears -> browser opens to spidey.localhost automatically)
+// - Local DNS (bind to spidey.localhost, RFC 6761 .localhost loopback, no configuration)
 // - Service Lifecycle (start, stop, health, config reload)
-// - Management UI (lightweight config/status surface, not the agentic UI)
-// - Static Asset Serving (web UI files on localhost)
+// - Static Asset Serving (web UI at spidey.localhost)

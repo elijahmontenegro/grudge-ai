@@ -36,7 +36,7 @@ include::../MANIFEST.adoc[tag=rrc]
 - Score cache operations: reading and writing cross-encoder pairwise scores
 - Warm carry-forward ingestion: accepting extracted reasoning from the service, updating QUD graph and DAG
 - Selection scoring: score fusion (cross-encoder + QUD + temporal proximity), thresholds, ranking
-- Payload assembly: best-first backward traversal, token budget, bounded assembly, native format restoration
+- Payload assembly: best-first backward traversal, ranked selection, native format restoration
 - Transitive reduction: computed on demand during subgraph extraction
 
 ==== Out of Scope
@@ -144,10 +144,12 @@ Zero-return is valid. If no message scores above threshold, the prompt is novel 
 Best-first backward traversal from the prompt through the prerequisite DAG:
 
 1. Seed priority queue with direct prerequisites of the prompt, ordered by edge score
-2. Pop highest-score message, add to selection, subtract its tokens from budget
+2. Pop highest-score message, add to selection
 3. Push its prerequisites with multiplicatively decayed scores (effective_score = edge_score * parent_score)
-4. Repeat until token budget exhausted or queue empty
-5. Depth limit as safety bound
+4. Repeat until queue empty or depth limit reached
+5. Return the full ranked selection to the service
+
+The engine does not enforce a token budget. It selects based on dependency and returns a ranked list. The service decides payload size based on model-specific constraints -- the engine is agnostic to model context windows and tokenizers.
 
 ==== Transitive Reduction
 
