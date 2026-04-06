@@ -73,6 +73,9 @@ message Thread {
   repeated string working_dirs = 3;  // Mounted directories. Mutable — add/remove over thread lifetime.
   bool sandboxed = 4;                // Whether tool execution runs in Docker Sandbox (default: true)
   google.protobuf.Timestamp created_at = 5;
+  optional string parent_thread_id = 6;      // NULL for root threads, set for branches
+  optional int64 branch_point_position = 7;  // Message position where this branch diverged
+  optional google.protobuf.Timestamp archived_at = 8;  // NULL = active, set = archived
 }
 
 // Selection scope. Passed per-prompt to control where the RRC engine looks.

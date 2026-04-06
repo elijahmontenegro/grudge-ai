@@ -300,6 +300,9 @@ message Thread {
   repeated string working_dirs = 3;
   bool sandboxed = 4;
   google.protobuf.Timestamp created_at = 5;
+  optional string parent_thread_id = 6;
+  optional int64 branch_point_position = 7;
+  optional google.protobuf.Timestamp archived_at = 8;
 }
 
 enum SelectionScope {
