@@ -69,9 +69,64 @@ ADK agent types map to this model:
 
 ==== Plan Mode
 
-The agent reasons without executing tools. Tools are unavailable — the model can only think and produce a structured plan (steps with dependencies). The plan is a message in the thread. On approval, the service restores tools and the agent executes.
+A permission state transition. The service switches the agent to read-only mode: write tools (FileEdit, FileWrite, Bash write ops) are disabled, read tools (FileRead, Glob, Grep, Bash read ops, WebSearch, WebFetch) remain available. The agent explores the codebase and designs an implementation approach.
 
-RRC selects the plan as a prerequisite during execution. The plan persists in context through carry-forward across rounds — the agent maintains coherence with the plan even in long autonomous runs.
+**Lifecycle:**
+
+1. **Enter:** `EnterPlanMode` tool call. Service transitions permission state to `plan`. Write tools disabled. Agent explores using read-only tools.
+2. **Explore:** Agent reads code, searches for patterns, identifies critical files. Multiple turns of exploration before designing.
+3. **Write plan:** Agent creates a plan file -- AsciiDoc format (`plan.adoc`) in `$XDG_DATA_HOME/spidey/plans/{slug}.adoc`. AsciiDoc attributes carry structured metadata (status, dependencies per step). The plan uses CCA conventions.
+4. **Exit:** `ExitPlanMode` tool call. Service reads plan from disk, surfaces it to the user in the web UI for review. User approves, optionally edits, or rejects.
+5. **Post-approval:** Service restores previous permission state (write tools re-enabled). Plan content enters the thread as a message (available for RRC selection). Plan file persists on disk as a living document -- the agent reads and updates it during execution via the plan's per-turn prompt injection.
+
+**Plan as living AsciiDoc document:**
+
+The plan file uses AsciiDoc section attributes for structured metadata:
+
+[source,asciidoc]
+----
+= Implement Auth Module
+:thread-id: thread-auth
+:created: 2026-04-06T16:00:00Z
+
+\== Objective
+
+OAuth 2.0 with PKCE flow. Three endpoints: authorize, token, refresh.
+
+\== Steps
+
+\=== Set up OAuth routes
+:status: pending
+:depends-on:
+
+Register /auth/authorize, /auth/token, /auth/refresh endpoints.
+
+\=== Implement PKCE flow
+:status: pending
+:depends-on: Set up OAuth routes
+
+Code verifier generation, challenge computation, token exchange.
+
+\=== Add retry policy for token refresh
+:status: pending
+:depends-on: Implement PKCE flow
+
+Exponential backoff: 1s, 2s, 4s. Max 3 retries.
+
+\== Critical Files
+
+* `service/auth/handler.go` -- route registration
+* `service/auth/pkce.go` -- PKCE implementation
+* `service/auth/retry.go` -- backoff logic
+----
+
+AsciiDoc attributes (`:status:`, `:depends-on:`) on each step section are parseable by CCA tooling. This is the capability advantage over Markdown -- structured metadata is first-class. CCA can validate plan structure, compile it, track step status.
+
+**Prompt injection:** Plan content is injected into the system prompt as a per-turn section. The agent always sees the current plan. The agent updates step statuses by writing to the file. The plan evolves during execution.
+
+**RRC integration:** The approved plan enters the thread as a message. RRC selects it as a prerequisite during execution. The model's reasoning about the plan appears in thinking blocks. Carry-forward captures this reasoning. The plan's influence on selection compounds -- the agent stays coherent with the plan across long autonomous runs.
+
+**Re-entry:** If the agent re-enters plan mode after exiting, the existing plan file is available for revision. The previous plan remains in the thread corpus for RRC.
 
 ==== Autonomous Mode
 
@@ -163,11 +218,7 @@ Configured in settings (`$XDG_CONFIG_HOME/spidey/settings.json`), per-thread or 
 
 ==== Plans
 
-Plans are living documents stored as files, not messages. Per-thread: `$XDG_DATA_HOME/spidey/plans/{slug}.adoc` with slug generated per plan. AsciiDoc format -- plans operate in the same regime as specifications. Structured sections (steps with dependencies, status per step).
-
-Plan content is injected into the system prompt as a per-turn section — the agent always sees the current plan. The agent updates the plan by writing to the file. The plan evolves during execution.
-
-RRC advantage: the model's reasoning about the plan appears in thinking blocks. Carry-forward captures this reasoning. The plan's influence on selection compounds — the agent stays coherent with the plan across long autonomous runs.
+Plans are living AsciiDoc documents stored as files, not messages. Per-plan: `$XDG_DATA_HOME/spidey/plans/{slug}.adoc` with slug generated per plan (human-readable word slug, unique per thread). Plans operate in the CCA regime -- AsciiDoc attributes carry structured metadata, CCA tooling validates structure. See Plan Mode (above) for the full lifecycle, AsciiDoc structure, and RRC integration.
 
 ==== Thread Workspaces
 
