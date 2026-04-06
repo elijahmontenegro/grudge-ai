@@ -30,10 +30,10 @@ include::../MANIFEST.adoc[tag=rrc]
 
 ==== In Scope
 
-- Prerequisite detection: cross-encoder pairwise dependency classification on message arrival
-- QUD (Questions Under Discussion) graph: built from warm carry-forward, not dedicated LLM calls
-- Prerequisite DAG: dual adjacency list, incremental edge construction, subgraph extraction
-- Score cache operations: reading and writing cross-encoder pairwise scores
+- Prerequisite detection: cross-encoder pairwise dependency classification on message arrival, scored globally across all threads
+- QUD (Questions Under Discussion) graph: per-thread, built from warm carry-forward, not dedicated LLM calls
+- Prerequisite DAG: global dual adjacency list, incremental edge construction, thread-scoped or global subgraph extraction
+- Score cache operations: reading and writing cross-encoder pairwise scores (global)
 - Warm carry-forward ingestion: accepting extracted reasoning from the service, updating QUD graph and DAG
 - Selection scoring: score fusion (cross-encoder + QUD + temporal proximity), thresholds, ranking
 - Payload assembly: best-first backward traversal, ranked selection, native format restoration
@@ -59,7 +59,7 @@ include::../MANIFEST.adoc[tag=rrc]
 
 A single cross-encoder classifies the dependency relationship between two messages. One model, one forward pass per pair, via the core classifier interface.
 
-When message M_n arrives, the cross-encoder evaluates every (M_i, M_n) pair for i < n. Each pair produces a dependency score. Pairs scoring above threshold become edges in the prerequisite DAG.
+When message M_n arrives, the cross-encoder evaluates every (M_i, M_n) pair for i < n — across ALL threads, not just the thread M_n belongs to. Scoring is global because dependency does not respect organizational boundaries. A message in "backend architecture" may depend on a decision made in "project planning." Each pair produces a dependency score. Pairs scoring above threshold become edges in the prerequisite DAG.
 
 The cross-encoder captures multiple facets of dependency implicitly through a single classification:
 
@@ -75,11 +75,13 @@ Research basis: NLI cross-encoders (DeBERTa-v3 family), PDTB discourse relation 
 
 ==== QUD (Questions Under Discussion) Graph
 
-The QUD graph captures what the cross-encoder cannot: long-range structural dependency through the thread's question-answer flow.
+The QUD graph captures what the cross-encoder cannot: long-range structural dependency through a thread's question-answer flow.
 
 Every message addresses an implicit question and may raise new ones. If message M_47 raises a question and message M_312 answers it, M_47 is a prerequisite of M_312 -- even if they share no surface similarity and the cross-encoder would not score them highly as a pair.
 
 The QUD graph is NOT built by dedicated LLM calls. It builds organically from warm carry-forward. The model is already the best QUD analyzer in the system -- it reasons about the conversation on every request. Its thinking blocks expose reasoning that disambiguates and contains QUD information. Making that reasoning a signal source is the mechanism.
+
+The QUD graph is per-thread. Carry-forward only enriches the thread where the prompt originated. This preserves thread identity -- each thread develops its own reasoning trajectory through its own QUD accumulation. The cross-encoder handles cross-thread dependency; the QUD graph handles within-thread structural flow.
 
 The graph starts cold. First few requests have no carry-forward data -- the cross-encoder is the only signal. As the model responds and reasoning accumulates, QUD edges appear and the graph gets richer. Natural warm-up, no bootstrapping needed.
 
@@ -94,21 +96,23 @@ Research basis: Roberts (1996) QUD stack theory, Riester (2019) QUD tree constru
 
 === Data Structures
 
-The engine operates on three data structures. The service owns their persistence; the engine reads and writes them.
+The engine operates on three data structures. The service owns their persistence; the engine reads and writes them. Scoring and the DAG are global (across all threads). The QUD graph is per-thread.
 
-==== Score Cache
+==== Score Cache (global)
 
-Cross-encoder pairwise dependency scores. When message M_n arrives, the engine scores every (M_i, M_n) pair and writes results to the cache. At query time, scores are already available -- no cross-encoder inference needed.
+Cross-encoder pairwise dependency scores across all threads. When message M_n arrives, the engine scores every (M_i, M_n) pair across all threads and writes results to the cache. At query time, scores are already available -- no cross-encoder inference needed.
 
-Conversations are append-only. Message content never changes. Cached scores do not become stale.
+Messages are immutable. Cached scores do not become stale.
 
-==== QUD Graph
+==== QUD Graph (per-thread)
 
-Structural compression of conversation flow. Built incrementally from warm carry-forward as the model responds over time. Starts empty, grows richer with use. Compact: ~50KB for a 1000-message conversation.
+Structural compression of a thread's discourse flow. One QUD graph per thread. Built incrementally from warm carry-forward as the model responds within that thread. Carry-forward only enriches the originating thread's graph -- this preserves thread identity.
 
-==== Prerequisite DAG
+Starts empty per thread. Grows richer with use.
 
-The central data structure. Cross-encoder edges and QUD edges both feed into it.
+==== Prerequisite DAG (global)
+
+The central data structure. Cross-encoder edges (global) and QUD edges (per-thread) both feed into it. The DAG spans all threads.
 
 **Structure:** Dual adjacency list -- two indexes over the same edge set:
 
@@ -143,11 +147,14 @@ Zero-return is valid. If no message scores above threshold, the prompt is novel 
 
 Best-first backward traversal from the prompt through the prerequisite DAG:
 
-1. Seed priority queue with direct prerequisites of the prompt, ordered by edge score
-2. Pop highest-score message, add to selection
-3. Push its prerequisites with multiplicatively decayed scores (effective_score = edge_score * parent_score)
-4. Repeat until queue empty or depth limit reached
-5. Return the full ranked selection to the service
+1. Apply thread scope filter: if thread-scoped, only follow edges within the prompt's thread. If all-threads, traverse the full global DAG.
+2. Seed priority queue with direct prerequisites of the prompt, ordered by edge score
+3. Pop highest-score message, add to selection
+4. Push its prerequisites with multiplicatively decayed scores (effective_score = edge_score * parent_score)
+5. Repeat until queue empty or depth limit reached
+6. Return the full ranked selection to the service
+
+Thread scoping is a traversal filter on the global DAG — not a separate data structure or mechanism. The DAG contains all edges across all threads. The scope parameter determines which edges are followed.
 
 The engine does not enforce a token budget. It selects based on dependency and returns a ranked list. The service decides payload size based on model-specific constraints -- the engine is agnostic to model context windows and tokenizers.
 
