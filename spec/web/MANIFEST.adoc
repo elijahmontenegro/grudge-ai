@@ -49,6 +49,7 @@ Three things make this different from every other agentic UI:
 - {api-client} integration: queries, mutations, subscriptions against the service {api-protocol} API
 - Code generation: {api-protocol} schema -> TypeScript client types via {codegen}
 - UX design: interaction patterns, layout, information architecture
+- Autonomous mode controls: duration picker, play/pause/stop, progress display, thread state in sidebar
 - Build output: static assets (HTML/JS/CSS) served by the service
 
 ==== Out of Scope
@@ -104,9 +105,20 @@ Three things make this different from every other agentic UI:
 // - Quick actions: new thread, continue recent thread
 //
 // --- Input ---
-// - Prompt composition
-// - Scope toggle (thread / all-threads)
+// - Two modes:
+//   - Normal: prompt input, send button
+//   - Autonomous: duration picker (5m, 30m, 2h, 8h, up to 2w), play/pause/stop controls
+// - Scope toggle (thread / all-threads) — available in both modes
+// - Mode switching (normal <-> autonomous) — input area transforms
 // - Thread context indicator
+//
+// --- Autonomous Mode UI ---
+// - Duration picker (microwave-style — user picks how long the agent runs)
+// - Play: start autonomous execution
+// - Pause: halt execution, user reviews and course corrects, resume continues
+// - Stop: end autonomous mode
+// - Progress: elapsed time, round count, current activity
+// - Thread list shows running/paused state for autonomous threads
 //
 // --- UI Architecture ---
 // - Component structure ({ui-framework}, state management)

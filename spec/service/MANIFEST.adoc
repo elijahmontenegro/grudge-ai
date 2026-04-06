@@ -48,6 +48,20 @@ Both paths share:
 - **RRC engine** -- The same engine code, two modes. The proxy path runs it statelessly (no persistence). The agent path runs it statefully (global DAG, per-thread QUD, compounding carry-forward).
 - **Provider routing** -- Both paths forward to the same upstream LLM, configured the same way.
 
+==== Autonomous Mode
+
+The agent loop normally exits when the model's response contains no tool calls (stop reason: end_turn). Autonomous mode overrides this. The loop does not exit. The service runs another RRC round.
+
+The model's response is now in the corpus. Carry-forward happened. The engine selects fresh prerequisites. The model gets called again with this new selection and an empty user message — the same pattern as tool results returning with no user text. The model continues from context alone. Its reasoning drives the direction.
+
+No continuation prompt. No injected instructions. The selection IS the context. The carry-forward shaped the selection. The model's own prior thinking shaped the carry-forward. The model drives itself through its own accumulated reasoning.
+
+Emergent behavior is the feature. The model finishes a task, gets another round, and reasons about what comes next — review, edge cases, documentation, pivoting to something it noticed. The direction is not prescribed.
+
+- **Duration:** User-set timer (5m, 30m, 2h, 8h, up to 2w). The loop exits when the timer expires or the user stops it.
+- **Controls:** Play (start), Pause (halt — user reviews, course corrects, resumes), Stop (end autonomous mode).
+- **Thread state:** A thread in autonomous mode shows its running state, elapsed time, and round count. Visible from the thread list.
+
 ==== Payload Sizing
 
 The RRC engine returns a ranked selection -- every message that passes the score threshold, ordered by effective score. The engine is agnostic to model context windows and tokenizers. The service decides how many messages to actually send.
@@ -93,6 +107,7 @@ Independent of either request flow:
 - Thread storage: persistent, complete, unmodified history (lossless corpus guarantee)
 - RRC-as-LLM adapter: implements ADK's `model.LLM` interface, routes through RRC engine to actual LLM via core Completer
 - Warm carry-forward: extract thinking blocks from every LLM response, feed to RRC engine, accumulates across requests
+- Autonomous mode: override model stop reason, continue running RRC rounds with empty user message, duration timer, play/pause/stop controls
 
 ===== Shared
 - RRC engine integration (calling `spec/rrc` library — stateful for agent path, stateless for proxy path)
