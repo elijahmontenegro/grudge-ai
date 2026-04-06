@@ -108,7 +108,9 @@ spidey/
 │   ├── agent/                 #   Agent path (ADK runner, RRC-as-LLM adapter)
 │   ├── adapter/               #   ADK genai <-> Spidey proto type conversion
 │   ├── storage/               #   SQLite: threads, messages, edges, scores, QUD graph
-│   ├── session/               #   Session management (browser tab ↔ service state)
+│   ├── skills/                #   Skill loading, registration, execution
+│   ├── hooks/                 #   Lifecycle event hooks
+│   ├── prompt/                #   Template rendering, section memoization
 │   ├── graph/                 #   GraphQL schema + resolvers (gqlgen)
 │   └── tray/                  #   System tray integration
 ├── web/                       # React app: agentic interface

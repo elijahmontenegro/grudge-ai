@@ -146,11 +146,11 @@ These are not features. They are conditions the user stories depend on.
 
 === State Persistence Across Navigation
 
-Thread view state survives navigation -- scroll position, expanded/collapsed sections, input draft. Leave and come back, it's the same. This is session state managed by the service, not the browser. Tab close and reopen restores it.
+Thread view state survives navigation -- scroll position, expanded/collapsed sections, input draft. Leave and come back, it's the same. Managed by the service, not the browser. Tab close and reopen restores it.
 
 === Service Restart Resilience
 
-If the service restarts, all persistent state survives (threads, messages, DAG, scores, QUD graphs in SQLite). Session view state is reconstructable. Running autonomous agents resume or show their last state. The browser reconnects automatically.
+If the service restarts, all persistent state survives (threads, messages, DAG, scores, QUD graphs in SQLite). View state is reconstructable. Running autonomous agents resume or show their last state. The browser reconnects automatically.
 
 === Concurrent Thread Awareness
 
@@ -166,7 +166,7 @@ Citation jumps are navigation events. Browser back/forward work naturally. `spid
 
 === Offline Resilience
 
-If the browser disconnects (network blip, tab backgrounded), the session reconnects and rehydrates from the service. No data loss. The service is the source of truth.
+If the browser disconnects (network blip, tab backgrounded), it reconnects and rehydrates from the service. No data loss. The service is the source of truth.
 
 === Input Draft Persistence
 

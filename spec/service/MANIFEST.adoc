@@ -74,20 +74,73 @@ The RRC engine returns a ranked selection -- every message that passes the score
 
 The service sends the full selection to the LLM. If the model returns a context-length error, the service drops the lowest-scored message from the selection and retries. Repeat until the payload fits. Error-driven backoff -- no tokenizer, no estimation, no guessing. The model tells you when it's too much.
 
+==== Platform Paths (XDG Base Directory Specification)
+
+Spidey follows XDG for all platform paths:
+
+- **Config:** `$XDG_CONFIG_HOME/spidey/` (settings, provider config, permissions)
+- **Data:** `$XDG_DATA_HOME/spidey/` (SQLite database, threads, plans, skills)
+- **Cache:** `$XDG_CACHE_HOME/spidey/` (memoized prompt sections, temporary artifacts)
+
 ==== Prompt Templates
 
-System prompts are Go `text/template` files (`.tmpl`) in the `templates/` directory. Version controlled artifacts, rendered at runtime with context injection:
+System prompts are Go `text/template` files (`.tmpl`) in the `templates/` directory. Version controlled artifacts in the codebase, rendered at runtime. Programmatically assembled from sections, each section memoized independently.
+
+Stable sections (memoized, recomputed on config change or thread switch):
 
 - User identity: full name, preferences (from onboarding)
-- Thread context: working directory, thread name
-- Environment: current time, git status, file tree of working directory
 - System: OS, available tools
+- Thread context: mounted directories, thread name
+
+Per-turn sections (recomputed each request):
+
+- Current time
+- Git status of mounted directories
+- Active plan content (if any)
+- Working directory file tree
 
 Templates are not user-facing. They are engineering artifacts maintained in the codebase.
 
-==== Onboarding
+==== User Profile
 
-First-run captures user identity alongside provider configuration. Name and preferences are stored once and injected into prompt templates on every request. This is not a settings page — it's a one-time setup that shapes the model's understanding of who it's working with.
+User identity lives in the system prompt as a stable section. Captured during onboarding, injected into prompt templates on every request. Updated from time to time — by the user directly or via the small fast model when it detects relevant preference changes. Not a memory system. A supplementary system instruction that evolves.
+
+==== Skills
+
+Markdown files with YAML frontmatter. User-extensible capabilities — domain-specific instructions, workflows, constraints.
+
+Loaded from (priority order):
+
+1. Bundled (shipped with Spidey in the binary)
+2. User (`$XDG_DATA_HOME/spidey/skills/`)
+3. Project (`.spidey/skills/` in mounted directory)
+
+Invoked from the web UI. Skill content is injected as message content (not system prompt) with argument substitution. Inline shell execution runs in the thread's sandbox.
+
+Users create custom skills by dropping a markdown file in the skills directory. Frontmatter specifies: name, description, when to use, allowed tools, arguments.
+
+==== Hooks
+
+Lifecycle event handlers. Shell commands or scripts executed on events. Escape hatches for automation without modifying core code.
+
+Events:
+
+- `PreToolUse` / `PostToolUse` -- before/after tool execution
+- `ThreadStart` / `ThreadEnd` -- thread lifecycle
+- `PreCarryForward` / `PostCarryForward` -- before/after thinking block processing (RRC-specific)
+- `UserPromptSubmit` -- before a user message enters the agent loop
+
+A hook can: block a tool call (agent sees denial), modify tool input, inject context, or run silently.
+
+Configured in settings (`$XDG_CONFIG_HOME/spidey/settings.json`), per-thread or global. Trust-gated — hooks only execute after workspace trust is accepted.
+
+==== Plans
+
+Plans are living documents stored as files, not messages. Per-thread: `$XDG_DATA_HOME/spidey/threads/{thread_id}/plan.md`. Structured markdown (steps with dependencies, status per step).
+
+Plan content is injected into the system prompt as a per-turn section — the agent always sees the current plan. The agent updates the plan by writing to the file. The plan evolves during execution.
+
+RRC advantage: the model's reasoning about the plan appears in thinking blocks. Carry-forward captures this reasoning. The plan's influence on selection compounds — the agent stays coherent with the plan across long autonomous runs.
 
 ==== Thread Workspaces
 
@@ -156,7 +209,7 @@ Independent of either request flow:
 
 *Agent Framework:* Google ADK Go (`google.golang.org/adk`, Apache 2.0)
 
-*Depends on:* `spec/core` (truth types, LLM/classifier interfaces), `spec/rrc` (RRC engine), ADK Go (agent orchestration, tool system, plugin system, session management)
+*Depends on:* `spec/core` (truth types, LLM/classifier interfaces), `spec/rrc` (RRC engine), ADK Go (agent orchestration, tool system, plugin system)
 
 === Scope
 
@@ -224,7 +277,7 @@ Independent of either request flow:
 //   - LlmAgent as primary agent type
 //   - Tool registration: FunctionTools for built-in capabilities, McpToolset for MCP servers
 //   - Plugin registration: RRC introspection plugin (exposes selection data per round), logging plugin
-//   - Session service: backed by SQLite (shared with thread storage)
+//   - Thread-backed state: SQLite (shared with thread storage)
 // - GraphQL API (schema, resolvers, subscriptions)
 //   - Per-round events pushed via subscription: streaming tokens, tool executions, RRC selection results, agent state
 // - Agent Loop (driven by ADK runner, per-round RRC cycle happens inside the LLM adapter)
@@ -244,10 +297,10 @@ Independent of either request flow:
 //   - Score cache table (keyed by message pair)
 //   - QUD graph table
 //   - On startup: load into RRC engine's in-memory structures
-// - Session Management
-//   - Session binds a browser tab to service state (active thread, agent loop, subscriptions)
-//   - Reconnection: tab closes and reopens, UI reconnects to same session seamlessly
-//   - Service owns all state; UI is a view into it. No client-side persistence beyond session ID.
+// - Browser Tab State
+//   - Tab binds to service state (active thread, agent loop, subscriptions)
+//   - Reconnection: tab closes and reopens, UI reconnects seamlessly
+//   - Service owns all state; UI is a view into it. No client-side persistence beyond a tab identifier.
 //
 // --- Payload Sizing ---
 // - Send full ranked selection from RRC engine to LLM
