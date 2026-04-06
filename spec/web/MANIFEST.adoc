@@ -68,7 +68,7 @@ Three things make this different from every other agentic UI:
 
 === Thread Management
 
-- User opens Spidey -> sees thread list with state indicators (idle, running, paused) -> picks a thread or creates one
+- User opens Spidey -> sees thread list with state indicators (idle, running, paused) and warmth (carry-forward count) -> picks a thread or creates one
 - User creates a thread -> types a name or starts with a prompt (thread auto-named from first prompt)
 - User sees which threads are running/paused/idle from any view via the persistent sidebar
 
@@ -101,6 +101,21 @@ Three things make this different from every other agentic UI:
 - User toggles scope to all-threads for a specific prompt -> agent draws from all threads
 - User sees cross-thread citations highlighted distinctly in citation expansion
 - User navigates from a cross-thread citation to the source thread and back without losing state
+
+=== First Run
+
+- User launches Spidey for the first time -> service starts, tray icon appears, browser opens
+- Service probes localhost for Ollama (default port) and TEI (default port)
+- Detected -> shows detected providers, user confirms
+- Not detected -> setup form: endpoint URLs, model selection, API key for cloud providers
+- User confirms -> home page loads -> ready
+
+=== Errors
+
+- LLM provider unreachable -> error shown in thread, agent pauses, user can retry or reconfigure in settings
+- Cross-encoder (TEI) unreachable -> system does not work. RRC is not optional. Error displayed, links to settings, system waits until resolved. No degraded mode, no passthrough.
+- Autonomous run fails mid-execution -> agent pauses with error visible, user reviews, retries or stops
+- Service restarts while autonomous agent is running -> agent state shows last known state on reconnect
 
 === Introspection (drill-down from citations)
 
@@ -148,7 +163,11 @@ Persistent sidebar (always visible): thread list with state indicators (idle, ru
 
 === Home Page
 
-Main area when no thread selected. Activity feed: recent cross-thread citations, completed autonomous runs, thread warmth. Quick start: prompt input that creates a new thread and sends in one action. New thread button.
+Main area when no thread selected. Activity feed: recent cross-thread citations, completed autonomous runs. Quick start: prompt input that creates a new thread and sends in one action. New thread button.
+
+=== Thread Warmth
+
+Count of carry-forward events in a thread -- how many LLM responses have fed back into the thread's QUD graph. A thread with 0 is cold (cross-encoder edges only, no structural understanding). A thread with 200 is warm (rich QUD graph, strong identity). Displayed as a subtle indicator in the sidebar per thread and in the home activity feed.
 
 === Thread View
 

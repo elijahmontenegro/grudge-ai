@@ -68,6 +68,19 @@ The RRC engine returns a ranked selection -- every message that passes the score
 
 The service sends the full selection to the LLM. If the model returns a context-length error, the service drops the lowest-scored message from the selection and retries. Repeat until the payload fits. Error-driven backoff -- no tokenizer, no estimation, no guessing. The model tells you when it's too much.
 
+==== First Run
+
+On first launch, the service probes localhost for default provider endpoints (Ollama at default port, TEI at default port). If detected, the web UI shows detected providers for user confirmation. If not detected, the web UI shows a setup form for endpoint URLs, model selection, and API keys.
+
+Both an LLM provider and a classifier (cross-encoder) endpoint are required. The system does not start without both configured. RRC is not optional -- there is no degraded mode or passthrough fallback.
+
+==== Error Policy
+
+- **LLM provider unreachable:** Error shown in the active thread. Agent pauses. User can retry or reconfigure.
+- **Cross-encoder unreachable:** System does not function. Error displayed prominently. Links to settings. System waits until resolved.
+- **Context-length error:** Error-driven backoff -- drop lowest-scored message, retry. Transparent to user.
+- **Autonomous run failure:** Agent pauses with error state. User reviews, retries, or stops.
+
 ==== Service Infrastructure
 
 Independent of either request flow:
