@@ -73,43 +73,40 @@ A permission state transition. The service switches the agent to read-only mode:
 
 **Lifecycle:**
 
-1. **Enter:** `EnterPlanMode` tool call. Service transitions permission state to `plan`. Write tools disabled. Agent explores using read-only tools.
+1. **Enter:** `EnterPlanMode` tool call. Service transitions permission state to `plan`. Write tools disabled. Plan mode prompt section included. Agent explores using read-only tools.
 2. **Explore:** Agent reads code, searches for patterns, identifies critical files. Multiple turns of exploration before designing.
-3. **Write plan:** Agent creates a plan file -- AsciiDoc format (`plan.adoc`) in `$XDG_DATA_HOME/spidey/plans/{slug}.adoc`. AsciiDoc attributes carry structured metadata (status, dependencies per step). The plan uses CCA conventions.
+3. **Write plan:** Agent creates a plan file -- AsciiDoc format in `$XDG_DATA_HOME/spidey/plans/{slug}.adoc`. Slug generated per plan (human-readable, unique per thread). The agent writes the plan; the service does not auto-generate it.
 4. **Exit:** `ExitPlanMode` tool call. Service reads plan from disk, surfaces it to the user in the web UI for review. User approves, optionally edits, or rejects.
-5. **Post-approval:** Service restores previous permission state (write tools re-enabled). Plan content enters the thread as a message (available for RRC selection). Plan file persists on disk as a living document -- the agent reads and updates it during execution via the plan's per-turn prompt injection.
+5. **Post-approval:** Service restores previous permission state (write tools re-enabled). Plan content enters the thread as a message (available for RRC selection). Plan file persists on disk. Plan content injected as per-turn prompt section -- the agent sees the plan on every subsequent request.
 
-**Plan as living AsciiDoc document:**
+The plan is a design artifact, not a project management tool. The agent reads the plan and implements. There is no step-by-step status tracking. Progress is implicit in the work being done.
 
-The plan file uses AsciiDoc section attributes for structured metadata:
+**Plan format:** AsciiDoc -- the project's document regime. The agent writes structured sections (objective, approach, steps, critical files). No prescribed schema or attributes -- the agent structures the plan as the design requires. AsciiDoc provides section structure and readability. Example:
 
 [source,asciidoc]
 ----
 = Implement Auth Module
-:thread-id: thread-auth
-:created: 2026-04-06T16:00:00Z
 
 \== Objective
 
 OAuth 2.0 with PKCE flow. Three endpoints: authorize, token, refresh.
 
+\== Approach
+
+Implement routes first, then PKCE flow, then retry logic.
+Each step builds on the previous. All behind Docker sandbox.
+
 \== Steps
 
 \=== Set up OAuth routes
-:status: pending
-:depends-on:
 
 Register /auth/authorize, /auth/token, /auth/refresh endpoints.
 
 \=== Implement PKCE flow
-:status: pending
-:depends-on: Set up OAuth routes
 
 Code verifier generation, challenge computation, token exchange.
 
 \=== Add retry policy for token refresh
-:status: pending
-:depends-on: Implement PKCE flow
 
 Exponential backoff: 1s, 2s, 4s. Max 3 retries.
 
@@ -117,14 +114,9 @@ Exponential backoff: 1s, 2s, 4s. Max 3 retries.
 
 * `service/auth/handler.go` -- route registration
 * `service/auth/pkce.go` -- PKCE implementation
-* `service/auth/retry.go` -- backoff logic
 ----
 
-AsciiDoc attributes (`:status:`, `:depends-on:`) on each step section are parseable by CCA tooling. This is the capability advantage over Markdown -- structured metadata is first-class. CCA can validate plan structure, compile it, track step status.
-
-**Prompt injection:** Plan content is injected into the system prompt as a per-turn section. The agent always sees the current plan. The agent updates step statuses by writing to the file. The plan evolves during execution.
-
-**RRC integration:** The approved plan enters the thread as a message. RRC selects it as a prerequisite during execution. The model's reasoning about the plan appears in thinking blocks. Carry-forward captures this reasoning. The plan's influence on selection compounds -- the agent stays coherent with the plan across long autonomous runs.
+**RRC integration:** The approved plan enters the thread as a message. RRC selects it as a prerequisite during execution. Carry-forward captures the model's reasoning about the plan. The plan's influence on selection compounds across rounds.
 
 **Re-entry:** If the agent re-enters plan mode after exiting, the existing plan file is available for revision. The previous plan remains in the thread corpus for RRC.
 
@@ -156,28 +148,34 @@ Spidey follows XDG for all platform paths:
 - **Data:** `$XDG_DATA_HOME/spidey/` (SQLite database, threads, plans, skills)
 - **Cache:** `$XDG_CACHE_HOME/spidey/` (memoized prompt sections, temporary artifacts)
 
-==== Prompt Templates
+==== Prompt Templates (PEaC -- Prompt Engineering as Code)
 
-System prompts are Go `text/template` files (`.tmpl`) in the `templates/` directory. Version controlled artifacts in the codebase, rendered at runtime. Programmatically assembled from sections, each section memoized independently.
+System prompts are composed from independent sections -- each section is a Go `text/template` file (`.tmpl`) in the `templates/` directory. Version controlled. Programmatically assembled at runtime. Each section memoized independently. The composition IS the prompt architecture.
+
+**Composition model:** `system.tmpl` is the entry point. It includes section templates. Sections are independently authored, versioned, and testable. Mode changes (plan, autonomous, normal) are section inclusion/exclusion decisions -- not separate templates. Section content and inventory are implementation artifacts that evolve with tuning.
+
+**Section categories:**
 
 Stable sections (memoized, recomputed on config change or thread switch):
 
 - User identity: full name, preferences (from onboarding)
 - System: OS, available tools
 - Thread context: mounted directories, thread name
+- SPIDEY.md: project-level instructions from mounted directories
 
 Per-turn sections (recomputed each request):
 
 - Current time
-- Git status of mounted directories
-- Active plan content (if any)
-- Working directory file tree
+- Active plan content (if plan exists)
 
-The template system is sectional. `system.tmpl` is the main template assembled from stable and per-turn sections at runtime. Autonomous mode does not require a separate template -- the behavioral difference is loop control, not prompt structure.
+Mode-conditional sections (included based on permission state):
+
+- Plan mode instructions (included when permission state is `plan`)
+- RRC context (the model's context is RRC-selected -- always included)
 
 Templates are not user-facing. They are engineering artifacts maintained in the codebase.
 
-**Design principle: don't put discoverable information in the prompt.** The system prompt contains only what the model cannot figure out on its own. User identity, thread name, mounted directories, SPIDEY.md instructions, active plan content — these are non-discoverable. Git status, file trees, directory listings, file contents — the model discovers these through tools. The prompt is lean.
+**Design principle: don't put discoverable information in the prompt.** The system prompt contains only what the model cannot figure out on its own. User identity, thread name, mounted directories, SPIDEY.md instructions, active plan content -- these are non-discoverable. Git status, file trees, directory listings, file contents -- the model discovers these through tools. The prompt is lean.
 
 ==== SPIDEY.md
 
@@ -345,6 +343,40 @@ Independent of either request flow:
 - Cloud deployment or multi-tenancy
 
 == Implementation
+
+=== Tool Specifications
+
+Tools are registered via ADK's FunctionTool with descriptions. Tool descriptions are implementation artifacts (tuned based on model behavior). The spec defines categories, permission defaults, and behavioral constraints.
+
+==== Categories and Defaults
+
+[cols="1,3,1"]
+|===
+| Category | Tools | Default
+
+| **Read** | FileRead, Glob, Grep, WebSearch, WebFetch, AskUserQuestion | Allow
+| **Write** | FileEdit, FileWrite, Bash, NotebookEdit | Ask
+| **Destructive** | rm, git push (subset of Bash, detected by command inspection) | Ask with warning
+| **Agent** | Agent, SendMessage, TaskCreate, TaskGet, TaskUpdate, TaskList, TaskStop, TaskOutput | Ask
+| **Plan** | EnterPlanMode, ExitPlanMode | Ask
+| **Skill** | Skill, TodoWrite | Ask
+|===
+
+==== EnterPlanMode
+
+Transitions permission state to `plan`. Write tools disabled, read tools remain available. The agent uses this proactively when the task is non-trivial: multiple possible approaches, architectural decisions, multi-file changes, unclear requirements. The agent does NOT use this for trivial changes, single-line fixes, or pure research.
+
+On entry: plan mode prompt section included (mode-conditional section in template composition). Previous permission state saved for restoration on exit.
+
+==== ExitPlanMode
+
+Reads plan from disk (`$XDG_DATA_HOME/spidey/plans/{slug}.adoc`). Surfaces plan to user in web UI for review. User approves (optionally edits) or rejects.
+
+On approval: restores previous permission state. Plan content enters thread as a corpus message (available for RRC selection). Plan file persists on disk. Plan injected as per-turn prompt section. If plan is empty: user approved exiting plan mode without a plan (valid -- the exploration itself was the value).
+
+==== Plan Mode Tool Availability
+
+In plan mode, only read-category tools + AskUserQuestion are available. All write, destructive, agent, and skill tools are disabled. The agent can write ONLY to the plan file.
 
 === File Tree
 
