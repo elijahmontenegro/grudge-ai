@@ -58,6 +58,8 @@ include::../MANIFEST.adoc[tag=rrc]
 
 == Implementation
 
+Proto types referenced throughout this spec (`pb.Message`, `pb.Edge`, `pb.SelectionResult`, `pb.CarryForwardInput`, `pb.ClassifyRequest`, `pb.CompletionRequest`, etc.) are defined in `spec/core` (Proto Truth Type Definitions section) and generated to `gen/go/spidey/v1/`.
+
 === File Tree
 
 ----
@@ -68,7 +70,7 @@ rrc/
 ├── dag.go            # DAG type, dual adjacency list, edge operations, subgraph extraction
 ├── qud.go            # QUDGraph type, QUD operations, carry-forward ingestion
 ├── scorer.go         # ScoreCache type, score fusion, score floor
-├── assembler.go      # Payload assembly, transitive reduction, native format restoration
+├── assembler.go      # Subgraph extraction, transitive reduction
 ├── config.go         # EngineConfig: thresholds, weights, score floor
 └── errors.go         # Sentinel errors
 ----
@@ -153,7 +155,9 @@ type EngineConfig struct {
 }
 ----
 
-==== SelectionEntry
+==== SelectionEntry (internal)
+
+Internal working type used during best-first traversal. Mapped to `pb.SelectedMessage` entries in the returned `pb.SelectionResult`. Not part of the public API.
 
 [source,go]
 ----
@@ -205,8 +209,20 @@ Sentinel errors. Fail fast -- the engine does not retry.
 var (
     ErrClassifierFailed = errors.New("classifier returned error during scoring")
     ErrCompleterFailed  = errors.New("small model failed during QUD extraction")
+    ErrMessageNotFound  = errors.New("message ID not found in data structures")
+    ErrThreadNotFound   = errors.New("thread ID not found in data structures")
 )
 ----
+
+**Method-to-error mapping:**
+
+- `OnMessage` → `ErrClassifierFailed` (classifier error during pairwise scoring)
+- `Select` → `ErrMessageNotFound` (promptID not in DAG), `ErrThreadNotFound` (threadID not in QUD graphs, when scope is thread-scoped)
+- `CarryForward` → `ErrClassifierFailed` (cross-encoder on thinking text), `ErrCompleterFailed` (small model QUD extraction)
+- `Fork` → `ErrThreadNotFound` (parentThreadID not found)
+- `Merge` → `ErrThreadNotFound` (parentThreadID not found)
+
+`Select` with `SELECTION_SCOPE_ALL_THREADS`: `threadID` is empty string, ignored. With `SELECTION_SCOPE_THREAD`: `threadID` is required, `ErrThreadNotFound` if absent.
 
 === Concurrency
 
@@ -352,9 +368,9 @@ Computed on demand over the selected subgraph, not maintained globally. The sele
 
 Removes redundant edges: if A->B->C and A->C, remove A->C from the selection. The minimal chain is what the model needs.
 
-==== Native Format Restoration
+==== Native Format Restoration (service responsibility)
 
-Selected messages are ordered chronologically and placed in the model's input as ordinary conversation entries. No template, no label. Structurally indistinguishable from session history.
+The engine returns ranked message IDs and scores in `SelectionResult`. The service looks up message content and orders selected messages chronologically, placing them in the model's input as ordinary conversation entries. No template, no label. Structurally indistinguishable from session history. This is the service's job -- the engine does not hold message content, only IDs, edges, and scores.
 
 === RRC in the Agent Loop
 
