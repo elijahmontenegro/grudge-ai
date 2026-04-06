@@ -47,7 +47,10 @@ Three things make this different from every other agentic UI:
 
 ==== In Scope
 
-- Thread model: create, name, switch, delete threads. No "conversations" -- threads are the organizational unit.
+- Thread model: create, name, switch, archive, delete threads. No "conversations" -- threads are the organizational unit.
+- Thread branching: edit a message creates a branch (fork). Sidebar shows branch relationships. Navigate between branches.
+- Semantic search: search across all threads, results ranked by embedding similarity
+- Command palette: keyboard-accessible (Cmd+K / Ctrl+K) for skill invocation, thread switching, search, settings. Primary capability discovery mechanism.
 - Per-prompt scope control: thread-scoped selection by default, toggle to all-threads for a specific prompt
 - Citations per message: every message that triggered an RRC selection event carries citation metadata (selected prerequisites, scores, thread origin, cross-thread indicator)
 - RRC introspection: drill into citations to see full selection detail, QUD graph state, carry-forward history
@@ -76,6 +79,31 @@ Three things make this different from every other agentic UI:
 - User creates a thread -> types a name or starts with a prompt (thread auto-named from first prompt) -> adds one or more working directories
 - User adds or removes mounted directories from a thread at any time
 - User sees which threads are running/paused/idle from any view via the persistent sidebar
+- User archives a thread -> thread moves to archive view, all state preserved, accessible later
+- User deletes a thread -> explicit warning ("this is irreversible, all data will be wiped") -> hard delete
+- Sidebar shows branch relationships (parent -> children) for branched threads
+
+=== Message Editing (Branching)
+
+- User clicks edit on a previous user message -> input area appears with message content
+- User modifies the message -> sends -> a new branch is created from that point
+- Old thread unchanged, new branch appears in sidebar as a child
+- User navigates between branches -> each branch has its own identity and warmth
+- No message deletion. Don't want a message? Branch from before it.
+
+=== Search
+
+- User opens command palette (Cmd+K / Ctrl+K) -> types search query
+- Results ranked by semantic similarity across all threads
+- Each result shows message snippet, thread name, score
+- User clicks a result -> navigates to that message in its thread
+
+=== Command Palette
+
+- User presses Cmd+K / Ctrl+K -> command palette opens
+- Available actions: search, invoke skill, switch thread, open settings, enter plan mode
+- Fuzzy matching on action names and skill names
+- Primary capability discovery mechanism for the web UI
 
 === Normal Interaction
 
@@ -290,12 +318,17 @@ Operations reference the service spec's {api-protocol} schema (`spec/service`).
 
 ==== Home Page
 
-- `threads` query, `threadStateChanges` subscription, `createThread` mutation
+- `threads` query, `threadStateChanges` subscription, `createThread` mutation, `search` query
+
+==== Command Palette
+
+- `search` query, `threads` query (for thread switching)
 
 ==== Thread View
 
 - `messages` query, `messageStream` subscription
-- `sendMessage`, `stopAgent`, `pauseAgent`, `resumeAgent`, `startAutonomous` mutations
+- `sendMessage`, `stopAgent`, `pauseAgent`, `resumeAgent`, `startAutonomous`, `editMessage` mutations
+- `archiveThread`, `deleteThread` mutations
 - `agentState`, `toolExecution`, `subagentProgress` subscriptions
 - `approveToolCall`, `denyToolCall` mutations
 

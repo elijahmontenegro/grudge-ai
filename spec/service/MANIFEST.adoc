@@ -344,6 +344,8 @@ Independent of either request flow:
 ===== Shared
 - RRC engine integration (calling `spec/rrc` library — stateful for agent path, stateless for proxy path)
 - Provider routing: configuration for which upstream LLM to forward to
+- Semantic search: embed messages on arrival via core Embedder, store vectors, cosine similarity search across threads
+- AsciiDoc compilation: compile `.adoc` artifact directories (resolve includes, attributes) into resolved prose. Used for plan prompt injection, AI inspection of composed documents, and user-facing plan review. Infrastructure capability, not a feature.
 
 ===== Infrastructure
 - Cross-platform system tray via {tray-lib} (macOS, Linux, Windows)
@@ -458,8 +460,9 @@ The {api-protocol} schema is authored as API surface design. Types reference pro
 
 ==== Queries
 
-- `threads: [Thread]` -- all threads with state indicators
+- `threads(includeArchived: Boolean): [Thread]` -- all threads with state indicators
 - `thread(id: ID!): Thread` -- single thread by ID
+- `search(query: String!, limit: Int): [SearchResult]` -- semantic search across all threads
 - `messages(threadId: ID!, limit: Int, offset: Int): [Message]` -- paginated messages in thread
 - `selectionResult(eventId: ID!): SelectionResult` -- RRC selection for a specific event
 - `qudGraph(threadId: ID!): QUDGraph` -- current QUD graph state for a thread
@@ -470,7 +473,11 @@ The {api-protocol} schema is authored as API surface design. Types reference pro
 
 - `createThread(name: String, workingDirs: [String!]): Thread`
 - `updateThread(id: ID!, name: String, workingDirs: [String!], sandboxed: Boolean): Thread`
-- `deleteThread(id: ID!): Boolean`
+- `deleteThread(id: ID!): Boolean` -- hard delete with warning, irreversible
+- `archiveThread(id: ID!): Boolean`
+- `unarchiveThread(id: ID!): Boolean`
+- `editMessage(threadId: ID!, messagePosition: Int!, newContent: String!): Thread` -- creates branch, returns new thread
+- `compileAdoc(path: String!): String` -- compile AsciiDoc artifact directory, return resolved prose
 - `sendMessage(threadId: ID!, content: String!, scope: SelectionScope): Message`
 - `stopAgent(threadId: ID!): Boolean`
 - `pauseAgent(threadId: ID!): Boolean`
@@ -501,6 +508,9 @@ CREATE TABLE threads (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     sandboxed BOOLEAN NOT NULL DEFAULT TRUE,
+    parent_thread_id TEXT REFERENCES threads(id),  -- NULL for root threads
+    branch_point_position INTEGER,                  -- position where branch diverged
+    archived_at TIMESTAMP,                          -- NULL = active, set = archived
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -585,6 +595,13 @@ CREATE TABLE user_input_history (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_input_history_thread ON user_input_history(thread_id);
+
+CREATE TABLE embeddings (
+    message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    vector BLOB NOT NULL,  -- float32 array, binary encoded
+    model TEXT NOT NULL,    -- which embedding model produced this
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 ----
 
 On startup: load edges, scores, and QUD graphs from SQLite into RRC engine's in-memory structures via `Engine.LoadDAG`, `Engine.LoadScoreCache`, `Engine.LoadQUDGraph`.
@@ -668,6 +685,45 @@ Fail fast. No retries except payload sizing backoff (error-driven, not failure m
 - **Proxy path:** Map upstream HTTP status codes. 200 on success. 502 on provider unreachable. 504 on provider timeout. 422 on context-length error (after backoff exhaustion).
 - **{api-protocol} path:** Standard {api-protocol} error extensions with error type field. Error types: `PROVIDER_UNAVAILABLE`, `CLASSIFIER_UNAVAILABLE`, `CONTEXT_LENGTH`, `TOOL_DENIED`, `AGENT_ERROR`.
 - **Subscription errors:** Error event pushed via subscription. Client displays inline in thread.
+
+=== Semantic Search
+
+Messages are embedded on arrival via the core Embedder interface (async, alongside cross-encoder scoring). Vectors stored in SQLite. Search query embedded at query time, ranked by cosine similarity against stored vectors. Search spans all threads.
+
+GraphQL: `search(query: String!, limit: Int): [SearchResult]` where `SearchResult` contains the message, thread, score, and snippet.
+
+=== AsciiDoc Compilation
+
+The service compiles AsciiDoc artifact directories (resolve `include::` directives, attributes) into resolved prose. This is infrastructure — used by:
+
+- **Plan prompt injection:** The per-turn plan section injects the compiled plan, not raw source. The AI reads resolved prose.
+- **AI inspection:** The AI can compile any `.adoc` artifact to inspect the composed output. Raw source files with disconnected includes are fragile to read. Compiled output is reliable.
+- **ExitPlanMode:** Compiles the plan directory before surfacing to the user for review.
+- **User-facing display:** Web UI receives compiled plan content for rendering.
+
+The AI works with two views: compiled output for reading, source files for writing. Compilation resolves the composition. Editing targets the source.
+
+=== Thread Branching
+
+Edit creates a branch. Messages are immutable — no mutation, no deletion.
+
+When a user edits message N in a thread:
+
+1. Service calls `Engine.Fork` at position N (same machinery as subagent forks)
+2. New thread created with shared message prefix (messages 1..N-1 are immutable, referenced not copied)
+3. Edited message inserted at position N in the new thread (new ID, new content)
+4. Edited message scored against predecessors (O(N) classifier calls + embedding)
+5. Old thread unchanged — old branch's identity and RRC state intact
+6. User navigates between branches
+
+**Data model:** Thread table has `parent_thread_id` and `branch_point_position` (nullable — root threads have no parent). Branches are threads. The sidebar shows branch relationships.
+
+**No message deletion.** Messages are immutable. If the user doesn't want a message, they branch from before it. The old branch can be archived (thread-level, not message-level).
+
+**Thread lifecycle:**
+
+- **Archive:** `archived_at` timestamp on thread. Hidden from active list, accessible from archive view. All RRC state preserved. Cross-thread edges still valid.
+- **Delete:** Hard destructive action with explicit warning. Wipes messages, edges, scores, QUD graph, embeddings. Cross-thread edges pointing to deleted messages cleaned up. Irreversible.
 
 === Performance
 
