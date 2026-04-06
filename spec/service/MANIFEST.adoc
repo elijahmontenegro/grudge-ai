@@ -659,6 +659,9 @@ Fields: `event` (enum: PreToolUse, PostToolUse, ThreadStart, ThreadEnd, PreCarry
     "Bash": "ask",
     "FileWrite": "ask"
   },
+  "mcp_servers": [
+    {"name": "github", "endpoint": "http://localhost:3000/mcp", "enabled": true}
+  ],
   "hooks": [],
   "preferences": {
     "name": "John Doe",
