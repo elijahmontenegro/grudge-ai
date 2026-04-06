@@ -69,7 +69,7 @@ Three things make this different from every other agentic UI:
 === Thread Management
 
 - User opens Spidey -> sees thread list with state indicators (idle, running, paused) and warmth (carry-forward count) -> picks a thread or creates one
-- User creates a thread -> types a name or starts with a prompt (thread auto-named from first prompt)
+- User creates a thread -> types a name or starts with a prompt (thread auto-named from first prompt) -> specifies working directory or defaults to current
 - User sees which threads are running/paused/idle from any view via the persistent sidebar
 
 === Normal Interaction
@@ -105,10 +105,11 @@ Three things make this different from every other agentic UI:
 === First Run
 
 - User launches Spidey for the first time -> service starts, tray icon appears, browser opens
+- Onboarding: user provides name and preferences (stored once, injected into prompt templates)
 - Service probes localhost for Ollama (default port) and TEI (default port)
-- Detected -> shows detected providers, user confirms
+- Detected -> shows detected providers (LLM, cross-encoder, small fast model), user confirms
 - Not detected -> setup form: endpoint URLs, model selection, API key for cloud providers
-- User confirms -> home page loads -> ready
+- All three model roles configured -> home page loads -> ready
 
 === Errors
 
@@ -205,6 +206,8 @@ Minimal. The system should just work. Configuration required on first run:
 - Classifier endpoint (where is the cross-encoder? TEI at localhost, etc.)
 
 Smart detection: if Ollama and TEI are running at default localhost ports, detect and offer them. Reduce first-run friction to confirmation, not configuration.
+
+Per-thread settings: working directory, sandbox on/off.
 
 Accessible from tray menu ("Settings...") and from within the web UI.
 

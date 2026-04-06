@@ -68,6 +68,33 @@ The RRC engine returns a ranked selection -- every message that passes the score
 
 The service sends the full selection to the LLM. If the model returns a context-length error, the service drops the lowest-scored message from the selection and retries. Repeat until the payload fits. Error-driven backoff -- no tokenizer, no estimation, no guessing. The model tells you when it's too much.
 
+==== Prompt Templates
+
+System prompts are Go `text/template` files (`.tmpl`) in the `templates/` directory. Version controlled artifacts, rendered at runtime with context injection:
+
+- User identity: full name, preferences (from onboarding)
+- Thread context: working directory, thread name
+- Environment: current time, git status, file tree of working directory
+- System: OS, available tools
+
+Templates are not user-facing. They are engineering artifacts maintained in the codebase.
+
+==== Onboarding
+
+First-run captures user identity alongside provider configuration. Name and preferences are stored once and injected into prompt templates on every request. This is not a settings page — it's a one-time setup that shapes the model's understanding of who it's working with.
+
+==== Thread Workspaces
+
+Each thread is tied to a working directory. A thread isn't just a conversation — it's a workspace. File operations, git, code execution are scoped to the thread's directory. Thread creation specifies a directory or defaults to the current one.
+
+The working directory is injected into the system prompt template. Different threads, different directories, potentially different git repos.
+
+==== Docker Sandboxes
+
+Tool execution (shell commands, code execution, file writes) runs in Docker Sandboxes by default. Each thread's working directory is mounted into the sandbox — the agent operates on real files but in isolation from the host.
+
+Sandboxed by default. Per-thread opt-out for advanced users who need direct host access. The `Thread` proto carries a `sandboxed` flag.
+
 ==== Model Roles
 
 The service configures three model roles:

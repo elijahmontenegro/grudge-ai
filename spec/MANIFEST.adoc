@@ -116,6 +116,10 @@ spidey/
 │   ├── src/
 │   ├── codegen.ts             #   graphql-codegen config
 │   └── dist/                  #   Build output (static assets served by service)
+├── templates/                 # System prompt templates (.tmpl), version controlled
+│   ├── system.tmpl            #   Main agent system prompt
+│   ├── autonomous.tmpl        #   Autonomous mode context (if different)
+│   └── ...
 ├── spec/                      # CCA specifications
 │   ├── MANIFEST.adoc          #   Root context (this file)
 │   ├── core/MANIFEST.adoc
