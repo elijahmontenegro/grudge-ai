@@ -311,6 +311,8 @@ Independent of either request flow:
 
 *Secrets:* `zalando/go-keyring v0.2.6` (macOS Keychain, Linux Secret Service, Windows Credential Manager)
 
+*AsciiDoc:* `include::` resolution and attribute substitution (custom, no full asciidoctor — compilation scope is limited to plan artifact composition)
+
 *Container:* Docker Engine API v1.53
 
 *Depends on:* `gen/go/spidey/v1` (proto types), `spec/core` (LLM/classifier interfaces, provider adapters), `spec/rrc` (RRC engine), {agent-framework}
@@ -434,6 +436,12 @@ service/
 │   ├── schema.graphql       # GraphQL schema (gqlgen source)
 │   ├── resolver.go          # Generated resolver stubs
 │   └── model.go             # gqlgen model binding config (maps to proto Go types)
+├── adoc/
+│   └── compiler.go          # AsciiDoc compilation (include resolution, attribute substitution)
+├── sandbox/
+│   └── docker.go            # Docker container lifecycle, volume mounting
+├── search/
+│   └── embeddings.go        # Embed-on-arrival pipeline, cosine similarity search
 ├── config/
 │   ├── settings.go          # Settings type, load/save from XDG
 │   └── keyring.go           # API key storage via go-keyring
@@ -496,6 +504,91 @@ The {api-protocol} schema is authored as API surface design. Types reference pro
 - `toolExecution(threadId: ID!): ToolExecution` -- tool calls, approvals, results
 - `subagentProgress(threadId: ID!): SubagentProgress` -- fork state, task, progress
 - `threadStateChanges: ThreadStateEvent` -- all threads, for sidebar real-time updates
+
+==== Type Definitions
+
+Types reference proto-generated Go types via gqlgen model binding where applicable. Types not in proto are service-specific.
+
+[source,graphql]
+----
+enum SelectionScope { THREAD, ALL_THREADS }
+enum ExecutionMode { MANUAL, AUTONOMOUS }
+enum AgentStatus { IDLE, RUNNING, PAUSED }
+enum AgentMode { NORMAL, AUTONOMOUS, PLAN }
+
+type StreamEvent {
+  messageId: ID!
+  delta: String           # text delta (streaming tokens)
+  thinking: String        # thinking block delta
+  toolCall: ToolCallDelta # tool call delta
+  done: Boolean!
+  error: String           # stream failure
+}
+
+type ToolCallDelta {
+  id: ID!
+  name: String!
+  arguments: String       # JSON, may arrive incrementally
+}
+
+type AgentState {
+  threadId: ID!
+  status: AgentStatus!
+  mode: AgentMode!
+  roundCount: Int!
+  startedAt: DateTime
+  durationLimit: String   # time.Duration string, null if not autonomous
+  elapsedTime: String     # human-readable elapsed
+}
+
+type ToolExecution {
+  threadId: ID!
+  callId: ID!
+  toolName: String!
+  arguments: String!      # JSON
+  status: String!         # pending, approved, denied, completed, failed
+  result: String          # tool output, null until completed
+  isError: Boolean
+}
+
+type SubagentProgress {
+  threadId: ID!           # parent thread
+  forkThreadId: ID!       # subagent's thread
+  task: String!           # what the subagent was asked to do
+  status: String!         # running, completed, failed
+  roundCount: Int!
+}
+
+type ThreadStateEvent {
+  threadId: ID!
+  status: AgentStatus!
+  mode: AgentMode!
+  warmth: Int!
+  name: String!
+}
+
+type SearchResult {
+  messageId: ID!
+  threadId: ID!
+  threadName: String!
+  snippet: String!
+  score: Float!
+}
+
+input ViewStateInput {
+  scrollPosition: Float!
+  expandedMessageIds: [ID!]!
+  inputDraft: String!
+  citationExpansionState: String!  # JSON-encoded Record<string, boolean>
+}
+
+input SettingsInput {
+  providers: String       # JSON-encoded provider config map
+  permissions: String     # JSON-encoded permission map
+  mcpServers: String      # JSON-encoded MCP server list
+  preferences: String     # JSON-encoded preference map
+}
+----
 
 === Persistence
 
@@ -647,6 +740,9 @@ Fail fast. No retries except payload sizing backoff (error-driven, not failure m
 - **Proxy path:** Map upstream HTTP status codes. 200 on success. 502 on provider unreachable. 504 on provider timeout. 422 on context-length error (after backoff exhaustion).
 - **{api-protocol} path:** Standard {api-protocol} error extensions with error type field. Error types: `PROVIDER_UNAVAILABLE`, `CLASSIFIER_UNAVAILABLE`, `CONTEXT_LENGTH`, `TOOL_DENIED`, `AGENT_ERROR`.
 - **Subscription errors:** Error event pushed via subscription. Client displays inline in thread.
+- **Docker unavailable:** Fail fast. Error surfaced to user with link to settings. No tool execution until resolved. User can disable sandbox per-thread as opt-out.
+- **Hook failure:** Fail-closed. Hook command failure (non-zero exit, timeout, command not found) blocks the action. Error surfaced to user with hook name and error output. A hook that crashes is safer treated as denial than approval.
+- **`resumeAgent` correction:** The correction string is injected as a user message in the thread. This triggers a new RRC selection event — the correction enters the corpus and influences subsequent selections. If correction is empty, the agent resumes without additional input.
 
 === Semantic Search
 
