@@ -6,8 +6,13 @@
 :api-protocol: GraphQL
 :api-client: Apollo Client 4.1.6
 :codegen: graphql-codegen v6.2.1
+:codegen-plugins: @graphql-codegen/typescript + @graphql-codegen/typescript-operations (types only — Apollo Client 4 hooks used directly)
 :build-tool: Vite 8.0.5
 :css-framework: Tailwind CSS 4.2.2
+:css-vite-plugin: @tailwindcss/vite 4.2.2
+:router: React Router 7.14.0
+:typescript: TypeScript 6.0
+:radix: radix-ui 1.4.3
 
 == Context
 
@@ -37,7 +42,15 @@ Three things make this different from every other agentic UI:
 
 *API Client:* {api-client}
 
-*Code Generation:* {codegen} ({api-protocol} schema -> TypeScript types)
+*Language:* {typescript}
+
+*Routing:* {router}
+
+*CSS Plugin:* {css-vite-plugin}
+
+*Radix Primitives:* {radix} (unified package)
+
+*Code Generation:* {codegen} — plugins: {codegen-plugins}
 
 *Served by:* `spec/service` (static assets at `spidey.localhost`)
 
@@ -278,8 +291,10 @@ shadcn/ui source-owned primitives built on the unified `radix-ui` package + {css
 ----
 web/
 ├── package.json
+├── index.html                    # Vite entry point (<script type="module" src="/src/main.tsx">)
+├── tsconfig.json                 # TypeScript config (strict, JSX, path aliases)
 ├── vite.config.ts
-├── codegen.ts                    # graphql-codegen config
+├── codegen.ts                    # graphql-codegen config ({codegen-plugins})
 ├── dist/                         # Build output (served by service)
 ├── src/
 │   ├── main.tsx                  # Entry point
@@ -318,31 +333,50 @@ Operations reference the service spec's {api-protocol} schema (`spec/service`).
 
 ==== Home Page
 
-- `threads` query, `threadStateChanges` subscription, `createThread` mutation, `search` query
+- `threads(includeArchived: Boolean): [Thread]`
+- `createThread(name: String, workingDirs: [String!]): Thread`
+- `search(query: String!, limit: Int): [SearchResult]`
+- `threadStateChanges: ThreadStateEvent` (subscription)
 
 ==== Command Palette
 
-- `search` query, `threads` query (for thread switching)
+- `search(query: String!, limit: Int): [SearchResult]`
+- `threads(includeArchived: Boolean): [Thread]` (for thread switching)
 
 ==== Thread View
 
-- `messages` query, `messageStream` subscription
-- `sendMessage`, `stopAgent`, `pauseAgent`, `resumeAgent`, `startAutonomous`, `editMessage` mutations
-- `archiveThread`, `deleteThread` mutations
-- `agentState`, `toolExecution`, `subagentProgress` subscriptions
-- `approveToolCall`, `denyToolCall` mutations
+- `messages(threadId: ID!, limit: Int, offset: Int): [Message]`
+- `messageStream(threadId: ID!): StreamEvent` (subscription)
+- `sendMessage(threadId: ID!, content: String!, scope: SelectionScope): Message`
+- `stopAgent(threadId: ID!): Boolean`
+- `pauseAgent(threadId: ID!): Boolean`
+- `resumeAgent(threadId: ID!, correction: String): Boolean`
+- `startAutonomous(threadId: ID!, prompt: String!, duration: String!): Boolean`
+- `editMessage(threadId: ID!, messagePosition: Int!, newContent: String!): Thread` (returns new branch thread)
+- `archiveThread(id: ID!): Boolean`
+- `deleteThread(id: ID!): Boolean`
+- `approveToolCall(callId: ID!): Boolean`
+- `denyToolCall(callId: ID!, reason: String): Boolean`
+- `agentState(threadId: ID!): AgentState` (subscription)
+- `toolExecution(threadId: ID!): ToolExecution` (subscription)
+- `subagentProgress(threadId: ID!): SubagentProgress` (subscription)
 
 ==== Citations / Introspection
 
-- `selectionResult` query, `qudGraph` query
+- `selectionResult(eventId: ID!): SelectionResult` (proto type via gqlgen model binding)
+- `qudGraph(threadId: ID!): QUDGraph` (proto type via gqlgen model binding)
 
 ==== Settings
 
-- `settings` query, `updateSettings` mutation
+- `settings: Settings`
+- `updateSettings(input: SettingsInput!): Settings`
 
 ==== View State
 
-- `viewState` query, `saveViewState` mutation
+- `viewState(threadId: ID!): ViewState`
+- `saveViewState(threadId: ID!, state: ViewStateInput!): ViewState`
+
+All types (`SearchResult`, `StreamEvent`, `AgentState`, `ToolExecution`, `SubagentProgress`, `ThreadStateEvent`, `ViewStateInput`, `SettingsInput`, `SelectionScope`, `ExecutionMode`) are defined in `spec/service` GraphQL Type Definitions section.
 
 === Error Handling
 
@@ -370,7 +404,7 @@ Warmth is unbounded (count of carry-forward events). 0 = cold (cross-encoder edg
 
 === Autonomous Duration
 
-5m minimum: shortest useful autonomous exploration. 2w maximum: practical upper bound for unattended local workstation operation. Freeform duration input, not preset options.
+5m minimum: shortest useful autonomous exploration. 2w maximum: practical upper bound for unattended local workstation operation. Text field accepting `<number><unit>` where unit is one of `m` (minutes), `h` (hours), `d` (days), `w` (weeks). Compound durations (e.g., `1h30m`) not supported — use minutes (`90m`). Parsed by the service.
 
 === Example Data
 
@@ -415,4 +449,64 @@ Warmth is unbounded (count of carry-forward events). 0 = cold (cross-encoder edg
   {"id": "thread-api", "name": "API Design", "state": "idle", "warmth": 203},
   {"id": "thread-new", "name": "New Thread", "state": "idle", "warmth": 0}
 ]
+----
+
+==== Search Result
+
+[source,json]
+----
+{
+  "messageId": "msg-42",
+  "threadId": "thread-api",
+  "threadName": "API Design",
+  "snippet": "...the retry policy uses exponential backoff with a 3-attempt maximum...",
+  "score": 0.91
+}
+----
+
+==== Introspection Drill-Down (Score Breakdown)
+
+[source,json]
+----
+{
+  "messageId": "msg-4",
+  "effectiveScore": 0.87,
+  "breakdown": {
+    "crossEncoderScore": 0.94,
+    "qudWeight": 0,
+    "temporalProximity": 0.5,
+    "fused": "0.7*0.94 + 0.2*0 + 0.1*0.5 = 0.708"
+  },
+  "exclusions": [
+    {"messageId": "msg-1", "reason": "TRANSITIVE_REDUCTION", "score": 0.51}
+  ]
+}
+----
+
+==== Autonomous Progress
+
+[source,json]
+----
+{
+  "threadId": "thread-auth",
+  "status": "RUNNING",
+  "mode": "AUTONOMOUS",
+  "roundCount": 7,
+  "startedAt": "2026-04-06T16:00:00Z",
+  "durationLimit": "2h",
+  "elapsedTime": "12m"
+}
+----
+
+==== Subagent Progress
+
+[source,json]
+----
+{
+  "threadId": "thread-auth",
+  "forkThreadId": "thread-auth-fork-1",
+  "task": "Research existing OAuth implementations in the codebase",
+  "status": "running",
+  "roundCount": 3
+}
 ----
