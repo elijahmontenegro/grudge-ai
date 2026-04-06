@@ -48,6 +48,12 @@ Both paths share:
 - **RRC engine** -- The same engine code, two modes. The proxy path runs it statelessly (no persistence). The agent path runs it statefully (global DAG, per-thread QUD, compounding carry-forward).
 - **Provider routing** -- Both paths forward to the same upstream LLM, configured the same way.
 
+==== Plan Mode
+
+The agent reasons without executing tools. Tools are unavailable — the model can only think and produce a structured plan (steps with dependencies). The plan is a message in the thread. On approval, the service restores tools and the agent executes.
+
+RRC selects the plan as a prerequisite during execution. The plan persists in context through carry-forward across rounds — the agent maintains coherence with the plan even in long autonomous runs.
+
 ==== Autonomous Mode
 
 The agent loop normally exits when the model's response contains no tool calls (stop reason: end_turn). Autonomous mode overrides this. The loop does not exit. The service runs another RRC round.

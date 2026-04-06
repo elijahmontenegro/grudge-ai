@@ -97,11 +97,20 @@ Three things make this different from every other agentic UI:
 - Timer expires -> agent stops naturally
 - User can navigate to other threads while autonomous agent runs -- progress visible in sidebar
 
+=== Plan Mode
+
+- User requests a plan -> agent reasons without executing tools, produces structured steps with dependencies
+- UI renders the plan as a structured view (steps, dependencies, status)
+- User reviews -> modifies steps (reorder, add, remove) -> approves
+- User chooses execution: manual (step by step with confirmation) or autonomous (set duration, let it run)
+- During execution, steps update status (pending, in progress, done, failed)
+- The plan is a message in the thread. RRC selects it as a prerequisite during execution — the agent doesn't lose the plan across rounds.
+
 === Tool Permissions
 
 - Agent requests a write tool (file edit, bash) -> user sees pending tool call with details -> approves or denies
 - User configures per-thread permission defaults (allow/ask/deny per tool category)
-- Denied tool call -> agent sees denial, adjusts approach
+- Denied tool call -> agent sees denial, adjusts approach or asks user for clarification
 
 === Cross-Thread
 
