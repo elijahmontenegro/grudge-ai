@@ -159,15 +159,55 @@ Removes redundant edges: if A->B->C and A->C, remove A->C from the selection. Th
 
 Selected messages are ordered chronologically and placed in the model's input as ordinary conversation entries. No template, no label. Structurally indistinguishable from session history.
 
+=== RRC in the Agent Loop
+
+Every LLM call is an RRC selection event. Every LLM response is a carry-forward event. In an agentic tool chain, these compound across rounds.
+
+==== Per-Round Cycle
+
+A single user interaction may produce N rounds of tool calling. Each round is a full RRC cycle:
+
+----
+Round 1:
+  RRC select → forward to LLM → response (thinking + tool calls)
+  → carry-forward from thinking → execute tools → tool results become new messages
+
+Round 2:
+  RRC select (now informed by round 1 carry-forward) → forward to LLM → response (thinking + tool calls)
+  → carry-forward from thinking → execute tools → tool results become new messages
+
+Round N:
+  RRC select (informed by rounds 1..N-1 carry-forward) → forward to LLM → response (thinking + final answer)
+  → carry-forward from thinking
+----
+
+Every LLM response -- whether it ends with tool calls or a final answer -- contains thinking blocks. Every thinking block is carry-forward material. The engine improves WITHIN a single user interaction, not just across interactions.
+
+Round 10's selection is informed by 9 rounds of the model's own reasoning fed back through the QUD graph and DAG. The selection gets sharper each round as the engine learns what the model finds relevant.
+
+==== Why This Matters
+
+Agentic tool chains produce growing conversation histories. The standard approach (send full history every round) hits the context window and must compact -- losing information. RRC selects fresh every round from the full lossless corpus. No compaction. No information loss. And the selection is informed by carry-forward that compounds across rounds.
+
+==== Selection Events
+
+An RRC selection event occurs before every LLM call:
+
+- User sends a message → RRC selects → LLM call
+- Tool results ready → RRC selects → LLM call
+- Multiple tool results from one round → batched into one message → one RRC selection → one LLM call
+
+The number of selections per user interaction is 1 + N where N is the number of tool rounds.
+
 === Warm Carry-Forward
 
-The service parses the LLM's response stream and feeds extracted content back to the engine. The engine never calls an LLM directly.
+The service parses every LLM response stream and feeds extracted content back to the engine. The engine never calls an LLM directly.
 
 ==== Response Reasoning Extraction
 
-The model's response contains reasoning: thinking blocks, chain-of-thought, decision rationale, explicit references to prior context ("as we discussed when designing the auth module"). This reasoning reveals the conversation's dependency structure from the model's perspective -- prerequisites the cross-encoder may have missed.
+Every LLM response contains thinking blocks -- reasoning about why it's calling tools, what it expects to find, what prior context it's drawing on, what questions it's addressing. This reasoning reveals the conversation's dependency structure from the model's perspective.
 
-The service extracts this content from the response stream and passes it to the engine. Whether extraction requires an LLM call or direct parsing depends on the response format (structured thinking vs embedded natural language). This is the service's concern, not the engine's.
+The service extracts thinking blocks from the response stream and passes them to the engine. This happens every round, not just at the end of a tool chain.
 
 ==== QUD Graph Update
 
@@ -179,14 +219,16 @@ Extracted reasoning is the signal source for the QUD graph. The engine processes
 
 Enrichment is additive only -- it adds edges and updates QUD status toward resolution. It never removes edges or re-opens resolved QUDs. This prevents oscillation.
 
-==== Feedback Loop
+==== Compounding
 
-The carry-forward is "warm" because it improves with use:
+The carry-forward is "warm" because it compounds:
 
-1. RRC selects prerequisites and forwards to the model
-2. The model reasons about the conversation, producing a response
-3. The response reveals what the model found relevant
-4. That signal feeds back into the QUD graph and DAG
-5. Next request benefits from what the model learned
+1. RRC selects prerequisites, forwards to LLM
+2. LLM reasons about the conversation, responds with thinking + tool calls
+3. Thinking blocks reveal what the model found relevant
+4. Engine updates QUD graph and DAG with these signals
+5. Tools execute, results become new messages
+6. Next round's RRC selection is informed by steps 3-4
+7. Repeat -- each round benefits from all prior rounds' reasoning
 
-The model's own reasoning is a signal source for the prerequisite graph. The system gets better at selecting prerequisites the more it's used.
+The model's own reasoning is a signal source for the prerequisite graph. Within a single tool chain, the system gets progressively better at selecting what the model needs.
