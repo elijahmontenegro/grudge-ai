@@ -94,10 +94,12 @@ Three things make this different from every other agentic UI:
 // - Execution traces (step-by-step agent reasoning and action history)
 // - Agent state (current plan, progress, decision points, intervention surface)
 //
-// --- Message Display ---
-// - Rich content: text, code blocks, tool results, images
-// - Per-message citation indicator
+// --- Thread View (main area when inside a thread) ---
+// - Single column message stream, vertical scroll
+// - Tool executions and thinking blocks expand/collapse inline (standard agentic pattern)
+// - Citation indicator per message — expand inline to see RRC selection detail
 // - Streaming: tokens arrive in real time via subscription
+// - Rich content: text, code blocks, tool results, images
 //
 // --- Layout ---
 // - Persistent sidebar (always visible): thread list with state indicators (idle, running, paused)
