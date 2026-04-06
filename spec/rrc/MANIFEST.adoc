@@ -75,7 +75,7 @@ Research basis: NLI cross-encoders (DeBERTa-v3 family), PDTB discourse relation 
 
 ==== QUD (Questions Under Discussion) Graph
 
-The QUD graph captures what the cross-encoder cannot: long-range structural dependency through the conversation's question-answer flow.
+The QUD graph captures what the cross-encoder cannot: long-range structural dependency through the thread's question-answer flow.
 
 Every message addresses an implicit question and may raise new ones. If message M_47 raises a question and message M_312 answers it, M_47 is a prerequisite of M_312 -- even if they share no surface similarity and the cross-encoder would not score them highly as a pair.
 

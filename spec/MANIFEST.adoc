@@ -29,7 +29,7 @@
 
 2. **RRC Engine** (`spec/rrc`) -- A Go library implementing the {rrc-full} algorithm. Pure logic: prerequisite detection, selection scoring, payload assembly, native format restoration, warm carry-forward. No HTTP, no UI, no opinions about deployment. Imported by the service.
 
-3. **Service** (`spec/service`) -- The application. A system tray process that runs the RRC engine as an LLM proxy, handles agent orchestration, manages conversation storage, exposes a {api-protocol} API, and serves the web UI on localhost. One binary. The user opens their browser.
+3. **Service** (`spec/service`) -- The application. A system tray process that runs the RRC engine as an LLM proxy, handles agent orchestration, manages thread storage, exposes a {api-protocol} API, and serves the web UI on localhost. One binary. The user opens their browser.
 
 4. **Web UI** (`spec/web`) -- A {ui-framework} application providing the agentic interface -- not a chat clone. Full RRC introspection: what was selected, excluded, prerequisite scores, prompt derivation. Agent state, tool visualization, execution traces. Served by the service on localhost; the user opens a browser tab. UX is a first-class spec concern.
 
@@ -107,7 +107,7 @@ spidey/
 │   ├── proxy/                 #   RRC proxy path (HTTP, stream parsing)
 │   ├── agent/                 #   Agent path (ADK runner, RRC-as-LLM adapter)
 │   ├── adapter/               #   ADK genai <-> Spidey proto type conversion
-│   ├── storage/               #   SQLite: conversations, edges, scores, QUD graph
+│   ├── storage/               #   SQLite: threads, messages, edges, scores, QUD graph
 │   ├── session/               #   Session management (browser tab ↔ service state)
 │   ├── graph/                 #   GraphQL schema + resolvers (gqlgen)
 │   └── tray/                  #   System tray integration

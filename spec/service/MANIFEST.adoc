@@ -87,7 +87,7 @@ Independent of either request flow:
 - Stateless per-request handling (client provides corpus)
 
 ===== Agent Path
-- {api-protocol} API: full schema and resolvers (orchestration, conversations, RRC introspection, config)
+- {api-protocol} API: full schema and resolvers (orchestration, threads, RRC introspection, config)
 - {api-protocol} subscriptions: live agent state, streaming responses, RRC introspection during execution
 - Agent orchestration via ADK Go: LlmAgent, SequentialAgent, ParallelAgent, LoopAgent, agent transfer
 - Tool system via ADK Go: FunctionTool (auto-declaration from Go functions), Toolset (dynamic tool groups), MCP integration
@@ -161,7 +161,7 @@ Independent of either request flow:
 //   - QUD graph table
 //   - On startup: load into RRC engine's in-memory structures
 // - Session Management
-//   - Session binds a browser tab to service state (active conversation, agent loop, subscriptions)
+//   - Session binds a browser tab to service state (active thread, agent loop, subscriptions)
 //   - Reconnection: tab closes and reopens, UI reconnects to same session seamlessly
 //   - Service owns all state; UI is a view into it. No client-side persistence beyond session ID.
 //
