@@ -72,7 +72,7 @@ Independent of either request flow:
 
 *Agent Framework:* Google ADK Go (`google.golang.org/adk`, Apache 2.0)
 
-*Depends on:* `spec/core` (truth types, LLM/embedder/classifier interfaces), `spec/rrc` (RRC engine), ADK Go (agent orchestration, tool system, plugin system, session management)
+*Depends on:* `spec/core` (truth types, LLM/classifier interfaces), `spec/rrc` (RRC engine), ADK Go (agent orchestration, tool system, plugin system, session management)
 
 === Scope
 
@@ -92,11 +92,11 @@ Independent of either request flow:
 - Plugin system via ADK Go: lifecycle hooks (before/after agent, model, tool execution)
 - Thread storage: persistent, complete, unmodified history (lossless corpus guarantee)
 - RRC-as-LLM adapter: implements ADK's `model.LLM` interface, routes through RRC engine to actual LLM via core Completer
+- Warm carry-forward: extract thinking blocks from every LLM response, feed to RRC engine, accumulates across requests
 
 ===== Shared
-- RRC engine integration (calling `spec/rrc` library for both paths)
+- RRC engine integration (calling `spec/rrc` library — stateful for agent path, stateless for proxy path)
 - Provider routing: configuration for which upstream LLM to forward to
-- Warm carry-forward cache management
 
 ===== Infrastructure
 - System tray integration (Windows primary, cross-platform later)
@@ -107,7 +107,7 @@ Independent of either request flow:
 ==== Out of Scope
 
 - The RRC algorithm itself (belongs to `spec/rrc`; the service calls it)
-- LLM/embedder interface or adapter definitions (belongs to `spec/core`)
+- LLM/classifier interface or adapter definitions (belongs to `spec/core`)
 - Proto truth type definitions (belongs to `spec/core`)
 - Agentic UI, RRC introspection views, UX patterns (belongs to `spec/web`)
 - Cloud deployment or multi-tenancy

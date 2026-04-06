@@ -10,11 +10,16 @@
 
 *Name:* {project-name} {module-name}
 
-*Paradigm:* Stateful Algorithm Library
+*Paradigm:* Algorithm Library (stateful or stateless depending on caller)
 
-The RRC engine is a Go library implementing the {rrc-full} algorithm. It operates on data structures (prerequisite DAG, QUD graph, score cache) that the service owns and persists. The engine reads and writes these structures; the service is responsible for their storage and lifecycle.
+The RRC engine is a Go library implementing the {rrc-full} algorithm. It operates on data structures (prerequisite DAG, QUD graph, score cache) provided by the caller. The engine reads and writes these structures but does not own them.
 
-The service imports this library. The engine does not know it runs inside a proxy.
+Two modes:
+
+- **Stateful (agent path):** The service provides persistent data structures. The DAG, score cache, and QUD graph accumulate across requests. Carry-forward compounds. This is the full RRC experience.
+- **Stateless (proxy path):** The service provides ephemeral data structures per-request. The engine scores, selects, assembles, and returns. Nothing persists. Each request is independent.
+
+The engine does not know which mode it's running in. It operates on whatever structures the caller provides.
 
 === Stack
 
