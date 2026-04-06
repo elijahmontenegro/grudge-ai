@@ -4,13 +4,15 @@
 // RRC
 :rrc-full: Retrieval-Restored Continuation
 // Stack
-:lang: Go 1.26+
-:ui-framework: React 19
+:lang: Go 1.26.1
+:ui-framework: React 19.2.4
 :api-protocol: GraphQL
-:api-client: Apollo Client
-:api-server: gqlgen
-:codegen: protoc, gqlgen, graphql-codegen, go generate
+:api-client: Apollo Client 4
+:api-server: gqlgen v0.17.89
+:codegen: buf v1.67.0, gqlgen v0.17.89, graphql-codegen v6.2.1, go generate
 :repo-layout: Monorepo with discrete Go modules
+:agent-framework: Google Agent Development Kit (ADK) v1.0.0 (google.golang.org/adk, Apache 2.0)
+:build-tool: Vite 8.0.5
 // Dev environment
 :dev-lm-runtime: Ollama
 :dev-embedder-runtime: TEI (Hugging Face Text Embeddings Inference)
@@ -27,24 +29,26 @@
 
 1. **Core Library** (`spec/core`) -- A Go library providing provider-agnostic abstractions for language models, embeddings, and classifiers. Proto definitions are the truth types. The foundational dependency. Everything else is a consumer.
 
-2. **RRC Engine** (`spec/rrc`) -- A Go library implementing the {rrc-full} algorithm. Prerequisite detection, selection scoring, payload assembly, native format restoration, warm carry-forward. Stateful when the service provides persistent data structures (agent path), stateless when called per-request (proxy path). No HTTP, no UI, no opinions about deployment. Imported by the service.
+2. **RRC Engine** (`spec/rrc`) -- A Go library implementing the {rrc-full} algorithm. Prerequisite detection, selection scoring, payload assembly, native format restoration, warm carry-forward. Stateful when the service provides persistent data structures (agent path), stateless when called per-request (proxy path). No HTTP, no UI, no opinions about deployment. Depends on proto types only -- not on core. Defines its own consumer interfaces (Classifier, Completer). Imported by the service.
 
-3. **Service** (`spec/service`) -- The application. A system tray process that runs the RRC engine as an LLM proxy, handles agent orchestration, manages thread storage, exposes a {api-protocol} API, and serves the web UI on localhost. One binary. The user opens their browser.
+3. **Service** (`spec/service`) -- The application. A system tray process that runs the RRC engine as an LLM proxy, handles agent orchestration via {agent-framework}, manages thread storage, exposes a {api-protocol} API, and serves the web UI on `spidey.localhost:8420`. One binary. The user opens their browser.
 
 4. **Web UI** (`spec/web`) -- A {ui-framework} application providing the agentic interface -- not a chat clone. Full RRC introspection: what was selected, excluded, prerequisite scores, prompt derivation. Agent state, tool visualization, execution traces. Served by the service on localhost; the user opens a browser tab. UX is a first-class spec concern.
 
 === Dependency Graph
 
 ----
-core  <──  rrc  <──  service  ──>  web
-  │                    │
-  └────────────────────┘
-       (also direct)
+gen/go  <──  core  <──  service  ──>  web
+  │                       │
+  ├────── rrc   <─────────┘
+  │
+  (all Go modules depend on gen/go)
 ----
 
-- `core` depends on nothing internal. Proto truth types, interfaces, adapters.
-- `rrc` depends on `core` for types and classifier interface. Algorithm library, stateful or stateless depending on caller.
-- `service` depends on `core` + `rrc`. The application binary. Runs the RRC engine, orchestrates agents, serves the web UI, exposes proxy and {api-protocol} API.
+- `gen/go` depends on `google.golang.org/protobuf` only. Proto-generated Go types. The shared type language.
+- `core` depends on `gen/go`. Provider-agnostic interfaces, adapters.
+- `rrc` depends on `gen/go`. Defines its own consumer interfaces (Classifier, Completer) -- no import of `core`. Algorithm library, stateful or stateless depending on caller. Go structural typing ensures any `core` adapter satisfies `rrc`'s interfaces.
+- `service` depends on `gen/go` + `core` + `rrc`. The application binary. Runs the RRC engine, orchestrates agents via {agent-framework}, serves the web UI, exposes proxy and {api-protocol} API.
 - `web` is a {ui-framework} app. Talks to the service via {api-protocol} ({api-client}). Served as static assets by the service.
 
 === Stack
@@ -56,6 +60,10 @@ core  <──  rrc  <──  service  ──>  web
 *API Layer:* {api-protocol} -- server: {api-server} (Go), client: {api-client} (React)
 
 *Code Generation:* {codegen}
+
+*Agent Framework:* {agent-framework}
+
+*Build Tool (Web):* {build-tool}
 
 *Repository Layout:* {repo-layout}
 
@@ -87,49 +95,62 @@ spidey/
 │   ├── classifier.proto       #   ClassifyRequest/Response
 │   └── llm.proto              #   LLMMessage, CompletionRequest/Response, StreamChunk
 ├── gen/                       # Generated code output (not checked in)
-│   ├── go/spidey/v1/          #   Generated Go types from proto
-│   └── ts/                    #   Generated TypeScript types from GraphQL
-├── core/                      # Go module: abstractions, interfaces, adapters
+│   └── go/                    #   Go module: generated proto types
+│       ├── go.mod              #   depends on google.golang.org/protobuf only
+│       └── spidey/v1/          #   Generated Go types
+├── core/                      # Go module: provider-agnostic interfaces + adapters
 │   ├── go.mod
-│   ├── llm/                   #   LLM interface + provider adapters
-│   ├── classifier/            #   Classifier interface + adapters
-│   └── provider/              #   Provider lifecycle, config, capability discovery
-├── rrc/                       # Go module: RRC engine
+│   ├── completer.go           #   Completer interface
+│   ├── embedder.go            #   Embedder interface
+│   ├── classifier.go          #   Classifier interface
+│   ├── provider.go            #   Provider interface + registry
+│   ├── errors.go              #   Sentinel errors
+│   └── adapter/               #   Provider adapters (one package per provider)
+│       ├── ollama/             #   Completer, Embedder
+│       ├── anthropic/          #   Completer
+│       ├── openai/             #   Completer, Embedder (configurable base URL)
+│       ├── googleai/           #   Completer, Embedder
+│       ├── vllm/               #   Completer
+│       └── tei/                #   Embedder (/embed), Classifier (/predict)
+├── rrc/                       # Go module: RRC engine (depends on gen/go only, not core)
 │   ├── go.mod
-│   ├── engine.go              #   Public API surface
+│   ├── engine.go              #   Public API: NewEngine, OnMessage, Select, CarryForward, Fork, Merge
+│   ├── interfaces.go          #   Consumer-defined interfaces: Classifier, Completer
 │   ├── dag.go                 #   Prerequisite DAG (dual adjacency list)
 │   ├── qud.go                 #   QUD graph operations
-│   ├── scorer.go              #   Score fusion
-│   └── assembler.go           #   Payload assembly + transitive reduction
+│   ├── scorer.go              #   Score fusion, score cache
+│   ├── assembler.go           #   Payload assembly + transitive reduction
+│   ├── config.go              #   EngineConfig: thresholds, weights, score floor
+│   └── errors.go              #   Sentinel errors
 ├── service/                   # Go module: the application binary
 │   ├── go.mod
 │   ├── cmd/spidey/            #   main entrypoint
-│   ├── proxy/                 #   RRC proxy path (HTTP, stream parsing)
-│   ├── agent/                 #   Agent path (ADK runner, RRC-as-LLM adapter)
+│   ├── proxy/                 #   RRC proxy path (HTTP, format detection, stream parsing)
+│   ├── agent/                 #   Agent path (ADK runner, RRC-as-LLM adapter, tools, autonomous, subagents)
 │   ├── adapter/               #   ADK genai <-> Spidey proto type conversion
-│   ├── storage/               #   SQLite: threads, messages, edges, scores, QUD graph
+│   ├── storage/               #   SQLite: threads, messages, edges, scores, QUD graph, state
 │   ├── skills/                #   Skill loading, registration, execution
 │   ├── hooks/                 #   Lifecycle event hooks
-│   ├── prompt/                #   Template rendering, section memoization
-│   ├── graph/                 #   GraphQL schema + resolvers (gqlgen)
-│   └── tray/                  #   System tray integration
-├── web/                       # React app: agentic interface
+│   ├── prompt/                #   Template section assembly, memoization
+│   ├── graph/                 #   GraphQL schema + resolvers (gqlgen, model binding to proto types)
+│   ├── config/                #   Settings, XDG paths, keyring (go-keyring)
+│   └── tray/                  #   System tray (fyne.io/systray, cross-platform)
+├── web/                       # React app: agentic interface (see spec/web for internal structure)
 │   ├── package.json
-│   ├── src/
+│   ├── vite.config.ts
 │   ├── codegen.ts             #   graphql-codegen config
+│   ├── src/                   #   Atomic design: atoms, molecules, organisms, templates, pages
 │   └── dist/                  #   Build output (static assets served by service)
 ├── templates/                 # System prompt templates (.tmpl), version controlled
-│   ├── system.tmpl            #   Main agent system prompt
-│   ├── autonomous.tmpl        #   Autonomous mode context (if different)
-│   └── ...
+│   └── system.tmpl            #   Main template (sectional: stable + per-turn sections)
 ├── spec/                      # CCA specifications
 │   ├── MANIFEST.adoc          #   Root context (this file)
 │   ├── core/MANIFEST.adoc
 │   ├── rrc/MANIFEST.adoc
 │   ├── service/MANIFEST.adoc
 │   └── web/MANIFEST.adoc
-├── go.work                    # Go workspace linking core, rrc, service modules
-└── buf.yaml                   # Protobuf build config (buf)
+├── go.work                    # Go workspace linking gen/go, core, rrc, service modules
+└── buf.yaml                   # Protobuf build config (buf v1.67.0)
 ----
 
 === Scope
