@@ -104,7 +104,7 @@ OAuth 2.0 with PKCE flow. Three endpoints: authorize, token, refresh.
 
 \== Research
 
-include::research.adoc[]
+\include::research.adoc[]
 
 \== Approach
 
@@ -127,7 +127,7 @@ Exponential backoff: 1s, 2s, 4s. Max 3 retries.
 
 \== Critical Files
 
-include::existing-patterns.adoc[]
+\include::existing-patterns.adoc[]
 
 * `service/auth/handler.go` -- route registration
 * `service/auth/pkce.go` -- PKCE implementation
@@ -208,9 +208,10 @@ Markdown files with YAML frontmatter. User-extensible capabilities — domain-sp
 
 Loaded from (priority order):
 
-1. Bundled (shipped with Spidey in the binary)
-2. User (`$XDG_DATA_HOME/spidey/skills/`)
-3. Project (`.spidey/skills/` in mounted directory)
+1. User (`$XDG_DATA_HOME/spidey/skills/`)
+2. Project (`.spidey/skills/` in mounted directory)
+
+No bundled skills. Users create their own.
 
 Invoked from the web UI. Skill content is injected as message content (not system prompt) with argument substitution. Inline shell execution runs in the thread's sandbox.
 
@@ -260,8 +261,6 @@ Permission levels:
 Default permission set: read-only tools (file read, glob, grep, search) → Allow. Write tools (file edit, write, bash, code execution) → Ask. Destructive tools (rm, git push) → Ask with warning.
 
 Permissions are configurable per-thread. A thread working on a production codebase might deny destructive operations. A sandbox thread might allow everything. The sandbox itself provides a safety boundary — even "allow all" is contained.
-
-The default permission set: read tools allowed, write tools ask, destructive tools (rm, git push, etc.) ask with warning.
 
 **Auto-approve mode:** A permission mode where configured tool categories are pre-approved without prompting. For users who want reduced friction without full autonomous mode. Configured per-thread — which tools auto-approve, which still ask. Autonomous mode implies auto-approve for all tools. Auto-approve without autonomous means the user is still driving, just with fewer interruptions.
 
@@ -565,8 +564,6 @@ CREATE TABLE embeddings (
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ----
-
-On startup: load edges, scores, and QUD graphs from SQLite into RRC engine's in-memory structures via `Engine.LoadDAG`, `Engine.LoadScoreCache`, `Engine.LoadQUDGraph`.
 
 === Skill Frontmatter Schema
 

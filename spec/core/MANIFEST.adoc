@@ -13,7 +13,7 @@
 
 *Paradigm:* Provider-Agnostic Abstraction Library
 
-The core library is the foundational Go module. It defines the proto truth types, abstraction interfaces, and provider/embedder/classifier adapters that all other modules consume. It has no opinion on RRC, orchestration, UI, or deployment.
+The core library is the foundational Go module. It defines the abstraction interfaces and provider/embedder/classifier adapters. Proto truth types are defined in `proto/spidey/v1/` and generate to `gen/go/spidey/v1/` -- core imports them, it does not own them. Core has no opinion on RRC, orchestration, UI, or deployment.
 
 === Stack
 

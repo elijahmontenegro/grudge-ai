@@ -17,7 +17,7 @@
 
 *Paradigm:* RRC-Native Agentic Interface
 
-The web UI is a {ui-framework} application served by the service at `spidey.localhost`. The browser opens automatically when the service launches. It is the agentic interface -- not a chat clone.
+The web UI is a {ui-framework} application served by the service at `spidey.localhost:8420`. The browser opens automatically when the service launches. It is the agentic interface -- not a chat clone.
 
 Three things make this different from every other agentic UI:
 
@@ -269,7 +269,7 @@ Accessible from tray menu ("Settings...") and from within the web UI.
 
 === UI Architecture
 
-shadcn/ui source-owned primitives built on the unified `radix-ui` package + {css-framework}. Copied into project, modified directly. {css-framework} v4 uses CSS-first configuration via `@theme` directives in CSS -- no `tailwind.config.ts`. Strict atomic design methodology: atoms compose into molecules, molecules into organisms, organisms into templates, templates into pages. Each component self-contained and composable.
+shadcn/ui source-owned primitives built on the unified `radix-ui` package + {css-framework}. Copied into project, modified directly. {css-framework} uses CSS-first configuration via `@theme` directives in CSS -- no `tailwind.config.ts`. Strict atomic design methodology: atoms compose into molecules, molecules into organisms, organisms into templates, templates into pages. Each component self-contained and composable.
 
 {api-client} for all service communication: queries, mutations, subscriptions. Generated TypeScript types from {api-protocol} schema via {codegen}. Static asset build output served by the service.
 
