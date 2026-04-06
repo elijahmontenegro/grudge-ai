@@ -498,76 +498,38 @@ The {api-protocol} schema is authored as API surface design. Types reference pro
 - `subagentProgress(threadId: ID!): SubagentProgress` -- fork state, task, progress
 - `threadStateChanges: ThreadStateEvent` -- all threads, for sidebar real-time updates
 
-=== SQLite Schema
+=== Persistence
 
 Single embedded database at `$XDG_DATA_HOME/spidey/spidey.db`. WAL mode. Single connection pool.
 
+==== Proto-Mapped Tables
+
+Proto types are the source of truth. Table schemas derive from proto field definitions. Column definitions are generated, not hand-authored.
+
+[cols="1,2,2"]
+|===
+| Proto Type | Table | Notes
+
+| `Thread` | `threads` | `working_dirs` normalized to `thread_working_dirs` join table (repeated field). All other fields map 1:1.
+| `Message` | `messages` | `content` stored as proto-encoded BLOB (repeated ContentBlock, not flattened). Indexed on `(thread_id, position)`.
+| `Edge` | `edges` | Primary key `(from_message_id, to_message_id)`. Indexed on `to_message_id` for backward traversal.
+| `QUD` | `quds` | `addressed_by` stored as JSON array (repeated string). Indexed on `thread_id`.
+| Score cache | `scores` | Key: `(from_message_id, to_message_id)`. Value: cross-encoder score. Not a proto type — derived artifact from classifier.
+|===
+
+On startup: load edges, scores, and QUD graphs from SQLite into RRC engine's in-memory structures via `Engine.LoadDAG`, `Engine.LoadScoreCache`, `Engine.LoadQUDGraph`.
+
+==== Service-Specific Tables
+
+These do not correspond to proto types. They are service persistence concerns — authored, not generated.
+
 [source,sql]
 ----
-CREATE TABLE threads (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    sandboxed BOOLEAN NOT NULL DEFAULT TRUE,
-    parent_thread_id TEXT REFERENCES threads(id),  -- NULL for root threads
-    branch_point_position INTEGER,                  -- position where branch diverged
-    archived_at TIMESTAMP,                          -- NULL = active, set = archived
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE thread_working_dirs (
-    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-    path TEXT NOT NULL,
-    PRIMARY KEY (thread_id, path)
-);
-
-CREATE TABLE messages (
-    id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-    role INTEGER NOT NULL,
-    content BLOB NOT NULL,  -- proto-encoded repeated ContentBlock
-    position INTEGER NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX idx_messages_thread_position ON messages(thread_id, position);
-
-CREATE TABLE edges (
-    from_message_id TEXT NOT NULL,
-    to_message_id TEXT NOT NULL,
-    score REAL NOT NULL,
-    source INTEGER NOT NULL,  -- EdgeSource enum
-    cross_encoder_score REAL NOT NULL,
-    qud_weight REAL NOT NULL DEFAULT 0,
-    temporal_proximity REAL NOT NULL,
-    detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    from_thread_id TEXT NOT NULL,
-    to_thread_id TEXT NOT NULL,
-    PRIMARY KEY (from_message_id, to_message_id)
-);
-CREATE INDEX idx_edges_to ON edges(to_message_id);
-
-CREATE TABLE scores (
-    from_message_id TEXT NOT NULL,
-    to_message_id TEXT NOT NULL,
-    score REAL NOT NULL,
-    PRIMARY KEY (from_message_id, to_message_id)
-);
-
-CREATE TABLE quds (
-    id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-    question TEXT NOT NULL,
-    established_by TEXT NOT NULL,
-    parent_qud_id TEXT,
-    status INTEGER NOT NULL DEFAULT 1,  -- QUDStatus enum
-    addressed_by TEXT NOT NULL DEFAULT '[]'  -- JSON array of message IDs
-);
-CREATE INDEX idx_quds_thread ON quds(thread_id);
-
 CREATE TABLE plans (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
     slug TEXT NOT NULL UNIQUE,
-    dir_path TEXT NOT NULL,  -- absolute path to plan directory
+    dir_path TEXT NOT NULL,  -- absolute path to plan artifact directory
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_plans_thread ON plans(thread_id);
@@ -584,7 +546,7 @@ CREATE TABLE agent_state (
     mode INTEGER NOT NULL DEFAULT 0,    -- normal=0, autonomous=1
     round_count INTEGER NOT NULL DEFAULT 0,
     started_at TIMESTAMP,
-    duration_limit TEXT,  -- time.Duration string, NULL if not autonomous
+    duration_limit TEXT,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -599,7 +561,7 @@ CREATE INDEX idx_input_history_thread ON user_input_history(thread_id);
 CREATE TABLE embeddings (
     message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
     vector BLOB NOT NULL,  -- float32 array, binary encoded
-    model TEXT NOT NULL,    -- which embedding model produced this
+    model TEXT NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ----
