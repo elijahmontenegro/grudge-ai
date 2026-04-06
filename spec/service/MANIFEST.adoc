@@ -2,10 +2,14 @@
 :project-name: Spidey
 :module-name: Service
 :rrc-full: Retrieval-Restored Continuation
-:lang: Go 1.26+
+:lang: Go 1.26.1
 :api-protocol: GraphQL
-:api-server: gqlgen
-:codegen: gqlgen, go generate
+:api-server: gqlgen v0.17.89
+:api-client: Apollo Client 4
+:codegen: gqlgen v0.17.89, go generate
+:agent-framework: Google ADK Go v1.0.0 (google.golang.org/adk, Apache 2.0)
+:tray-lib: fyne.io/systray v1.10.0
+:port: 8420
 
 == Context
 
@@ -79,7 +83,7 @@ No continuation prompt. No injected instructions. The selection IS the context. 
 
 Emergent behavior is the feature. The model finishes a task, gets another round, and reasons about what comes next — review, edge cases, documentation, pivoting to something it noticed. The direction is not prescribed.
 
-- **Duration:** User-set timer (5m, 30m, 2h, 8h, up to 2w). The loop exits when the timer expires or the user stops it.
+- **Duration:** Freeform `time.Duration` with 2-week maximum. The loop exits when the timer expires or the user stops it.
 - **Controls:** Play (start), Pause (halt — user reviews, course corrects, resumes), Stop (end autonomous mode).
 - **Thread state:** A thread in autonomous mode shows its running state, elapsed time, and round count. Visible from the thread list.
 
@@ -113,6 +117,8 @@ Per-turn sections (recomputed each request):
 - Git status of mounted directories
 - Active plan content (if any)
 - Working directory file tree
+
+The template system is sectional. `system.tmpl` is the main template assembled from stable and per-turn sections at runtime. Autonomous mode does not require a separate template -- the behavioral difference is loop control, not prompt structure.
 
 Templates are not user-facing. They are engineering artifacts maintained in the codebase.
 
@@ -181,9 +187,11 @@ Tools are permission-gated. The agent cannot execute a tool without authorizatio
 
 Permission levels:
 
-- **Allow** -- Tool executes without prompting. Appropriate for read-only tools (file read, glob, grep, search).
-- **Ask** -- User is prompted before execution. Appropriate for write tools (file edit, write, bash, code execution). The web UI shows the pending tool call, user approves or denies.
+- **Allow** -- Tool executes without prompting.
+- **Ask** -- User is prompted before execution. The web UI shows the pending tool call, user approves or denies.
 - **Deny** -- Tool is blocked. User or policy has forbidden it.
+
+Default permission set: read-only tools (file read, glob, grep, search) → Allow. Write tools (file edit, write, bash, code execution) → Ask. Destructive tools (rm, git push) → Ask with warning.
 
 Permissions are configurable per-thread. A thread working on a production codebase might deny destructive operations. A sandbox thread might allow everything. The sandbox itself provides a safety boundary — even "allow all" is contained.
 
@@ -196,10 +204,10 @@ The default permission set: read tools allowed, write tools ask, destructive too
 The service configures three model roles:
 
 - **Main model** -- The user's LLM. Reasoning, tool use, responses. Configured by the user (Anthropic, OpenAI, Ollama, etc.).
-- **Cross-encoder** -- NLI model for pairwise dependency scoring. Runs on TEI or equivalent classifier endpoint.
-- **Small fast model** -- Internal utility. QUD extraction from thinking blocks, annotations, autocomplete, tool rationale. Near-free per call. Opinionated default (e.g., small model on user's Ollama) or user-configured.
+- **Cross-encoder** -- NLI model for pairwise dependency scoring. The Classifier interface is provider-agnostic. Development environment uses TEI.
+- **Small fast model** -- Internal utility. QUD extraction from thinking blocks, annotations, autocomplete, tool rationale. User configures during onboarding -- same Completer interface and provider selection as the main model. Sub-second latency required for autocomplete; multi-second acceptable for QUD extraction. Recommended models: sub-1B extraction-focused (Osmosis-Structure-0.6B, NuExtract-tiny, Qwen3.5-0.8B). Autocomplete uses a per-thread store of user input history as context -- the small model predicts likely next input based on thread context and input history.
 
-All three use core's provider-agnostic interfaces (Completer for main + small fast, Classifier for cross-encoder).
+All three use provider-agnostic interfaces (Completer for main + small fast, Classifier for cross-encoder). The RRC engine defines its own consumer interfaces that any core adapter satisfies via Go structural typing.
 
 ==== First Run
 
@@ -218,9 +226,9 @@ All three model roles must be configured. The system does not start without them
 
 Independent of either request flow:
 
-- **System tray** -- Tray icon (spider), lifecycle management, status indicators. On launch: service starts, tray icon appears, browser opens automatically to `spidey.localhost`. Context menu: Open Spidey, Settings, Quit Spidey. Double-click opens browser.
-- **Local DNS** -- The service binds to `spidey.localhost` (RFC 6761 reserves `.localhost` for loopback; modern browsers resolve it natively). No DNS configuration needed.
-- **Static asset serving** -- Serves the web UI at `spidey.localhost`. The browser opens automatically on launch.
+- **System tray** -- Cross-platform via {tray-lib}. Tray icon (spider), lifecycle management, status indicators. On launch: service starts, tray icon appears, browser opens automatically to `spidey.localhost:{port}`. Context menu: Open Spidey, Settings, Quit Spidey. Double-click opens browser.
+- **Local DNS** -- The service binds to `spidey.localhost:{port}` (RFC 6761 reserves `.localhost` for loopback; modern browsers resolve it natively). Port {port} avoids elevated privileges required by port 80. No DNS configuration needed.
+- **Static asset serving** -- Serves the web UI at `spidey.localhost:{port}`. The browser opens automatically on launch.
 
 === Stack
 
@@ -230,9 +238,17 @@ Independent of either request flow:
 
 *Code Generation:* {codegen}
 
-*Agent Framework:* Google ADK Go (`google.golang.org/adk`, Apache 2.0)
+*Agent Framework:* {agent-framework}
 
-*Depends on:* `spec/core` (truth types, LLM/classifier interfaces), `spec/rrc` (RRC engine), ADK Go (agent orchestration, tool system, plugin system)
+*System Tray:* {tray-lib}
+
+*Persistence:* `modernc.org/sqlite` (SQLite 3.51.3)
+
+*Secrets:* `zalando/go-keyring v0.2.6` (macOS Keychain, Linux Secret Service, Windows Credential Manager)
+
+*Container:* Docker Engine API v1.53
+
+*Depends on:* `gen/go/spidey/v1` (proto types), `spec/core` (LLM/classifier interfaces, provider adapters), `spec/rrc` (RRC engine), {agent-framework}
 
 === Scope
 
@@ -264,7 +280,7 @@ Independent of either request flow:
 - Provider routing: configuration for which upstream LLM to forward to
 
 ===== Infrastructure
-- System tray integration (Windows primary, cross-platform later)
+- Cross-platform system tray via {tray-lib} (macOS, Linux, Windows)
 - Service lifecycle: start, stop, health check, configuration
 - Static asset serving: web UI files on localhost
 - Service management UI: lightweight status/config accessible from tray
@@ -279,64 +295,277 @@ Independent of either request flow:
 
 == Implementation
 
-// Implementation sections to be specified:
-//
-// --- Message Arrival Pipeline (shared, runs on every new message) ---
-// - Cross-encoder scoring: evaluate new message against all predecessors via core classifier interface, cache scores, add edges to RRC engine's prerequisite DAG
-// - Persist new edges and scores to SQLite
-//
-// --- Proxy Path ---
-// - HTTP Proxy (endpoint, request interception, LLM API format compatibility)
-// - Proxy Request Pipeline (receive -> extract corpus -> trigger message arrival pipeline for new messages -> call RRC engine for subgraph extraction -> assemble payload -> forward -> stream back)
-// - Response Stream Parsing (SSE/chunked passthrough with concurrent reasoning extraction)
-// - Warm Carry-Forward Feeding (extract reasoning content + QUD signals from response, feed to RRC engine)
-// - Proxy-Specific Constraints (stateless per-request, client-owned corpus, transparent to client)
-//
-// --- Agent Path ---
-// - RRC-as-LLM Adapter
-//   - Implements ADK's model.LLM interface
-//   - ADK calls GenerateContent() -> adapter calls RRC engine for selection -> assembles payload -> forwards to real LLM via core Completer
-//   - Parses response stream for thinking blocks -> feeds carry-forward to RRC engine
-//   - Returns response to ADK. ADK never knows RRC was involved.
-//   - Adapter converts between ADK genai types <-> Spidey proto types (core handles the actual provider abstraction)
-// - ADK Agent Configuration
-//   - LlmAgent as primary agent type
-//   - Tool registration: FunctionTools for built-in capabilities, McpToolset for MCP servers
-//   - Plugin registration: RRC introspection plugin (exposes selection data per round), logging plugin
-//   - Thread-backed state: SQLite (shared with thread storage)
-// - GraphQL API (schema, resolvers, subscriptions)
-//   - Per-round events pushed via subscription: streaming tokens, tool executions, RRC selection results, agent state
-// - Agent Loop (driven by ADK runner, per-round RRC cycle happens inside the LLM adapter)
-//   - Every LLM call is an RRC selection event (inside the adapter)
-//   - Every LLM response is a carry-forward event (inside the adapter)
-//   - Tool execution handled by ADK's tool system (FunctionTool, concurrency via ADK)
-//   - Tool results batched by ADK -> next LLM call -> adapter runs RRC again
-// - RRC Introspection Data (expose prerequisite DAG, QUD graph, scores, selection rationale via GraphQL)
-//
-// --- Shared Foundation ---
-// - RRC Engine Integration (shared instance, both paths call the same engine with the same cached artifacts)
-// - Thread Storage (format, persistence, lossless guarantee, how proxy path receives corpus vs agent path reads from storage)
-// - Provider Routing (upstream LLM config, endpoint management, shared across both paths)
-// - Storage (SQLite, single embedded database for all persistent state)
-//   - Threads table + Messages table (lossless corpus)
-//   - Prerequisite edges table (indexed on both from and to message IDs)
-//   - Score cache table (keyed by message pair)
-//   - QUD graph table
-//   - On startup: load into RRC engine's in-memory structures
-// - Browser Tab State
-//   - Tab binds to service state (active thread, agent loop, subscriptions)
-//   - Reconnection: tab closes and reopens, UI reconnects seamlessly
-//   - Service owns all state; UI is a view into it. No client-side persistence beyond a tab identifier.
-//
-// --- Payload Sizing ---
-// - Send full ranked selection from RRC engine to LLM
-// - On context-length error: drop lowest-scored message, retry
-// - Repeat until payload fits (error-driven backoff)
-// - No tokenizer, no token estimation, no context window assumptions
-//
-// --- Infrastructure ---
-// - Tray Integration (Windows systray, spider icon, context menu: Open Spidey / Settings / Quit Spidey)
-// - Launch Behavior (service starts -> tray icon appears -> browser opens to spidey.localhost automatically)
-// - Local DNS (bind to spidey.localhost, RFC 6761 .localhost loopback, no configuration)
-// - Service Lifecycle (start, stop, health, config reload)
-// - Static Asset Serving (web UI at spidey.localhost)
+=== File Tree
+
+----
+service/
+├── go.mod
+├── cmd/spidey/
+│   └── main.go              # Entrypoint: tray, server, lifecycle
+├── proxy/
+│   ├── handler.go           # HTTP handler, format detection, stream passthrough
+│   └── parser.go            # Response stream parsing, carry-forward extraction
+├── agent/
+│   ├── runner.go            # ADK agent runner, RRC-as-LLM adapter
+│   ├── tools.go             # Tool definitions (Bash, FileRead, etc.)
+│   ├── autonomous.go        # Autonomous loop: override stop, empty message, timer
+│   └── subagent.go          # Fork/merge lifecycle, ParallelAgent coordination
+├── adapter/
+│   └── genai.go             # ADK genai <-> Spidey proto type conversion
+├── storage/
+│   ├── db.go                # SQLite connection, migrations, WAL config
+│   ├── threads.go           # Thread CRUD
+│   ├── messages.go          # Message storage (lossless corpus)
+│   ├── edges.go             # DAG edge persistence
+│   ├── scores.go            # Score cache persistence
+│   ├── quds.go              # QUD graph persistence
+│   ├── viewstate.go         # UI view state persistence (scroll, expanded, drafts)
+│   ├── agentstate.go        # Agent execution state persistence
+│   └── plans.go             # Plan document persistence
+├── skills/
+│   └── loader.go            # Skill discovery: bundled, user, project
+├── hooks/
+│   └── hooks.go             # Lifecycle event dispatch, trust gating
+├── prompt/
+│   ├── template.go          # Section assembly, memoization
+│   └── sections.go          # Stable + per-turn section definitions
+├── graph/
+│   ├── schema.graphql       # GraphQL schema (gqlgen source)
+│   ├── resolver.go          # Generated resolver stubs
+│   └── model.go             # gqlgen model binding config (maps to proto Go types)
+├── config/
+│   ├── settings.go          # Settings type, load/save from XDG
+│   └── keyring.go           # API key storage via go-keyring
+└── tray/
+    └── tray.go              # System tray: icon, menu, browser launch
+----
+
+=== Secrets
+
+API keys stored in OS credential store via `zalando/go-keyring v0.2.6` (macOS Keychain, Linux Secret Service, Windows Credential Manager). Non-secret configuration (endpoints, model names, preferences) in `$XDG_CONFIG_HOME/spidey/config.json`.
+
+=== Proxy Routes
+
+`POST /v1/chat/completions` -- OpenAI Chat Completions format. Detected by presence of `model` and `messages` fields with OpenAI message structure.
+
+`POST /v1/messages` -- Anthropic Messages format. Detected by presence of `model` and `messages` fields with Anthropic message structure.
+
+Format detected from request body structure. Response streamed in same format as request. Additional format support added via core provider adapters -- new adapter = new proxy format.
+
+=== {api-protocol} Schema
+
+The {api-protocol} schema is authored as API surface design. Types reference proto-generated Go types via gqlgen model binding (`gqlgen.yml` maps GraphQL types to generated proto Go types in `gen/go/spidey/v1/`).
+
+==== Queries
+
+- `threads: [Thread]` -- all threads with state indicators
+- `thread(id: ID!): Thread` -- single thread by ID
+- `messages(threadId: ID!, limit: Int, offset: Int): [Message]` -- paginated messages in thread
+- `selectionResult(eventId: ID!): SelectionResult` -- RRC selection for a specific event
+- `qudGraph(threadId: ID!): QUDGraph` -- current QUD graph state for a thread
+- `settings: Settings` -- current configuration
+- `viewState(threadId: ID!): ViewState` -- persisted UI state for a thread
+
+==== Mutations
+
+- `createThread(name: String, workingDirs: [String!]): Thread`
+- `updateThread(id: ID!, name: String, workingDirs: [String!], sandboxed: Boolean): Thread`
+- `deleteThread(id: ID!): Boolean`
+- `sendMessage(threadId: ID!, content: String!, scope: SelectionScope): Message`
+- `stopAgent(threadId: ID!): Boolean`
+- `pauseAgent(threadId: ID!): Boolean`
+- `resumeAgent(threadId: ID!, correction: String): Boolean`
+- `startAutonomous(threadId: ID!, prompt: String!, duration: String!): Boolean`
+- `approveToolCall(callId: ID!): Boolean`
+- `denyToolCall(callId: ID!, reason: String): Boolean`
+- `updateSettings(input: SettingsInput!): Settings`
+- `enterPlanMode(threadId: ID!): Boolean`
+- `approvePlan(threadId: ID!, executionMode: ExecutionMode!): Boolean`
+- `saveViewState(threadId: ID!, state: ViewStateInput!): ViewState`
+
+==== Subscriptions
+
+- `messageStream(threadId: ID!): StreamEvent` -- streaming tokens, new messages
+- `agentState(threadId: ID!): AgentState` -- running, paused, idle, round count
+- `toolExecution(threadId: ID!): ToolExecution` -- tool calls, approvals, results
+- `subagentProgress(threadId: ID!): SubagentProgress` -- fork state, task, progress
+- `threadStateChanges: ThreadStateEvent` -- all threads, for sidebar real-time updates
+
+=== SQLite Schema
+
+Single embedded database at `$XDG_DATA_HOME/spidey/spidey.db`. WAL mode. Single connection pool.
+
+[source,sql]
+----
+CREATE TABLE threads (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    sandboxed BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE thread_working_dirs (
+    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    PRIMARY KEY (thread_id, path)
+);
+
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    role INTEGER NOT NULL,
+    content BLOB NOT NULL,  -- proto-encoded repeated ContentBlock
+    position INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_messages_thread_position ON messages(thread_id, position);
+
+CREATE TABLE edges (
+    from_message_id TEXT NOT NULL,
+    to_message_id TEXT NOT NULL,
+    score REAL NOT NULL,
+    source INTEGER NOT NULL,  -- EdgeSource enum
+    cross_encoder_score REAL NOT NULL,
+    qud_weight REAL NOT NULL DEFAULT 0,
+    temporal_proximity REAL NOT NULL,
+    detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    from_thread_id TEXT NOT NULL,
+    to_thread_id TEXT NOT NULL,
+    PRIMARY KEY (from_message_id, to_message_id)
+);
+CREATE INDEX idx_edges_to ON edges(to_message_id);
+
+CREATE TABLE scores (
+    from_message_id TEXT NOT NULL,
+    to_message_id TEXT NOT NULL,
+    score REAL NOT NULL,
+    PRIMARY KEY (from_message_id, to_message_id)
+);
+
+CREATE TABLE quds (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    established_by TEXT NOT NULL,
+    parent_qud_id TEXT,
+    status INTEGER NOT NULL DEFAULT 1,  -- QUDStatus enum
+    addressed_by TEXT NOT NULL DEFAULT '[]'  -- JSON array of message IDs
+);
+CREATE INDEX idx_quds_thread ON quds(thread_id);
+
+CREATE TABLE plans (
+    thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE view_state (
+    thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+    state BLOB NOT NULL,  -- JSON-encoded ViewState
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE agent_state (
+    thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+    status INTEGER NOT NULL DEFAULT 0,  -- idle=0, running=1, paused=2
+    mode INTEGER NOT NULL DEFAULT 0,    -- normal=0, autonomous=1
+    round_count INTEGER NOT NULL DEFAULT 0,
+    started_at TIMESTAMP,
+    duration_limit TEXT,  -- time.Duration string, NULL if not autonomous
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE user_input_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    input TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_input_history_thread ON user_input_history(thread_id);
+----
+
+On startup: load edges, scores, and QUD graphs from SQLite into RRC engine's in-memory structures via `Engine.LoadDAG`, `Engine.LoadScoreCache`, `Engine.LoadQUDGraph`.
+
+=== Skill Frontmatter Schema
+
+[source,yaml]
+----
+name: string       # required, unique identifier
+description: string # required, one-line description
+when_to_use: string # when this skill should be invoked
+allowed_tools:      # tools this skill may use
+  - string
+arguments:          # skill arguments
+  - name: string
+    type: string    # "string", "boolean", "number"
+    required: boolean
+    description: string
+----
+
+=== Hook Configuration Schema
+
+Configured in `$XDG_CONFIG_HOME/spidey/settings.json` under `hooks`:
+
+[source,json]
+----
+{
+  "hooks": [
+    {
+      "event": "PreToolUse",
+      "command": "/path/to/script.sh",
+      "match": "Bash*",
+      "timeout": "10s"
+    }
+  ]
+}
+----
+
+Fields: `event` (enum: PreToolUse, PostToolUse, ThreadStart, ThreadEnd, PreCarryForward, PostCarryForward, UserPromptSubmit), `command` (shell command), `match` (optional glob for tool name matching), `timeout` (duration, default 10s).
+
+=== Settings Schema
+
+`$XDG_CONFIG_HOME/spidey/config.json`:
+
+[source,json]
+----
+{
+  "providers": {
+    "main": {"adapter": "anthropic", "model": "claude-sonnet-4-20250514", "base_url": "https://api.anthropic.com"},
+    "classifier": {"adapter": "tei", "model": "cross-encoder/nli-deberta-v3-base", "base_url": "http://localhost:8080"},
+    "small_fast": {"adapter": "ollama", "model": "osmosis-structure-0.6b", "base_url": "http://localhost:11434"}
+  },
+  "permissions": {
+    "FileRead": "allow",
+    "Bash": "ask",
+    "FileWrite": "ask"
+  },
+  "hooks": [],
+  "preferences": {
+    "name": "John Doe",
+    "theme": "system"
+  }
+}
+----
+
+API keys are NOT stored in this file. They are stored in the OS credential store via go-keyring, keyed by provider adapter name.
+
+=== Concurrency
+
+- **RWMutex** on global DAG and score cache: concurrent reads during selection, exclusive writes during scoring.
+- **Per-thread QUD graphs** are naturally isolated (one thread = one QUD graph = no contention).
+- **SQLite WAL mode**, single connection pool. Concurrent readers, single writer.
+- **Agent loop** sequential per thread. One active LLM call per thread at a time.
+- **Goroutine-per-request** for proxy path (stateless, no shared state between requests).
+- **Subagents** run in separate goroutines. Fork creates an isolated Engine copy. No shared mutable state between parent and fork during execution. Merge acquires write lock on parent's data structures.
+
+=== Error Handling
+
+Fail fast. No retries except payload sizing backoff (error-driven, not failure masking).
+
+- **Proxy path:** Map upstream HTTP status codes. 200 on success. 502 on provider unreachable. 504 on provider timeout. 422 on context-length error (after backoff exhaustion).
+- **{api-protocol} path:** Standard {api-protocol} error extensions with error type field. Error types: `PROVIDER_UNAVAILABLE`, `CLASSIFIER_UNAVAILABLE`, `CONTEXT_LENGTH`, `TOOL_DENIED`, `AGENT_ERROR`.
+- **Subscription errors:** Error event pushed via subscription. Client displays inline in thread.
+
+=== Performance
+
+Performance optimization is explicitly deferred. Correctness and completeness are the targets. O(N) pairwise scoring per message arrival is the accepted cost of prerequisite detection accuracy. Complexity bounds are stated in `spec/rrc`. The system may be slow; it must not be wrong.
