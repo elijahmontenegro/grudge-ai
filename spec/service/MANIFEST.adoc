@@ -19,10 +19,10 @@ The service is the application binary. It runs as a system tray process. Two dis
 
 ==== Proxy Path (third-party clients)
 
-A transparent RRC proxy. Third-party clients send standard LLM API requests -- they don't know the service exists. The proxy intercepts the request, calls the RRC engine to select prerequisites and assemble the payload, forwards to the upstream LLM, and streams the response back. On the return path, the proxy parses the response stream and feeds extracted reasoning content to the RRC engine for warm carry-forward.
+A transparent RRC proxy. Third-party clients send standard LLM API requests -- they don't know the service exists. The proxy intercepts the request, runs the RRC engine statelessly (score, select, assemble), forwards to the upstream LLM, and streams the response back. Nothing persists. No DAG, no QUD graph, no carry-forward accumulation. Each request is independent.
 
 - **Entry point:** HTTP endpoint (standard LLM API format)
-- **State model:** Stateless per-request. The client owns its corpus and sends it every time.
+- **State model:** Stateless. The client owns its corpus and sends it every time. The proxy does not store messages, scores, or edges across requests.
 - **Client awareness:** None. The client doesn't know RRC is involved.
 - **Response:** Streamed passthrough. The client sees a normal LLM response.
 
@@ -45,10 +45,8 @@ The web UI issues {api-protocol} requests. ADK runs the agent loop. RRC sits bet
 
 Both paths share:
 
-- **RRC engine** -- The same library instance handles prerequisite detection and payload assembly for both paths.
-- **Thread storage** -- The proxy path receives the corpus per-request from the client. The agent path reads from server-owned persistent storage. Both feed into the same RRC engine.
+- **RRC engine** -- The same engine code, two modes. The proxy path runs it statelessly (no persistence). The agent path runs it statefully (global DAG, per-thread QUD, compounding carry-forward).
 - **Provider routing** -- Both paths forward to the same upstream LLM, configured the same way.
-- **Warm carry-forward** -- Reasoning extracted from LLM responses enriches future selection for both paths.
 
 ==== Payload Sizing
 
