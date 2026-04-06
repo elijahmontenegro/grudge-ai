@@ -53,4 +53,5 @@ message StreamChunk {
   }
   bool done = 4;
   optional Usage usage = 5;
+  optional string error = 6;  // Set on stream failure (done=true + error = failure)
 }

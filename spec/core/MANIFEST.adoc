@@ -123,31 +123,37 @@ Each adapter implements `Provider` for a specific backend. Configuration is adap
 
 ==== Ollama
 - Supports: Completer, Embedder
+- Target API: Ollama HTTP API (as of v0.20.x)
 - Endpoint: configurable HTTP base URL
 - Models: whatever is pulled locally
 
 ==== Anthropic
 - Supports: Completer
-- Endpoint: Anthropic Messages API
-- Auth: API key
+- Target API: Anthropic Messages API (`anthropic-version: 2023-06-01`)
+- Endpoint: configurable base URL (default: `https://api.anthropic.com`)
+- Auth: API key (`x-api-key` header)
 
 ==== OpenAI
 - Supports: Completer, Embedder
-- Endpoint: OpenAI API (or any OpenAI-compatible endpoint -- configurable base URL)
-- Auth: API key
+- Target API: OpenAI `/v1/` (Chat Completions, Embeddings)
+- Endpoint: configurable base URL (default: `https://api.openai.com`; any OpenAI-compatible endpoint)
+- Auth: API key (`Authorization: Bearer` header)
 
 ==== Google AI
 - Supports: Completer, Embedder
+- Target API: Gemini API `v1` (stable)
 - Endpoint: Gemini API
 - Auth: API key
 
 ==== vLLM
 - Supports: Completer
-- Endpoint: OpenAI-compatible API (configurable base URL)
+- Target API: OpenAI-compatible `/v1/` (as of vLLM 0.14.x)
+- Endpoint: configurable base URL
 - Auth: API key is a string config field. Empty string: adapter sends no `Authorization` header.
 
 ==== TEI
 - Supports: Embedder, Classifier
+- Target API: TEI HTTP endpoints (as of TEI 1.7.x)
 - Endpoint: configurable HTTP base URL
 - Embedder uses `/embed`, Classifier uses `/predict`
 
@@ -159,7 +165,7 @@ core/
 ├── completer.go          # Completer interface
 ├── embedder.go           # Embedder interface
 ├── classifier.go         # Classifier interface
-├── provider.go           # Provider interface + registry
+├── provider.go           # Provider interface
 ├── errors.go             # Sentinel errors
 ├── adapter/
 │   ├── ollama/
@@ -176,7 +182,7 @@ core/
 │       └── tei.go        # Embedder (/embed), Classifier (/predict)
 └── internal/
     └── httpc/
-        └── client.go     # Shared HTTP client, timeout, auth header logic
+        └── client.go     # Shared HTTP client (see HTTP Client section)
 ----
 
 === Adapter Configuration
@@ -226,17 +232,40 @@ Sentinel errors. No retries -- the caller handles all error policy.
 [source,go]
 ----
 var (
-    ErrUnsupported        = errors.New("capability not supported by provider")
-    ErrAuth               = errors.New("authentication failed")
+    ErrUnsupported         = errors.New("capability not supported by provider")
+    ErrAuth                = errors.New("authentication failed")
     ErrProviderUnavailable = errors.New("provider endpoint unreachable")
+    ErrRateLimited         = errors.New("provider rate limit exceeded")
 )
 ----
 
-`Completer()` on a TEI provider returns `ErrUnsupported`. `Classifier()` on Anthropic returns `ErrUnsupported`. Network failures return `ErrProviderUnavailable`. Invalid or expired API keys return `ErrAuth`.
+`Completer()` on a TEI provider returns `ErrUnsupported`. `Classifier()` on Anthropic returns `ErrUnsupported`. Network failures return `ErrProviderUnavailable`. Invalid or expired API keys return `ErrAuth`. HTTP 429 from any provider returns `ErrRateLimited`.
+
+Batch failure is all-or-nothing: any item fails → entire batch fails. `EmbedBatch` and `ClassifyBatch` do not return partial results.
+
+=== HTTP Client
+
+Internal shared HTTP client (`internal/httpc/client.go`). Used by all adapters.
+
+[source,go]
+----
+type Client struct {
+    http    *http.Client
+    authFn  func(req *http.Request) // per-adapter auth (x-api-key, Bearer, etc.)
+}
+
+func New(timeout time.Duration, authFn func(*http.Request)) *Client
+----
+
+Default timeouts: 30s for non-streaming requests, 120s for streaming. Auth is a callback injected at construction — each adapter provides its own (Anthropic sets `x-api-key`, OpenAI sets `Authorization: Bearer`, Ollama/TEI set nothing).
 
 === Stream Contract
 
 The adapter closes the channel when the stream ends or the context is cancelled. Channel is unbuffered. All `Provider`, `Completer`, `Embedder`, and `Classifier` implementations must be safe for concurrent use by multiple goroutines.
+
+**`Complete` vs `Stream` method contract:** `Stream()` sets `stream=true` on the wire regardless of the proto field value. `Complete()` sets `stream=false`. The proto `bool stream` field exists for proto-level consumers; Go callers use method selection.
+
+**Mid-stream errors:** `StreamChunk` carries an `optional string error` field. A chunk with `done=true` and `error` set indicates stream failure. Unexpected channel closure (no `done=true` received) is also an error — the caller treats it as a connection drop.
 
 === Code Generation Pipeline
 
@@ -251,7 +280,9 @@ Downstream: GraphQL schema (in service spec) and TypeScript types (in web spec) 
 
 === Proto Truth Type Definitions
 
-The proto files below are the canonical source for all generated code. Syntax: {proto-syntax}.
+Proto source files live in `proto/spidey/v1/` at the repository root. Generated Go types live in `gen/go/spidey/v1/` (its own Go module). These paths are outside the `core/` module — core imports from `gen/go`, it does not own the proto files. The proto files are reproduced here as the canonical reference for all specs.
+
+Syntax: {proto-syntax}.
 
 ==== thread.proto
 
@@ -458,6 +489,7 @@ message StreamChunk {
   }
   bool done = 4;
   optional Usage usage = 5;
+  optional string error = 6;  // Set on stream failure (done=true + error = failure)
 }
 ----
 
@@ -497,4 +529,31 @@ message StreamChunk {
     {"name": "contradiction", "probability": 0.02}
   ]
 }
+----
+
+==== Embed Response
+
+[source,json]
+----
+// 384 dimensions (bge-small-en-v1.5)
+[0.023, -0.118, 0.045, 0.091, -0.067, ...]
+----
+
+==== StreamChunk Sequence
+
+[source,json]
+----
+{"delta": {"text": {"text": "The auth"}}, "done": false}
+{"delta": {"thinking": {"text": "User is asking about retry policy scope..."}}, "done": false}
+{"delta": {"text": {"text": " module retries"}}, "done": false}
+{"delta": {"text": {"text": " 3 times."}}, "done": false}
+{"done": true, "usage": {"prompt_tokens": 127, "completion_tokens": 42}}
+----
+
+Stream failure example:
+
+[source,json]
+----
+{"delta": {"text": {"text": "The auth"}}, "done": false}
+{"done": true, "error": "provider connection reset"}
 ----
