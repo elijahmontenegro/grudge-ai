@@ -85,15 +85,29 @@ First-run captures user identity alongside provider configuration. Name and pref
 
 ==== Thread Workspaces
 
-Each thread is tied to a working directory. A thread isn't just a conversation — it's a workspace. File operations, git, code execution are scoped to the thread's directory. Thread creation specifies a directory or defaults to the current one.
+Each thread has one or more mounted directories. A thread isn't just a conversation — it's a workspace. File operations, git, code execution are scoped to the mounted directories. Directories are mutable — add or remove over the thread's lifetime.
 
-The working directory is injected into the system prompt template. Different threads, different directories, potentially different git repos.
+Mounted directories are injected into the system prompt template. Different threads, different directories, potentially different git repos.
 
 ==== Docker Sandboxes
 
-Tool execution (shell commands, code execution, file writes) runs in Docker Sandboxes by default. Each thread's working directory is mounted into the sandbox — the agent operates on real files but in isolation from the host.
+Tool execution (shell commands, code execution, file writes) runs in Docker Sandboxes by default. The thread's mounted directories are volumes in the sandbox — the agent operates on real files but in isolation from the host.
 
 Sandboxed by default. Per-thread opt-out for advanced users who need direct host access. The `Thread` proto carries a `sandboxed` flag.
+
+==== Tool Permissions
+
+Tools are permission-gated. The agent cannot execute a tool without authorization. ADK provides `before_tool_callback` in its plugin system — every tool call is intercepted before execution.
+
+Permission levels:
+
+- **Allow** -- Tool executes without prompting. Appropriate for read-only tools (file read, glob, grep, search).
+- **Ask** -- User is prompted before execution. Appropriate for write tools (file edit, write, bash, code execution). The web UI shows the pending tool call, user approves or denies.
+- **Deny** -- Tool is blocked. User or policy has forbidden it.
+
+Permissions are configurable per-thread. A thread working on a production codebase might deny destructive operations. A sandbox thread might allow everything. The sandbox itself provides a safety boundary — even "allow all" is contained.
+
+The default permission set: read tools allowed, write tools ask, destructive tools (rm, git push, etc.) ask with warning.
 
 ==== Model Roles
 

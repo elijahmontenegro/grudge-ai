@@ -70,8 +70,8 @@ message Message {
 message Thread {
   string id = 1;
   string name = 2;
-  string working_dir = 3;     // Workspace directory for this thread. File ops, git, code execution scoped here.
-  bool sandboxed = 4;         // Whether tool execution runs in Docker Sandbox (default: true)
+  repeated string working_dirs = 3;  // Mounted directories. Mutable — add/remove over thread lifetime.
+  bool sandboxed = 4;                // Whether tool execution runs in Docker Sandbox (default: true)
   google.protobuf.Timestamp created_at = 5;
 }
 

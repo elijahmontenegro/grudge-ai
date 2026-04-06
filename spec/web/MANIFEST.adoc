@@ -69,7 +69,8 @@ Three things make this different from every other agentic UI:
 === Thread Management
 
 - User opens Spidey -> sees thread list with state indicators (idle, running, paused) and warmth (carry-forward count) -> picks a thread or creates one
-- User creates a thread -> types a name or starts with a prompt (thread auto-named from first prompt) -> specifies working directory or defaults to current
+- User creates a thread -> types a name or starts with a prompt (thread auto-named from first prompt) -> adds one or more working directories
+- User adds or removes mounted directories from a thread at any time
 - User sees which threads are running/paused/idle from any view via the persistent sidebar
 
 === Normal Interaction
@@ -95,6 +96,12 @@ Three things make this different from every other agentic UI:
 - User stops -> agent halts -> thread shows final state
 - Timer expires -> agent stops naturally
 - User can navigate to other threads while autonomous agent runs -- progress visible in sidebar
+
+=== Tool Permissions
+
+- Agent requests a write tool (file edit, bash) -> user sees pending tool call with details -> approves or denies
+- User configures per-thread permission defaults (allow/ask/deny per tool category)
+- Denied tool call -> agent sees denial, adjusts approach
 
 === Cross-Thread
 
@@ -207,7 +214,7 @@ Minimal. The system should just work. Configuration required on first run:
 
 Smart detection: if Ollama and TEI are running at default localhost ports, detect and offer them. Reduce first-run friction to confirmation, not configuration.
 
-Per-thread settings: working directory, sandbox on/off.
+Per-thread settings: mounted directories (add/remove), sandbox on/off, tool permissions (allow/ask/deny per tool).
 
 Accessible from tray menu ("Settings...") and from within the web UI.
 
