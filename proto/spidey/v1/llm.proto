@@ -5,7 +5,7 @@ package spidey.v1;
 option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
 
 import "google/protobuf/struct.proto";
-import "spidey/v1/conversation.proto";
+import "spidey/v1/thread.proto";
 
 // LLM interface types. Provider-agnostic completion.
 //

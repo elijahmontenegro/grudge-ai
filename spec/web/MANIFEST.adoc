@@ -15,12 +15,13 @@
 
 *Paradigm:* RRC-Native Agentic Interface
 
-The web UI is a {ui-framework} application served by the service on localhost. The user opens their browser. It is the agentic interface -- not a chat clone. What a CLI agentic tool would be if it had a full graphical surface.
+The web UI is a {ui-framework} application served by the service at `spidey.localhost`. The browser opens automatically when the service launches. It is the agentic interface -- not a chat clone.
 
-Two things make this different from every other agentic UI:
+Three things make this different from every other agentic UI:
 
-1. **RRC introspection.** It sees what RRC selected, what it excluded, the prerequisite scores, and the prompt derivation. No other client has this because RRC is novel. This visibility is the product differentiator.
-2. **Agentic surface.** Tool visualization, agent state, execution traces, planning views. The user sees what the agent is doing, why, and can intervene.
+1. **Citations.** Every message carries its RRC selection metadata -- which prior messages were selected as prerequisites, their scores, which thread they came from, whether the cross-encoder or QUD found them. The user sees what informed every response.
+2. **Threads, not conversations.** Each thread is its own corpus with its own DAG, QUD graph, and carry-forward trajectory. Selection is thread-scoped by default, widened to all threads per-prompt. Each thread develops its own identity through accumulated carry-forward.
+3. **Agentic surface.** Tool visualization, agent state, execution traces. The user sees what the agent is doing, why, and can intervene.
 
 === Stack
 
@@ -30,7 +31,7 @@ Two things make this different from every other agentic UI:
 
 *Code Generation:* {codegen} ({api-protocol} schema -> TypeScript types)
 
-*Served by:* `spec/service` (static assets on localhost)
+*Served by:* `spec/service` (static assets at `spidey.localhost`)
 
 *Depends on:* `spec/service` ({api-protocol} API)
 
@@ -38,19 +39,23 @@ Two things make this different from every other agentic UI:
 
 ==== In Scope
 
-- RRC introspection views: selection visualization, prerequisite scores, prompt derivation, exclusion rationale, carry-forward state
+- Thread model: create, name, switch, delete threads. No "conversations" -- threads are the organizational unit.
+- Per-prompt scope control: thread-scoped selection by default, toggle to all-threads for a specific prompt
+- Citations per message: every message that triggered an RRC selection event carries citation metadata (selected prerequisites, scores, thread origin, cross-thread indicator)
+- RRC introspection: drill into citations to see full selection detail, QUD graph state, carry-forward history
 - Agentic interface: tool visualization, agent state, execution traces, planning views
-- Conversation interface: message display, input, history navigation (not a chat clone -- the agentic context is primary)
+- Message display: rich content (text, code, tool results, images) -- not a plain chat list
+- Home page: landing view when opening Spidey
 - {api-client} integration: queries, mutations, subscriptions against the service {api-protocol} API
 - Code generation: {api-protocol} schema -> TypeScript client types via {codegen}
-- UX design: interaction patterns, layout, information architecture, responsiveness
+- UX design: interaction patterns, layout, information architecture
 - Build output: static assets (HTML/JS/CSS) served by the service
 
 ==== Out of Scope
 
 - Backend logic (belongs to `spec/service`)
 - Agent orchestration or tool execution (belongs to `spec/service`; this is the visualization surface)
-- Conversation storage (belongs to `spec/service`; the UI reads/writes via {api-protocol})
+- Thread storage (belongs to `spec/service`; the UI reads/writes via {api-protocol})
 - RRC engine or algorithm (belongs to `spec/rrc`; the UI displays results)
 - Standalone server or hosting (served by the service)
 - Mobile layout
@@ -59,33 +64,52 @@ Two things make this different from every other agentic UI:
 
 // Implementation sections to be specified:
 //
-// --- RRC Introspection ---
-// - Prerequisite DAG View (the full dependency graph -- nodes are messages, edges are prerequisite relationships with scores and signals)
-// - Selection View (which messages were selected for this prompt, the traversal path through the DAG, score decay per hop)
-// - Score Breakdown (per-edge signal decomposition: cross-encoder score, QUD edge weight, embedding similarity, temporal proximity)
-// - Prompt Derivation View (what the model actually received vs what the full corpus contained)
-// - Exclusion Rationale (why specific messages were not selected -- below threshold, outside token budget, pruned by transitive reduction)
-// - QUD Graph View (the Questions Under Discussion graph -- open/resolved QUDs, which messages establish and address each QUD, QUD tree hierarchy)
-// - Carry-Forward View (warm carry-forward state: QUD enrichment history, reasoning cache contents)
+// --- Thread Model ---
+// - Thread list (home page sidebar or main view)
+// - Create / rename / delete threads
+// - Thread switching
+// - Per-thread identity emergence (visible through carry-forward history and selection patterns)
+//
+// --- Citations ---
+// - Citation indicator per message (count of selected prerequisites)
+// - Expand to see: message preview, score, source (cross-encoder / QUD / both), thread origin
+// - Cross-thread citations highlighted (selected from a different thread)
+// - Outbound indicator: "referenced by N later messages" (shows which messages this one informed)
+//
+// --- Per-Prompt Scope Control ---
+// - Scope toggle on input: thread-scoped (default) or all-threads
+// - Visual indicator of current scope
+//
+// --- RRC Introspection (drill-down from citations) ---
+// - Selection detail: full ranked list, scores, traversal path through DAG
+// - Score breakdown per edge: cross-encoder score, QUD edge weight, temporal proximity
+// - Exclusion rationale: why specific messages were not selected (below threshold, transitive reduction, depth limit)
+// - QUD graph view: open/resolved QUDs, which messages establish and address each, tree hierarchy
+// - Carry-forward view: accumulated reasoning, QUD enrichment history
+// - DAG neighborhood view: for a given message, its prerequisites and dependents (ego graph, not full DAG)
 //
 // --- Agentic Interface ---
-// - Tool Visualization (tool definitions, in-flight executions, results, errors)
-// - Execution Traces (step-by-step agent reasoning and action history)
-// - Agent State (current plan, progress, decision points, intervention surface)
-// - Planning View (task decomposition, dependencies, status)
+// - Tool visualization (tool definitions, in-flight executions, results, errors)
+// - Execution traces (step-by-step agent reasoning and action history)
+// - Agent state (current plan, progress, decision points, intervention surface)
 //
-// --- Conversation Interface ---
-// - Message Display (rich content, code, tool results -- not a plain chat list)
-// - Input (prompt composition, context awareness)
-// - History Navigation (conversation list, search, corpus browsing)
+// --- Message Display ---
+// - Rich content: text, code blocks, tool results, images
+// - Per-message citation indicator
+// - Streaming: tokens arrive in real time via subscription
+//
+// --- Home Page ---
+// - Landing view when opening spidey.localhost
+// - Thread list with recent activity
+// - Quick actions: new thread, continue recent thread
+//
+// --- Input ---
+// - Prompt composition
+// - Scope toggle (thread / all-threads)
+// - Thread context indicator
 //
 // --- UI Architecture ---
-// - Component Structure ({ui-framework}, state management approach)
-// - {api-client} Setup (queries, mutations, subscriptions, cache strategy)
-// - Code Generation ({codegen} config, generated TypeScript types)
-// - Build Pipeline (static asset output for service to serve)
-//
-// --- UX ---
-// - Information Architecture (how RRC introspection, agent state, and conversation relate spatially)
-// - Interaction Patterns (when/how the user intervenes in agent execution)
-// - Layout Strategy (responsive, but desktop-primary since this is a local tool)
+// - Component structure ({ui-framework}, state management)
+// - {api-client} setup (queries, mutations, subscriptions, cache strategy)
+// - Code generation ({codegen} config, generated TypeScript types)
+// - Build pipeline (static asset output for service to serve)

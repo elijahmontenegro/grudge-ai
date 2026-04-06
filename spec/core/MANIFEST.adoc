@@ -28,7 +28,7 @@ The core library is the foundational Go module. It defines the proto truth types
 
 ==== In Scope
 
-- Proto truth types: Message, LLMMessage, ContentBlock (Text, Thinking, ToolCall, ToolResult, Image), Conversation, Role, Edge, QUD, QUDGraph, SelectionResult, ClassifyRequest/Response, CompletionRequest/Response, StreamChunk, Usage
+- Proto truth types: Message, LLMMessage, ContentBlock (Text, Thinking, ToolCall, ToolResult, Image), Thread, Role, SelectionScope, Edge, QUD, QUDGraph, SelectionResult, ClassifyRequest/Response, CompletionRequest/Response, StreamChunk, Usage
 - LLM interface: completion, streaming completion
 - Embedder interface: single embed, batch embed
 - Classifier interface: pairwise text classification (cross-encoder pattern -- takes two texts, returns class probabilities)
@@ -52,12 +52,12 @@ The core library is the foundational Go module. It defines the proto truth types
 
 Defined in `proto/spidey/v1/`. Generated Go types in `gen/go/spidey/v1/`. Four files:
 
-- **conversation.proto** -- Message, Role, ContentBlock (TextContent, ThinkingContent, ToolCallContent, ToolResultContent, ImageContent), Conversation
+- **thread.proto** -- Message, Role, ContentBlock (TextContent, ThinkingContent, ToolCallContent, ToolResultContent, ImageContent), Thread, SelectionScope
 - **rrc.proto** -- Edge, EdgeSource, QUD, QUDStatus, QUDGraph, SelectedMessage, ExcludedMessage, ExclusionReason, SelectionResult
 - **classifier.proto** -- ClassifyRequest, ClassifyResponse, ClassLabel, BatchClassifyRequest, BatchClassifyResponse
 - **llm.proto** -- LLMMessage, CompletionRequest, CompletionResponse, Usage, StreamChunk
 
-Message is the corpus record (id, role, content blocks, position, created_at). LLMMessage is the wire format (role, content blocks only). The service converts between them at the boundary.
+Message is the corpus record (id, role, content blocks, position, thread_id, created_at). LLMMessage is the wire format (role, content blocks only). The service converts between them at the boundary. Thread is the organizational unit -- each thread is its own corpus with its own DAG, QUD graph, and carry-forward trajectory. SelectionScope controls per-prompt scoping (thread-scoped by default, all-threads as opt-in).
 
 CompletionRequest includes `provider_options` (`google.protobuf.Struct`) as an escape hatch for provider-specific parameters the abstraction does not model explicitly.
 

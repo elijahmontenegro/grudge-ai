@@ -82,7 +82,7 @@ The development environment uses {dev-lm-runtime} for local language model servi
 ----
 spidey/
 ├── proto/spidey/v1/          # Truth types. Canonical source for all generated code.
-│   ├── conversation.proto     #   Message, Role, ContentBlock, Conversation
+│   ├── thread.proto            #   Message, Role, ContentBlock, Thread, SelectionScope
 │   ├── rrc.proto              #   Edge, QUD, QUDGraph, SelectionResult
 │   ├── classifier.proto       #   ClassifyRequest/Response
 │   └── llm.proto              #   LLMMessage, CompletionRequest/Response, StreamChunk
@@ -132,7 +132,7 @@ spidey/
 
 - Provider-agnostic abstractions for LLMs, embedders, and classifiers
 - RRC engine: cross-encoder prerequisite detection, QUD graph via carry-forward, prerequisite DAG, payload assembly
-- System tray service: RRC proxy for third-party clients, agent orchestration for native client, conversation storage, {api-protocol} API
+- System tray service: RRC proxy for third-party clients, agent orchestration for native client, thread storage, {api-protocol} API
 - Web UI: agentic interface with RRC introspection, served on localhost
 - Code generation pipeline: proto -> Go, GraphQL schema -> TypeScript
 - Monorepo with Go workspace (`go.work`) linking discrete modules

@@ -34,10 +34,10 @@ ADK provides: agent orchestration (sequential, parallel, loop agents), tool syst
 
 RRC provides: prerequisite selection on every LLM call, carry-forward on every LLM response, compounding within tool chains. ADK doesn't know this is happening.
 
-The web UI issues {api-protocol} requests. ADK runs the agent loop. RRC sits between ADK and the LLM. Conversation storage is persistent and server-owned. RRC introspection data flows to the web UI via {api-protocol} subscriptions.
+The web UI issues {api-protocol} requests. ADK runs the agent loop. RRC sits between ADK and the LLM. Thread storage is persistent and server-owned. RRC introspection data flows to the web UI via {api-protocol} subscriptions.
 
 - **Entry point:** {api-protocol} API (queries, mutations, subscriptions)
-- **State model:** Stateful. The service owns conversation history, agent state, carry-forward cache, and ADK session state.
+- **State model:** Stateful. The service owns thread history, agent state, carry-forward cache, and ADK session state.
 - **Client awareness:** Full. The web UI sees everything RRC does.
 - **Response:** Structured {api-protocol} responses + live subscriptions for streaming, agent state, and introspection.
 
@@ -46,7 +46,7 @@ The web UI issues {api-protocol} requests. ADK runs the agent loop. RRC sits bet
 Both paths share:
 
 - **RRC engine** -- The same library instance handles prerequisite detection and payload assembly for both paths.
-- **Conversation storage** -- The proxy path receives the corpus per-request from the client. The agent path reads from server-owned persistent storage. Both feed into the same RRC engine.
+- **Thread storage** -- The proxy path receives the corpus per-request from the client. The agent path reads from server-owned persistent storage. Both feed into the same RRC engine.
 - **Provider routing** -- Both paths forward to the same upstream LLM, configured the same way.
 - **Warm carry-forward** -- Reasoning extracted from LLM responses enriches future selection for both paths.
 
@@ -92,7 +92,7 @@ Independent of either request flow:
 - Agent orchestration via ADK Go: LlmAgent, SequentialAgent, ParallelAgent, LoopAgent, agent transfer
 - Tool system via ADK Go: FunctionTool (auto-declaration from Go functions), Toolset (dynamic tool groups), MCP integration
 - Plugin system via ADK Go: lifecycle hooks (before/after agent, model, tool execution)
-- Conversation storage: persistent, complete, unmodified history (lossless corpus guarantee)
+- Thread storage: persistent, complete, unmodified history (lossless corpus guarantee)
 - RRC-as-LLM adapter: implements ADK's `model.LLM` interface, routes through RRC engine to actual LLM via core Completer
 
 ===== Shared
@@ -140,7 +140,7 @@ Independent of either request flow:
 //   - LlmAgent as primary agent type
 //   - Tool registration: FunctionTools for built-in capabilities, McpToolset for MCP servers
 //   - Plugin registration: RRC introspection plugin (exposes selection data per round), logging plugin
-//   - Session service: backed by SQLite (shared with conversation storage)
+//   - Session service: backed by SQLite (shared with thread storage)
 // - GraphQL API (schema, resolvers, subscriptions)
 //   - Per-round events pushed via subscription: streaming tokens, tool executions, RRC selection results, agent state
 // - Agent Loop (driven by ADK runner, per-round RRC cycle happens inside the LLM adapter)
@@ -152,10 +152,10 @@ Independent of either request flow:
 //
 // --- Shared Foundation ---
 // - RRC Engine Integration (shared instance, both paths call the same engine with the same cached artifacts)
-// - Conversation Storage (format, persistence, lossless guarantee, how proxy path receives corpus vs agent path reads from storage)
+// - Thread Storage (format, persistence, lossless guarantee, how proxy path receives corpus vs agent path reads from storage)
 // - Provider Routing (upstream LLM config, endpoint management, shared across both paths)
 // - Storage (SQLite, single embedded database for all persistent state)
-//   - Conversations table (lossless corpus)
+//   - Threads table + Messages table (lossless corpus)
 //   - Prerequisite edges table (indexed on both from and to message IDs)
 //   - Score cache table (keyed by message pair)
 //   - QUD graph table

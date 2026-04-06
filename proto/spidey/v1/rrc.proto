@@ -5,6 +5,7 @@ package spidey.v1;
 option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
 
 import "google/protobuf/timestamp.proto";
+import "spidey/v1/thread.proto";
 
 // Prerequisite DAG edge. Produced by cross-encoder or QUD carry-forward.
 
@@ -24,9 +25,11 @@ message Edge {
   float qud_weight = 6;
   float temporal_proximity = 7;
   google.protobuf.Timestamp detected_at = 8;
+  string from_thread_id = 9;  // Thread origin of the source message. Visible in citations when cross-thread.
+  string to_thread_id = 10;
 }
 
-// QUD graph. Built from warm carry-forward over the conversation's lifetime.
+// QUD graph. Built from warm carry-forward over the thread's lifetime.
 
 enum QUDStatus {
   QUD_STATUS_UNSPECIFIED = 0;
@@ -49,21 +52,22 @@ message QUDGraph {
   repeated string active_stack = 2;
 }
 
-// Selection result. What the RRC engine returns. What introspection exposes.
-
-enum ExclusionReason {
-  EXCLUSION_UNSPECIFIED = 0;
-  EXCLUSION_BELOW_THRESHOLD = 1;
-  EXCLUSION_BUDGET_EXHAUSTED = 2;
-  EXCLUSION_TRANSITIVE_REDUCTION = 3;
-  EXCLUSION_DEPTH_LIMIT = 4;
-}
+// Selection result. Returned by the RRC engine. Drives citations in the UI.
 
 message SelectedMessage {
   string message_id = 1;
   float effective_score = 2;
   int32 hop_depth = 3;
   repeated Edge via_edges = 4;
+  string thread_id = 5;       // Thread the selected message belongs to
+  bool cross_thread = 6;      // True if selected from a different thread than the prompt
+}
+
+enum ExclusionReason {
+  EXCLUSION_UNSPECIFIED = 0;
+  EXCLUSION_BELOW_THRESHOLD = 1;
+  EXCLUSION_TRANSITIVE_REDUCTION = 2;
+  EXCLUSION_DEPTH_LIMIT = 3;
 }
 
 message ExcludedMessage {
@@ -73,8 +77,9 @@ message ExcludedMessage {
 }
 
 message SelectionResult {
-  repeated SelectedMessage selected = 1;
-  repeated ExcludedMessage excluded = 2;
-  int32 token_budget = 3;
-  int32 tokens_used = 4;
+  string event_id = 1;                // Unique ID for this RRC selection event
+  SelectionScope scope = 2;           // Thread-scoped or all-threads
+  string thread_id = 3;               // Thread where the prompt originated
+  repeated SelectedMessage selected = 4;
+  repeated ExcludedMessage excluded = 5;
 }

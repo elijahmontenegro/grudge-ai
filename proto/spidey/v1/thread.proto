@@ -6,7 +6,10 @@ option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
 
 import "google/protobuf/timestamp.proto";
 
-// The lossless corpus. A conversation is an ordered sequence of immutable messages.
+// A thread is a corpus — an ordered sequence of immutable messages.
+// Each thread has its own DAG, score cache, QUD graph, and carry-forward trajectory.
+// Threads are the organizational unit. Selection is thread-scoped by default
+// but can be widened to all threads per-prompt.
 
 enum Role {
   ROLE_UNSPECIFIED = 0;
@@ -52,7 +55,7 @@ message ImageContent {
   bytes data = 2;
 }
 
-// Corpus message. The persistent record in a conversation.
+// Corpus message. The persistent record in a thread.
 // Has identity and position metadata beyond what the LLM sees.
 
 message Message {
@@ -60,10 +63,20 @@ message Message {
   Role role = 2;
   repeated ContentBlock content = 3;
   int64 position = 4;
-  google.protobuf.Timestamp created_at = 5;
+  string thread_id = 5;
+  google.protobuf.Timestamp created_at = 6;
 }
 
-message Conversation {
+message Thread {
   string id = 1;
-  repeated Message messages = 2;
+  string name = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+// Selection scope. Passed per-prompt to control where the RRC engine looks.
+
+enum SelectionScope {
+  SELECTION_SCOPE_UNSPECIFIED = 0;
+  SELECTION_SCOPE_THREAD = 1;      // Default: select from this thread only
+  SELECTION_SCOPE_ALL_THREADS = 2; // Widen: select from all threads
 }
