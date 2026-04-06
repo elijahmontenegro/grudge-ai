@@ -75,13 +75,24 @@ A permission state transition. The service switches the agent to read-only mode:
 
 1. **Enter:** `EnterPlanMode` tool call. Service transitions permission state to `plan`. Write tools disabled. Plan mode prompt section included. Agent explores using read-only tools.
 2. **Explore:** Agent reads code, searches for patterns, identifies critical files. Multiple turns of exploration before designing.
-3. **Write plan:** Agent creates a plan file -- AsciiDoc format in `$XDG_DATA_HOME/spidey/plans/{slug}.adoc`. Slug generated per plan (human-readable, unique per thread). The agent writes the plan; the service does not auto-generate it.
-4. **Exit:** `ExitPlanMode` tool call. Service reads plan from disk, surfaces it to the user in the web UI for review. User approves, optionally edits, or rejects.
+3. **Write plan:** Agent creates a plan directory -- `$XDG_DATA_HOME/spidey/plans/{slug}/` with `plan.adoc` as the entry point. Slug generated per plan (human-readable, unique per thread). The agent writes the plan and supporting artifacts (research notes, code analysis, architectural findings from the exploration phase). AsciiDoc `include::` directives compose artifacts into the plan. The agent builds the directory; the service creates it on first write.
+4. **Exit:** `ExitPlanMode` tool call. Service compiles the plan directory (resolves includes) and surfaces it to the user in the web UI for review. User approves, optionally edits, or rejects.
 5. **Post-approval:** Service restores previous permission state (write tools re-enabled). Plan content enters the thread as a message (available for RRC selection). Plan file persists on disk. Plan content injected as per-turn prompt section -- the agent sees the plan on every subsequent request.
 
 The plan is a design artifact, not a project management tool. The agent reads the plan and implements. There is no step-by-step status tracking. Progress is implicit in the work being done.
 
-**Plan format:** AsciiDoc -- the project's document regime. The agent writes structured sections (objective, approach, steps, critical files). No prescribed schema or attributes -- the agent structures the plan as the design requires. AsciiDoc provides section structure and readability. Example:
+**Plan format:** AsciiDoc directory -- the project's document regime. The agent writes structured sections (objective, approach, steps, critical files). No prescribed schema -- the agent structures the plan as the design requires. Supporting artifacts from the exploration phase compose into the plan via `include::` directives.
+
+Example plan directory:
+
+----
+plans/implement-auth/
+├── plan.adoc              # Entry point
+├── research.adoc          # Exploration findings
+└── existing-patterns.adoc # Code patterns found during exploration
+----
+
+Example `plan.adoc`:
 
 [source,asciidoc]
 ----
@@ -90,6 +101,10 @@ The plan is a design artifact, not a project management tool. The agent reads th
 \== Objective
 
 OAuth 2.0 with PKCE flow. Three endpoints: authorize, token, refresh.
+
+\== Research
+
+include::research.adoc[]
 
 \== Approach
 
@@ -111,6 +126,8 @@ Code verifier generation, challenge computation, token exchange.
 Exponential backoff: 1s, 2s, 4s. Max 3 retries.
 
 \== Critical Files
+
+include::existing-patterns.adoc[]
 
 * `service/auth/handler.go` -- route registration
 * `service/auth/pkce.go` -- PKCE implementation
@@ -216,7 +233,7 @@ Configured in settings (`$XDG_CONFIG_HOME/spidey/settings.json`), per-thread or 
 
 ==== Plans
 
-Plans are living AsciiDoc documents stored as files, not messages. Per-plan: `$XDG_DATA_HOME/spidey/plans/{slug}.adoc` with slug generated per plan (human-readable word slug, unique per thread). Plans operate in the CCA regime -- AsciiDoc attributes carry structured metadata, CCA tooling validates structure. See Plan Mode (above) for the full lifecycle, AsciiDoc structure, and RRC integration.
+Plans are living AsciiDoc artifact directories, not messages. Per-plan: `$XDG_DATA_HOME/spidey/plans/{slug}/` with `plan.adoc` as entry point. Slug generated per plan (human-readable word slug, unique per thread). The directory contains the plan and supporting artifacts from the exploration phase, composed via AsciiDoc `include::` directives. See Plan Mode (above) for the full lifecycle and RRC integration.
 
 ==== Thread Workspaces
 
@@ -370,7 +387,7 @@ On entry: plan mode prompt section included (mode-conditional section in templat
 
 ==== ExitPlanMode
 
-Reads plan from disk (`$XDG_DATA_HOME/spidey/plans/{slug}.adoc`). Surfaces plan to user in web UI for review. User approves (optionally edits) or rejects.
+Compiles the plan directory (`$XDG_DATA_HOME/spidey/plans/{slug}/plan.adoc`, resolving includes). Surfaces compiled plan to user in web UI for review. User approves (optionally edits) or rejects.
 
 On approval: restores previous permission state. Plan content enters thread as a corpus message (available for RRC selection). Plan file persists on disk. Plan injected as per-turn prompt section. If plan is empty: user approved exiting plan mode without a plan (valid -- the exploration itself was the value).
 
@@ -540,7 +557,7 @@ CREATE TABLE plans (
     id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
     slug TEXT NOT NULL UNIQUE,
-    file_path TEXT NOT NULL,  -- absolute path to .adoc file
+    dir_path TEXT NOT NULL,  -- absolute path to plan directory
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_plans_thread ON plans(thread_id);
