@@ -25,7 +25,7 @@ The engine does not know which mode it's running in. It operates on whatever str
 
 *Language:* {lang}
 
-*Dependencies:* `spec/core` (truth types, classifier interface)
+*Dependencies:* `spec/core` (truth types, classifier interface, small fast model via Completer interface)
 
 === RRC Reference
 
@@ -136,11 +136,17 @@ The engine defines the in-memory structures. The service decides how to persist 
 
 Each prerequisite edge carries scores from the signals that produced it:
 
-- **Cross-encoder dependency score** -- Pairwise classification confidence from the NLI cross-encoder
-- **QUD edge weight** -- Structural dependency derived from QUD graph (established->addressed, raised->resolved)
-- **Temporal proximity** -- Positional signal. The cross-encoder sees message content but not position. In conversation, "that function" more likely refers to message N-3 than message N-300 even with identical content. Position is a real signal the cross-encoder cannot see.
+- **Cross-encoder dependency score** -- Entailment probability from the NLI cross-encoder. Range 0-1. Edge creation threshold: 0.5 (configurable). Below threshold, no edge is created.
+- **QUD edge weight** -- Binary: 1 if a QUD edge exists (carry-forward discovered a connection), 0 if not. A QUD edge either exists or it doesn't.
+- **Temporal proximity** -- `1 / (1 + distance)` where distance is message position difference. Adjacent messages ~0.5, 9 apart ~0.1, 99 apart ~0.01.
 
-Final edge score is a weighted combination of the signals that produced it. Signal weights are a tuning parameter.
+Score fusion formula:
+
+----
+score = w1 * cross_encoder_score + w2 * qud_weight + w3 * temporal_proximity
+----
+
+Starting weights: `w1=0.7, w2=0.2, w3=0.1`. Cross-encoder is the primary signal. QUD adds long-range edges the cross-encoder misses. Temporal is a weak positional prior. Weights are configurable.
 
 ==== Bounded Selective Assembly
 
@@ -225,11 +231,11 @@ The service extracts thinking blocks from the response stream and passes them to
 
 ==== QUD Graph Update
 
-Extracted reasoning is the signal source for the QUD graph. The engine processes it to identify:
+Two extraction paths from thinking blocks:
 
-- Questions the model's response addresses (QUD status updates)
-- Questions the model's response raises (new QUDs)
-- Prior messages the model found relevant (new edges in the DAG)
+**Edge discovery (cross-encoder):** The thinking block text is scored against prior messages using the same cross-encoder that scores regular messages. If the model's reasoning references "the auth module we discussed," the cross-encoder scores (thinking_text, message_i) and finds the relevant messages. New edges added to the DAG.
+
+**QUD extraction (small fast model):** The thinking blocks are passed to the small fast model (via core Completer interface) to extract structured QUD operations: questions raised, questions addressed, status updates. This is a natural language understanding task that requires more than pattern matching. The small fast model is near-free per call, making it practical to run on every carry-forward event.
 
 Enrichment is additive only -- it adds edges and updates QUD status toward resolution. It never removes edges or re-opens resolved QUDs. This prevents oscillation.
 

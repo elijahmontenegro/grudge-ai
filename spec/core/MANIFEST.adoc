@@ -28,7 +28,7 @@ The core library is the foundational Go module. It defines the proto truth types
 
 ==== In Scope
 
-- Proto truth types: Message, LLMMessage, ContentBlock (Text, Thinking, ToolCall, ToolResult, Image), Thread, Role, SelectionScope, Edge, QUD, QUDGraph, SelectionResult, ClassifyRequest/Response, CompletionRequest/Response, StreamChunk, Usage
+- Proto truth types: Message, LLMMessage, ContentBlock (Text, Thinking, ToolCall, ToolResult, Image), Thread, Role, SelectionScope, Edge, QUD, QUDGraph, SelectionResult, CarryForwardInput, ClassifyRequest/Response, CompletionRequest/Response, StreamChunk, Usage
 - LLM interface: completion, streaming completion
 - Embedder interface: single embed, batch embed
 - Classifier interface: pairwise text classification (cross-encoder pattern -- takes two texts, returns class probabilities)
@@ -63,7 +63,7 @@ CompletionRequest includes `provider_options` (`google.protobuf.Struct`) as an e
 
 === Go Interfaces
 
-Three provider-agnostic interfaces. The RRC engine and service consume these without knowing the backend.
+Provider-agnostic interfaces. The RRC engine and service consume these without knowing the backend. The service configures two LLM roles: the **main model** (user's model for reasoning, tool use, responses) and the **small fast model** (internal utility for QUD extraction, annotations, autocomplete, tool rationale — needs to be near-free per call). Both use the same Completer interface with different provider/model configurations.
 
 ==== LLM
 

@@ -83,3 +83,12 @@ message SelectionResult {
   repeated SelectedMessage selected = 4;
   repeated ExcludedMessage excluded = 5;
 }
+
+// Carry-forward input. The service extracts thinking blocks from LLM responses
+// and passes them to the RRC engine for QUD graph updates and edge discovery.
+
+message CarryForwardInput {
+  string event_id = 1;                // Which RRC selection event this response came from
+  string thread_id = 2;               // Which thread (carry-forward enriches this thread's QUD graph)
+  repeated ThinkingContent thinking_blocks = 3;  // Raw thinking blocks from the LLM response
+}

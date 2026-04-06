@@ -68,11 +68,21 @@ The RRC engine returns a ranked selection -- every message that passes the score
 
 The service sends the full selection to the LLM. If the model returns a context-length error, the service drops the lowest-scored message from the selection and retries. Repeat until the payload fits. Error-driven backoff -- no tokenizer, no estimation, no guessing. The model tells you when it's too much.
 
+==== Model Roles
+
+The service configures three model roles:
+
+- **Main model** -- The user's LLM. Reasoning, tool use, responses. Configured by the user (Anthropic, OpenAI, Ollama, etc.).
+- **Cross-encoder** -- NLI model for pairwise dependency scoring. Runs on TEI or equivalent classifier endpoint.
+- **Small fast model** -- Internal utility. QUD extraction from thinking blocks, annotations, autocomplete, tool rationale. Near-free per call. Opinionated default (e.g., small model on user's Ollama) or user-configured.
+
+All three use core's provider-agnostic interfaces (Completer for main + small fast, Classifier for cross-encoder).
+
 ==== First Run
 
 On first launch, the service probes localhost for default provider endpoints (Ollama at default port, TEI at default port). If detected, the web UI shows detected providers for user confirmation. If not detected, the web UI shows a setup form for endpoint URLs, model selection, and API keys.
 
-Both an LLM provider and a classifier (cross-encoder) endpoint are required. The system does not start without both configured. RRC is not optional -- there is no degraded mode or passthrough fallback.
+All three model roles must be configured. The system does not start without them. RRC is not optional -- there is no degraded mode or passthrough fallback.
 
 ==== Error Policy
 
@@ -120,7 +130,7 @@ Independent of either request flow:
 - Plugin system via ADK Go: lifecycle hooks (before/after agent, model, tool execution)
 - Thread storage: persistent, complete, unmodified history (lossless corpus guarantee)
 - RRC-as-LLM adapter: implements ADK's `model.LLM` interface, routes through RRC engine to actual LLM via core Completer
-- Warm carry-forward: extract thinking blocks from every LLM response, feed to RRC engine, accumulates across requests
+- Warm carry-forward: extract thinking blocks from every LLM response, pass to RRC engine as `CarryForwardInput` (proto), engine runs edge discovery (cross-encoder on thinking text) and QUD extraction (small fast model)
 - Autonomous mode: override model stop reason, continue running RRC rounds with empty user message, duration timer, play/pause/stop controls
 
 ===== Shared
