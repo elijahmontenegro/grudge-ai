@@ -139,7 +139,7 @@ type predictRequest struct {
 	TextPair string `json:"text_pair"`
 }
 
-type predictResponse [][]predictLabel
+type predictResponse []predictLabel
 
 type predictLabel struct {
 	Label string  `json:"label"`
@@ -177,8 +177,8 @@ func (c *classifier) Classify(ctx context.Context, req *pb.ClassifyRequest) (*pb
 		return nil, fmt.Errorf("%w: tei returned empty prediction", core.ErrProviderUnavailable)
 	}
 
-	labels := make([]*pb.ClassLabel, len(resp[0]))
-	for i, l := range resp[0] {
+	labels := make([]*pb.ClassLabel, len(resp))
+	for i, l := range resp {
 		labels[i] = &pb.ClassLabel{Name: l.Label, Probability: l.Score}
 	}
 	return &pb.ClassifyResponse{Labels: labels}, nil
