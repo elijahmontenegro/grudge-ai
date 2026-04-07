@@ -1,0 +1,37 @@
+schema:
+  - schema.graphql
+
+exec:
+  filename: generated.go
+  package: graph
+
+model:
+  filename: models_gen.go
+  package: graph
+
+resolver:
+  layout: follow-schema
+  dir: .
+  package: graph
+  filename_template: "{name}.resolvers.go"
+
+models:
+  DateTime:
+    model:
+      - github.com/99designs/gqlgen/graphql.Time
+  Thread:
+    model: github.com/emontenegr/spidey/service/graph.Thread
+  Message:
+    model: github.com/emontenegr/spidey/service/graph.Message
+  SelectionResult:
+    model: github.com/emontenegr/spidey/service/graph.SelectionResult
+  SelectedMessage:
+    model: github.com/emontenegr/spidey/service/graph.SelectedMessage
+  ExcludedMessage:
+    model: github.com/emontenegr/spidey/service/graph.ExcludedMessage
+  QUDGraph:
+    model: github.com/emontenegr/spidey/service/graph.QUDGraph
+  QUD:
+    model: github.com/emontenegr/spidey/service/graph.QUD
+  Edge:
+    model: github.com/emontenegr/spidey/service/graph.Edge
