@@ -123,6 +123,7 @@ func main() {
 	// GraphQL
 	resolver := graph.NewResolver(db, engine, cfg, searcher, mainCompleter)
 	gqlSrv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: resolver}))
+	gqlSrv.SetErrorPresenter(graph.ErrorPresenter)
 	gqlSrv.AddTransport(transport.POST{})
 	gqlSrv.AddTransport(transport.Websocket{})
 

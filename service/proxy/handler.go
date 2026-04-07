@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -153,7 +154,7 @@ func (h *Handler) runStatelessRRC(ctx context.Context, messages []*pb.Message) (
 func (h *Handler) completeOpenAI(ctx context.Context, w http.ResponseWriter, req *pb.CompletionRequest) {
 	resp, err := h.completer.Complete(ctx, req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeProxyError(w, err)
 		return
 	}
 
@@ -164,7 +165,7 @@ func (h *Handler) completeOpenAI(ctx context.Context, w http.ResponseWriter, req
 func (h *Handler) streamOpenAI(ctx context.Context, w http.ResponseWriter, req *pb.CompletionRequest) {
 	ch, err := h.completer.(core.Completer).Stream(ctx, req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeProxyError(w, err)
 		return
 	}
 
@@ -202,7 +203,7 @@ func (h *Handler) completeAnthropic(ctx context.Context, w http.ResponseWriter, 
 func (h *Handler) streamAnthropic(ctx context.Context, w http.ResponseWriter, req *pb.CompletionRequest) {
 	ch, err := h.completer.(core.Completer).Stream(ctx, req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeProxyError(w, err)
 		return
 	}
 
@@ -365,6 +366,35 @@ func protoToAnthropicEvent(chunk *pb.StreamChunk) map[string]any {
 		}
 	}
 	return map[string]any{"type": "ping"}
+}
+
+// writeProxyError maps provider errors to appropriate HTTP status codes.
+// 502: provider unreachable. 504: timeout. 422: context-length after backoff.
+func writeProxyError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, core.ErrProviderUnavailable):
+		http.Error(w, err.Error(), http.StatusBadGateway) // 502
+	case errors.Is(err, core.ErrAuth):
+		http.Error(w, err.Error(), http.StatusBadGateway) // 502
+	case errors.Is(err, core.ErrRateLimited):
+		http.Error(w, err.Error(), http.StatusTooManyRequests) // 429
+	case isContextLengthErr(err):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity) // 422
+	case errors.Is(err, context.DeadlineExceeded):
+		http.Error(w, err.Error(), http.StatusGatewayTimeout) // 504
+	default:
+		http.Error(w, err.Error(), http.StatusBadGateway)
+	}
+}
+
+func isContextLengthErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "context_length") ||
+		strings.Contains(msg, "maximum context") ||
+		strings.Contains(msg, "too many tokens")
 }
 
 func parseRole(s string) pb.Role {
