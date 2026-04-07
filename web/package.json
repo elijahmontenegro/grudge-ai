@@ -12,12 +12,17 @@
   "dependencies": {
     "@apollo/client": "^4.1.6",
     "@tailwindcss/vite": "^4.2.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
     "graphql": "^16.13.2",
     "graphql-ws": "^6.0.8",
+    "lucide-react": "^1.7.0",
     "radix-ui": "^1.4.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-router": "^7.14.0"
+    "react-router": "^7.14.0",
+    "tailwind-merge": "^3.5.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
