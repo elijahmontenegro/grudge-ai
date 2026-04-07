@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { useMutation, useQuery, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useMutation, useQuery } from '@apollo/client/react'
 
 const VIEW_STATE_QUERY = gql`
   query ViewState($threadId: ID!) {
@@ -31,12 +32,12 @@ interface ViewState {
 const DEBOUNCE_MS = 500
 
 export function useViewState(threadId: string) {
-  const { data } = useQuery(VIEW_STATE_QUERY, {
+  const { data } = useQuery<any>(VIEW_STATE_QUERY, {
     variables: { threadId },
     skip: !threadId,
   })
-  const [saveViewState] = useMutation(SAVE_VIEW_STATE)
-  const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  const [saveViewState] = useMutation<any>(SAVE_VIEW_STATE)
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   const save = useCallback(
     (state: ViewState) => {

@@ -1,4 +1,5 @@
-import { useQuery, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useQuery } from '@apollo/client/react'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
@@ -47,11 +48,11 @@ interface Props {
 }
 
 export function IntrospectionPanel({ threadId, eventId }: Props) {
-  const { data: selData } = useQuery(SELECTION_QUERY, {
+  const { data: selData } = useQuery<any>(SELECTION_QUERY, {
     variables: { eventId: eventId ?? '' },
     skip: !eventId,
   })
-  const { data: qudData } = useQuery(QUD_QUERY, {
+  const { data: qudData } = useQuery<any>(QUD_QUERY, {
     variables: { threadId },
   })
 

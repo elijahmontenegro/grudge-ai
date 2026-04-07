@@ -1,4 +1,5 @@
-import { useSubscription, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useSubscription } from '@apollo/client/react'
 
 const TOOL_EXECUTION_SUBSCRIPTION = gql`
   subscription ToolExecution($threadId: ID!) {

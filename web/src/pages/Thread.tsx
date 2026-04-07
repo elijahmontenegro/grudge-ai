@@ -1,5 +1,6 @@
 import { useParams } from 'react-router'
-import { useQuery, useMutation, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useQuery, useMutation } from '@apollo/client/react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -56,11 +57,11 @@ export function ThreadPage() {
   const { threadId } = useParams<{ threadId: string }>()
   const [input, setInput] = useState('')
   const [showIntrospection, setShowIntrospection] = useState(false)
-  const { data, loading, refetch } = useQuery(MESSAGES_QUERY, {
+  const { data, loading, refetch } = useQuery<any>(MESSAGES_QUERY, {
     variables: { threadId },
     skip: !threadId,
   })
-  const [sendMessage, { loading: sending }] = useMutation(SEND_MESSAGE)
+  const [sendMessage, { loading: sending }] = useMutation<any>(SEND_MESSAGE)
   const { event: streamEvent } = useMessageStream(threadId ?? '')
   const { state: agentState } = useAgentState(threadId ?? '')
   const { saveViewState } = useViewState(threadId ?? '')

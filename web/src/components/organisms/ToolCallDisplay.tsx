@@ -1,4 +1,5 @@
-import { useMutation, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useMutation } from '@apollo/client/react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 
@@ -31,8 +32,8 @@ export function ToolCallDisplay({
   result,
   isError,
 }: ToolCallDisplayProps) {
-  const [approve] = useMutation(APPROVE_TOOL)
-  const [deny] = useMutation(DENY_TOOL)
+  const [approve] = useMutation<any>(APPROVE_TOOL)
+  const [deny] = useMutation<any>(DENY_TOOL)
 
   return (
     <div className="border border-border rounded-lg p-3 bg-card text-sm">

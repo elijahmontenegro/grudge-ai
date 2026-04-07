@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { useQuery, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useQuery } from '@apollo/client/react'
 import {
   CommandDialog,
   CommandEmpty,
@@ -36,8 +37,8 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const navigate = useNavigate()
-  const { data: threadsData } = useQuery(THREADS_QUERY)
-  const { data: searchData } = useQuery(SEARCH_QUERY, {
+  const { data: threadsData } = useQuery<any>(THREADS_QUERY)
+  const { data: searchData } = useQuery<any>(SEARCH_QUERY, {
     variables: { query: search, limit: 5 },
     skip: search.length < 2,
   })

@@ -1,4 +1,5 @@
-import { useSubscription, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useSubscription } from '@apollo/client/react'
 
 const AGENT_STATE_SUBSCRIPTION = gql`
   subscription AgentState($threadId: ID!) {

@@ -135,10 +135,22 @@ func main() {
 	proxyHandler.RegisterRoutes(mux)
 	mux.Handle("/graphql", gqlSrv)
 
-	// Static assets
-	webDist := filepath.Join(filepath.Dir(os.Args[0]), "..", "..", "..", "web", "dist")
-	if info, err := os.Stat(webDist); err == nil && info.IsDir() {
+	// Static assets — check multiple paths for web/dist
+	var webDist string
+	candidates := []string{
+		filepath.Join(filepath.Dir(os.Args[0]), "..", "..", "..", "web", "dist"),
+		filepath.Join("web", "dist"),
+		filepath.Join("..", "web", "dist"),
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && info.IsDir() {
+			webDist = c
+			break
+		}
+	}
+	if webDist != "" {
 		mux.Handle("/", http.FileServer(http.Dir(webDist)))
+		log.Printf("Serving web UI from %s", webDist)
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html")

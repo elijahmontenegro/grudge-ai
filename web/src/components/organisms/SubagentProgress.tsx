@@ -1,4 +1,5 @@
-import { useSubscription, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useSubscription } from '@apollo/client/react'
 import { Badge } from '@/components/ui/badge'
 import { useNavigate } from 'react-router'
 

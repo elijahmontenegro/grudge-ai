@@ -210,8 +210,17 @@ type ToolDeps struct {
 	WorkingDirs []string
 	Tasks       *TaskStore
 	Skills      []SkillDef
-	// AskCh receives question, caller reads response from RespCh
 	AskCh       chan<- AskRequest
+	// Agent/plan mode dependencies
+	ThreadID    string
+	DB          interface{ InsertMessage(interface{}) error } // storage.DB
+	AgentState  func(mode string) error                      // transition agent mode
+	CompileAdoc func(path string) (string, error)            // adoc.Compile
+	PlanDir     string                                       // $XDG_DATA_HOME/spidey/plans/
+	// Subagent spawner — service wires this to create forked runners
+	SpawnAgent  func(ctx context.Context, task, forkID string) (string, error)
+	// Send message to a running subagent thread
+	SendToAgent func(ctx context.Context, agentID, message string) (string, error)
 }
 
 // SkillDef is a minimal skill reference for the tool.
@@ -489,6 +498,18 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	enterPlan, _ := functiontool.New(
 		functiontool.Config{Name: "EnterPlanMode", Description: "Enter plan mode. Write tools disabled, read tools available. Explore codebase and design implementation approach."},
 		func(ctx tool.Context, args PlanModeArgs) (PlanModeResult, error) {
+			if deps.AgentState == nil {
+				return PlanModeResult{}, fmt.Errorf("agent state not available")
+			}
+			if err := deps.AgentState("plan"); err != nil {
+				return PlanModeResult{}, err
+			}
+			// Create plan directory
+			if deps.PlanDir != "" {
+				slug := fmt.Sprintf("plan-%s", deps.ThreadID)
+				planPath := filepath.Join(deps.PlanDir, slug)
+				os.MkdirAll(planPath, 0o755)
+			}
 			return PlanModeResult{Success: true}, nil
 		},
 	)
@@ -497,6 +518,20 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	exitPlan, _ := functiontool.New(
 		functiontool.Config{Name: "ExitPlanMode", Description: "Exit plan mode. Plan is compiled and surfaced for user review."},
 		func(ctx tool.Context, args PlanModeArgs) (PlanModeResult, error) {
+			if deps.AgentState == nil {
+				return PlanModeResult{}, fmt.Errorf("agent state not available")
+			}
+			// Compile plan if it exists
+			if deps.CompileAdoc != nil && deps.PlanDir != "" {
+				slug := fmt.Sprintf("plan-%s", deps.ThreadID)
+				planEntry := filepath.Join(deps.PlanDir, slug, "plan.adoc")
+				if _, err := os.Stat(planEntry); err == nil {
+					deps.CompileAdoc(planEntry)
+				}
+			}
+			if err := deps.AgentState("normal"); err != nil {
+				return PlanModeResult{}, err
+			}
 			return PlanModeResult{Success: true}, nil
 		},
 	)
@@ -505,17 +540,32 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	// --- Agent tools (Ask) ---
 
 	agentTool, _ := functiontool.New(
-		functiontool.Config{Name: "Agent", Description: "Spawn a subagent to handle a complex task autonomously. Returns the result when done."},
+		functiontool.Config{Name: "Agent", Description: "Spawn a subagent to handle a complex task autonomously. The subagent runs in an ephemeral thread fork with its own RRC state."},
 		func(ctx tool.Context, args AgentToolArgs) (AgentToolResult, error) {
-			return AgentToolResult{Result: fmt.Sprintf("Subagent completed task: %s", args.Task)}, nil
+			if deps.SpawnAgent == nil {
+				return AgentToolResult{}, fmt.Errorf("subagent spawning not available")
+			}
+			forkID := fmt.Sprintf("fork-%s-%d", deps.ThreadID, deps.Tasks.seq.Load())
+			result, err := deps.SpawnAgent(ctx, args.Task, forkID)
+			if err != nil {
+				return AgentToolResult{}, err
+			}
+			return AgentToolResult{Result: result}, nil
 		},
 	)
 	tools = append(tools, agentTool)
 
 	sendMsg, _ := functiontool.New(
-		functiontool.Config{Name: "SendMessage", Description: "Send a message to a running subagent."},
+		functiontool.Config{Name: "SendMessage", Description: "Send a message to a running subagent. The subagent receives it as a new user message in its forked thread."},
 		func(ctx tool.Context, args SendMessageArgs) (SendMessageResult, error) {
-			return SendMessageResult{Response: "Message sent"}, nil
+			if deps.SendToAgent == nil {
+				return SendMessageResult{}, fmt.Errorf("agent messaging not available")
+			}
+			resp, err := deps.SendToAgent(ctx, args.To, args.Message)
+			if err != nil {
+				return SendMessageResult{}, err
+			}
+			return SendMessageResult{Response: resp}, nil
 		},
 	)
 	tools = append(tools, sendMsg)

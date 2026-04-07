@@ -1,4 +1,5 @@
-import { useQuery, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useQuery } from '@apollo/client/react'
 import { useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -20,7 +21,7 @@ interface Props {
 
 export function BranchNavigator({ currentThreadId }: Props) {
   const navigate = useNavigate()
-  const { data } = useQuery(THREAD_BRANCHES, {
+  const { data } = useQuery<any>(THREAD_BRANCHES, {
     variables: { includeArchived: false },
   })
 

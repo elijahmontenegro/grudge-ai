@@ -1,4 +1,5 @@
-import { useMutation, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useMutation } from '@apollo/client/react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -14,9 +15,6 @@ const APPROVE_PLAN = gql`
   }
 `
 
-const COMPILE_ADOC = gql`
-  mutation CompileAdoc($path: String!) { compileAdoc(path: $path) }
-`
 
 interface Props {
   threadId: string
@@ -25,8 +23,8 @@ interface Props {
 
 export function PlanMode({ threadId, planContent }: Props) {
   const { state } = useAgentState(threadId)
-  const [enterPlan] = useMutation(ENTER_PLAN)
-  const [approvePlan] = useMutation(APPROVE_PLAN)
+  const [enterPlan] = useMutation<any>(ENTER_PLAN)
+  const [approvePlan] = useMutation<any>(APPROVE_PLAN)
 
   const isPlanMode = state?.mode === 'PLAN'
 

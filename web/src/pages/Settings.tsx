@@ -1,4 +1,5 @@
-import { useQuery, useMutation, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useQuery, useMutation } from '@apollo/client/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
@@ -26,8 +27,9 @@ const UPDATE_SETTINGS = gql`
 `
 
 export function SettingsPage() {
-  const { data, loading, refetch } = useQuery(SETTINGS_QUERY)
-  const [updateSettings] = useMutation(UPDATE_SETTINGS)
+  const { data, loading, refetch } = useQuery<any>(SETTINGS_QUERY)
+  const [_updateSettings] = useMutation<any>(UPDATE_SETTINGS)
+  void _updateSettings
 
   if (loading) return <div className="p-8 text-muted">Loading settings...</div>
 

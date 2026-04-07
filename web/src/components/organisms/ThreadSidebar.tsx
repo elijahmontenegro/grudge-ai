@@ -1,4 +1,5 @@
-import { useQuery, useMutation, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useQuery, useMutation } from '@apollo/client/react'
 import { useNavigate, useParams } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -32,10 +33,10 @@ const CREATE_THREAD = gql`
 export function ThreadSidebar() {
   const { threadId } = useParams<{ threadId: string }>()
   const navigate = useNavigate()
-  const { data, loading, refetch } = useQuery(THREADS_QUERY, {
+  const { data, loading, refetch } = useQuery<any>(THREADS_QUERY, {
     variables: { includeArchived: false },
   })
-  const [createThread] = useMutation(CREATE_THREAD)
+  const [createThread] = useMutation<any>(CREATE_THREAD)
   const { event: stateEvent } = useThreadStateChanges()
 
   const handleNew = async () => {

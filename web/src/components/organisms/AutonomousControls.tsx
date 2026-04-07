@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { useMutation, gql } from '@apollo/client'
+import { gql } from '@apollo/client'
+import { useMutation } from '@apollo/client/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { useAgentState, type AgentStatus, type AgentMode } from '@/hooks/useAgentState'
+import { useAgentState } from '@/hooks/useAgentState'
 
 const START_AUTONOMOUS = gql`
   mutation StartAutonomous($threadId: ID!, $prompt: String!, $duration: String!) {
@@ -33,10 +34,10 @@ export function AutonomousControls({ threadId }: Props) {
   const [correction, setCorrection] = useState('')
   const { state } = useAgentState(threadId)
 
-  const [startAutonomous] = useMutation(START_AUTONOMOUS)
-  const [pauseAgent] = useMutation(PAUSE_AGENT)
-  const [resumeAgent] = useMutation(RESUME_AGENT)
-  const [stopAgent] = useMutation(STOP_AGENT)
+  const [startAutonomous] = useMutation<any>(START_AUTONOMOUS)
+  const [pauseAgent] = useMutation<any>(PAUSE_AGENT)
+  const [resumeAgent] = useMutation<any>(RESUME_AGENT)
+  const [stopAgent] = useMutation<any>(STOP_AGENT)
 
   const isRunning = state?.status === 'RUNNING'
   const isPaused = state?.status === 'PAUSED'
