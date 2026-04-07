@@ -18,16 +18,14 @@ import (
 // ephemeral RRC engine, scores, selects, assembles, and forwards.
 type Handler struct {
 	classifier core.Classifier
-	embedder   core.Embedder
 	completer  core.Completer
 	rrcCfg     rrc.EngineConfig
 }
 
 // NewHandler creates a proxy handler.
-func NewHandler(classifier core.Classifier, embedder core.Embedder, completer core.Completer, cfg rrc.EngineConfig) *Handler {
+func NewHandler(classifier core.Classifier, completer core.Completer, cfg rrc.EngineConfig) *Handler {
 	return &Handler{
 		classifier: classifier,
-		embedder:   embedder,
 		completer:  completer,
 		rrcCfg:     cfg,
 	}
@@ -112,7 +110,7 @@ func (h *Handler) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 // runStatelessRRC creates an ephemeral engine, scores all messages, selects for
 // the last message (the prompt), and returns the selected messages.
 func (h *Handler) runStatelessRRC(ctx context.Context, messages []*pb.Message) ([]*pb.Message, error) {
-	engine := rrc.NewEngine(h.rrcCfg, h.classifier, h.embedder, h.completer)
+	engine := rrc.NewEngine(h.rrcCfg, h.classifier, h.completer)
 
 	// Score each message against its predecessors
 	for i, msg := range messages {

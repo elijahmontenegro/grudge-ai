@@ -13,6 +13,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 
 	"github.com/emontenegr/spidey/core"
+	"github.com/emontenegr/spidey/core/adapter/tei"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/graph"
@@ -56,16 +57,21 @@ func main() {
 		}
 	}
 
+	// Build composite classifier: NLI + embedding similarity, max signal wins.
+	// classifier config points to NLI model, embedder config points to embedding model.
+	var nliURL, embedURL string
 	if clsCfg, ok := cfg.Settings.Providers["classifier"]; ok {
-		p, err := config.BuildProvider(clsCfg)
-		if err != nil {
-			log.Printf("classifier provider: %v", err)
-		} else {
-			providers = append(providers, p)
-			classifier, _ = p.Classifier(clsCfg.Model)
-		}
+		nliURL = clsCfg.BaseURL
+	}
+	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
+		embedURL = embCfg.BaseURL
+	}
+	if nliURL != "" || embedURL != "" {
+		classifier = tei.NewCompositeClassifier(nliURL, embedURL)
+		log.Printf("Composite classifier: NLI=%q, embed=%q", nliURL, embedURL)
 	}
 
+	// Embedder for semantic search (separate from classifier)
 	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
 		p, err := config.BuildProvider(embCfg)
 		if err != nil {
@@ -97,7 +103,7 @@ func main() {
 	}
 
 	// Initialize RRC engine — embedder for dependency scoring, classifier optional
-	engine := rrc.NewEngine(rrc.DefaultConfig(), classifier, embedder, smallCompleter)
+	engine := rrc.NewEngine(rrc.DefaultConfig(), classifier, smallCompleter)
 
 	// Load persisted state
 	if edges, err := db.AllEdges(); err == nil && len(edges) > 0 {
@@ -137,7 +143,7 @@ func main() {
 	gqlSrv.AddTransport(transport.Websocket{})
 
 	// Proxy
-	proxyHandler := proxy.NewHandler(classifier, embedder, mainCompleter, rrc.DefaultConfig())
+	proxyHandler := proxy.NewHandler(classifier, mainCompleter, rrc.DefaultConfig())
 
 	// Routes
 	mux := http.NewServeMux()
