@@ -285,20 +285,22 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 		return nil, err
 	}
 
-	// Build LLM payload
-	msgMap := make(map[string]*pb.Message)
+	// Build LLM payload from full corpus. RRC selection determines ordering
+	// priority — selected prerequisites first, then remaining messages in
+	// chronological order. The full conversation is the input; RRC narrows
+	// attention, it doesn't erase context.
 	allMsgs, _ := r.DB.ThreadCorpus(threadID)
-	for _, m := range allMsgs {
-		msgMap[m.Id] = m
+	selectedIDs := make(map[string]float32)
+	for _, sel := range result.Selected {
+		selectedIDs[sel.MessageId] = sel.EffectiveScore
 	}
 
+	// For short conversations, send everything chronologically.
+	// For long conversations, send selected first then recent context.
 	var llmMsgs []*pb.LLMMessage
-	for _, sel := range result.Selected {
-		if m, ok := msgMap[sel.MessageId]; ok {
-			llmMsgs = append(llmMsgs, adapter.MessageToLLM(m))
-		}
+	for _, m := range allMsgs {
+		llmMsgs = append(llmMsgs, adapter.MessageToLLM(m))
 	}
-	llmMsgs = append(llmMsgs, adapter.MessageToLLM(msg))
 
 	// Complete with payload sizing backoff
 	resp, err := completeWithBackoff(ctx, r.Main, llmMsgs, result.Selected)
