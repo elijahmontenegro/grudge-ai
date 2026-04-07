@@ -146,17 +146,20 @@ func main() {
 		})
 	}
 
-	addr := "spidey.localhost:8420"
-	srv := &http.Server{Addr: addr, Handler: mux}
+	// Bind to 127.0.0.1:8420 — browsers resolve spidey.localhost per RFC 6761,
+	// but the OS-level resolver on Windows doesn't handle *.localhost subdomains.
+	bindAddr := "127.0.0.1:8420"
+	publicURL := "http://spidey.localhost:8420"
+	srv := &http.Server{Addr: bindAddr, Handler: mux}
 
 	go func() {
 		<-ctx.Done()
 		srv.Shutdown(context.Background())
 	}()
 
-	go tray.OpenBrowser("http://" + addr)
+	go tray.OpenBrowser(publicURL)
 
-	log.Printf("Spidey listening on http://%s", addr)
+	log.Printf("Spidey listening on %s (%s)", publicURL, bindAddr)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("server: %v", err)
 	}
