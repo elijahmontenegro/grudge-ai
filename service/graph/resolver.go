@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/emontenegr/spidey/core"
+	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/search"
@@ -17,6 +18,9 @@ type Resolver struct {
 	Config   *config.Config
 	Searcher *search.Searcher
 	Main     core.Completer // main model completer
+
+	// Selection results for introspection (keyed by event ID)
+	selectionResults map[string]*pb.SelectionResult
 
 	// Per-thread subscription channels
 	streamSubs   map[string][]chan *StreamEvent

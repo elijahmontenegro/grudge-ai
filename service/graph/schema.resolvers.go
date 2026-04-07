@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -102,9 +103,35 @@ func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *in
 }
 
 func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*SelectionResult, error) {
-	// Selection results are transient — stored in engine memory, not DB.
-	// Return nil for now; live results come via subscription.
-	return nil, nil
+	r.mu.RLock()
+	pbResult, ok := r.selectionResults[eventID]
+	r.mu.RUnlock()
+	if !ok || pbResult == nil {
+		return nil, nil
+	}
+
+	gql := &SelectionResult{
+		EventID:  pbResult.EventId,
+		Scope:    pbResult.Scope.String(),
+		ThreadID: pbResult.ThreadId,
+	}
+	for _, s := range pbResult.Selected {
+		gql.Selected = append(gql.Selected, &SelectedMessage{
+			MessageID:      s.MessageId,
+			EffectiveScore: float64(s.EffectiveScore),
+			HopDepth:       int(s.HopDepth),
+			ThreadID:       s.ThreadId,
+			CrossThread:    s.CrossThread,
+		})
+	}
+	for _, e := range pbResult.Excluded {
+		gql.Excluded = append(gql.Excluded, &ExcludedMessage{
+			MessageID: e.MessageId,
+			Reason:    e.Reason.String(),
+			Score:     float64(e.Score),
+		})
+	}
+	return gql, nil
 }
 
 func (r *queryResolver) QudGraph(ctx context.Context, threadID string) (*QUDGraph, error) {
@@ -274,6 +301,7 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 	for _, edge := range edges {
 		r.DB.InsertEdge(edge)
 	}
+	log.Printf("[RRC] Scored %d edges for msg %s against %d corpus messages", len(edges), msg.Id, len(corpus))
 
 	// Select prerequisites
 	pbScope := pb.SelectionScope_SELECTION_SCOPE_THREAD
@@ -285,21 +313,39 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 		return nil, err
 	}
 
-	// Build LLM payload from RRC selection. Only selected prerequisites + prompt.
-	// The model sees what RRC determines it needs — not the full history.
+	// Store selection result for introspection
+	r.mu.Lock()
+	if r.selectionResults == nil {
+		r.selectionResults = make(map[string]*pb.SelectionResult)
+	}
+	r.selectionResults[result.EventId] = result
+	r.mu.Unlock()
+
+	// Build LLM payload — selected prerequisites ordered CHRONOLOGICALLY.
+	// The spec says: "The service looks up message content and orders selected
+	// messages chronologically, placing them in the model's input as ordinary
+	// conversation entries."
 	allMsgs, _ := r.DB.ThreadCorpus(threadID)
-	msgMap := make(map[string]*pb.Message)
-	for _, m := range allMsgs {
-		msgMap[m.Id] = m
+	selectedIDs := make(map[string]float32)
+	for _, sel := range result.Selected {
+		selectedIDs[sel.MessageId] = sel.EffectiveScore
 	}
 
 	var llmMsgs []*pb.LLMMessage
-	for _, sel := range result.Selected {
-		if m, ok := msgMap[sel.MessageId]; ok {
+	log.Printf("[RRC] Selected %d prerequisites from %d total messages:", len(result.Selected), len(allMsgs))
+	// Walk corpus in chronological order, include only selected messages
+	for _, m := range allMsgs {
+		if score, ok := selectedIDs[m.Id]; ok {
+			snippet := adapter.ProtoToText(m.Content)
+			if len(snippet) > 60 {
+				snippet = snippet[:60] + "..."
+			}
+			log.Printf("[RRC]   %.3f  pos=%d [%s] %s", score, m.Position, m.Role.String(), snippet)
 			llmMsgs = append(llmMsgs, adapter.MessageToLLM(m))
 		}
 	}
 	llmMsgs = append(llmMsgs, adapter.MessageToLLM(msg))
+	log.Printf("[RRC] Payload: %d selected + 1 prompt = %d to LLM (from %d total)", len(result.Selected), len(llmMsgs), len(allMsgs))
 
 	// Complete with payload sizing backoff
 	resp, err := completeWithBackoff(ctx, r.Main, llmMsgs, result.Selected)
