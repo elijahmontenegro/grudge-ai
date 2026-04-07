@@ -23,8 +23,8 @@ interface Props {
 
 export function PlanMode({ threadId, planContent }: Props) {
   const { state } = useAgentState(threadId)
-  const [enterPlan] = useMutation<any>(ENTER_PLAN)
-  const [approvePlan] = useMutation<any>(APPROVE_PLAN)
+  const [enterPlan] = useMutation<{enterPlanMode: boolean}>(ENTER_PLAN)
+  const [approvePlan] = useMutation<{approvePlan: boolean}>(APPROVE_PLAN)
 
   const isPlanMode = state?.mode === 'PLAN'
 

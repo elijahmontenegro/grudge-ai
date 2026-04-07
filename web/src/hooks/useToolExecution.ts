@@ -1,5 +1,9 @@
 import { gql } from '@apollo/client'
 import { useSubscription } from '@apollo/client/react'
+import type {
+  ToolExecutionSubscription,
+  ToolExecutionSubscriptionVariables,
+} from '@/graphql/generated/types'
 
 const TOOL_EXECUTION_SUBSCRIPTION = gql`
   subscription ToolExecution($threadId: ID!) {
@@ -15,20 +19,11 @@ const TOOL_EXECUTION_SUBSCRIPTION = gql`
   }
 `
 
-interface ToolExecution {
-  threadId: string
-  callId: string
-  toolName: string
-  arguments: string
-  status: string
-  result: string | null
-  isError: boolean | null
-}
-
 export function useToolExecution(threadId: string) {
-  const { data, loading, error } = useSubscription<{
-    toolExecution: ToolExecution
-  }>(TOOL_EXECUTION_SUBSCRIPTION, {
+  const { data, loading, error } = useSubscription<
+    ToolExecutionSubscription,
+    ToolExecutionSubscriptionVariables
+  >(TOOL_EXECUTION_SUBSCRIPTION, {
     variables: { threadId },
     skip: !threadId,
   })

@@ -1,5 +1,9 @@
 import { gql } from '@apollo/client'
 import { useSubscription } from '@apollo/client/react'
+import type {
+  MessageStreamSubscription,
+  MessageStreamSubscriptionVariables,
+} from '@/graphql/generated/types'
 
 const MESSAGE_STREAM_SUBSCRIPTION = gql`
   subscription MessageStream($threadId: ID!) {
@@ -18,19 +22,11 @@ const MESSAGE_STREAM_SUBSCRIPTION = gql`
   }
 `
 
-interface StreamEvent {
-  messageId: string
-  delta: string | null
-  thinking: string | null
-  toolCall: { id: string; name: string; arguments: string | null } | null
-  done: boolean
-  error: string | null
-}
-
 export function useMessageStream(threadId: string) {
-  const { data, loading, error } = useSubscription<{
-    messageStream: StreamEvent
-  }>(MESSAGE_STREAM_SUBSCRIPTION, {
+  const { data, loading, error } = useSubscription<
+    MessageStreamSubscription,
+    MessageStreamSubscriptionVariables
+  >(MESSAGE_STREAM_SUBSCRIPTION, {
     variables: { threadId },
     skip: !threadId,
   })

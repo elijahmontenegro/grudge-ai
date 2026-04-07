@@ -37,8 +37,8 @@ export function CommandPalette() {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const navigate = useNavigate()
-  const { data: threadsData } = useQuery<any>(THREADS_QUERY)
-  const { data: searchData } = useQuery<any>(SEARCH_QUERY, {
+  const { data: threadsData } = useQuery<{threads: any[]}>(THREADS_QUERY)
+  const { data: searchData } = useQuery<{search: any[]}>(SEARCH_QUERY, {
     variables: { query: search, limit: 5 },
     skip: search.length < 2,
   })

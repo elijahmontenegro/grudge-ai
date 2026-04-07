@@ -58,6 +58,13 @@ const ROLES = [
     adapters: ['tei'],
   },
   {
+    key: 'embedder',
+    label: 'Embedder (RRC + Search)',
+    description: 'Embedding model for similarity scoring and semantic search. Combined with NLI classifier for dependency detection.',
+    placeholder: 'BAAI/bge-small-en-v1.5',
+    adapters: ['tei', 'openai'],
+  },
+  {
     key: 'small_fast',
     label: 'Small Fast Model',
     description: 'QUD extraction, autocomplete, annotations. Sub-second latency preferred.',
@@ -145,8 +152,9 @@ function ProviderForm({
 }
 
 export function SettingsPage() {
-  const { data, loading, refetch } = useQuery<any>(SETTINGS_QUERY)
-  const [updateSettings] = useMutation<any>(UPDATE_SETTINGS)
+  type SettingsData = { settings: { providers: string; permissions: string; preferences: string } }
+  const { data, loading, refetch } = useQuery<SettingsData>(SETTINGS_QUERY)
+  const [updateSettings] = useMutation<{ updateSettings: SettingsData['settings'] }>(UPDATE_SETTINGS)
   const [providers, setProviders] = useState<Record<string, ProviderConfig>>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)

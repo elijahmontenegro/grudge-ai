@@ -58,16 +58,16 @@ interface Props {
 }
 
 export function IntrospectionPanel({ threadId }: Props) {
-  const { data: selData } = useQuery<any>(SELECTION_QUERY, {
+  const { data: selData } = useQuery<{selectionResult: any}>(SELECTION_QUERY, {
     variables: { eventId: threadId },
     skip: !threadId,
     pollInterval: 2000,
   })
-  const { data: msgData } = useQuery<any>(MESSAGES_QUERY, {
+  const { data: msgData } = useQuery<{messages: any[]}>(MESSAGES_QUERY, {
     variables: { threadId },
     pollInterval: 2000,
   })
-  const { data: qudData } = useQuery<any>(QUD_QUERY, {
+  const { data: qudData } = useQuery<{qudGraph: any}>(QUD_QUERY, {
     variables: { threadId },
   })
 
@@ -101,7 +101,7 @@ export function IntrospectionPanel({ threadId }: Props) {
               <div className="space-y-2">
                 {messages.map((msg: any) => {
                   const isSelected = selectedIds.has(msg.id)
-                  const sel = selectionMap.get(msg.id) as any
+                  const sel = selectionMap.get(msg.id) as Record<string, number | boolean | string>
                   const isUser = msg.role === 'ROLE_USER'
                   const snippet = msg.content.length > 80
                     ? msg.content.slice(0, 80) + '...'
@@ -128,7 +128,7 @@ export function IntrospectionPanel({ threadId }: Props) {
                         </span>
                         {sel && (
                           <span className="text-[10px] text-muted ml-auto">
-                            score {sel.effectiveScore.toFixed(3)} · depth {sel.hopDepth}
+                            score {Number(sel.effectiveScore).toFixed(3)} · depth {sel.hopDepth}
                           </span>
                         )}
                         {sel?.crossThread && (
@@ -149,7 +149,7 @@ export function IntrospectionPanel({ threadId }: Props) {
             <p className="text-xs text-muted">Send a message to see RRC selection.</p>
           )}
 
-          {qudData?.qudGraph?.quds?.length > 0 && (
+          {qudData?.qudGraph?.quds && qudData.qudGraph.quds.length > 0 && (
             <section>
               <Separator className="my-3" />
               <h4 className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">

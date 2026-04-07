@@ -21,7 +21,7 @@ interface Props {
 
 export function BranchNavigator({ currentThreadId }: Props) {
   const navigate = useNavigate()
-  const { data } = useQuery<any>(THREAD_BRANCHES, {
+  const { data } = useQuery<{threads: any[]}>(THREAD_BRANCHES, {
     variables: { includeArchived: false },
   })
 

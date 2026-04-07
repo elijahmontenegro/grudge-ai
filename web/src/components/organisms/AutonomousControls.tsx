@@ -34,10 +34,10 @@ export function AutonomousControls({ threadId }: Props) {
   const [correction, setCorrection] = useState('')
   const { state } = useAgentState(threadId)
 
-  const [startAutonomous] = useMutation<any>(START_AUTONOMOUS)
-  const [pauseAgent] = useMutation<any>(PAUSE_AGENT)
-  const [resumeAgent] = useMutation<any>(RESUME_AGENT)
-  const [stopAgent] = useMutation<any>(STOP_AGENT)
+  const [startAutonomous] = useMutation<{startAutonomous: boolean}>(START_AUTONOMOUS)
+  const [pauseAgent] = useMutation<{pauseAgent: boolean}>(PAUSE_AGENT)
+  const [resumeAgent] = useMutation<{resumeAgent: boolean}>(RESUME_AGENT)
+  const [stopAgent] = useMutation<{stopAgent: boolean}>(STOP_AGENT)
 
   const isRunning = state?.status === 'RUNNING'
   const isPaused = state?.status === 'PAUSED'

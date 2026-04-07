@@ -1,6 +1,13 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
+import type {
+  ViewStateQuery,
+  ViewStateQueryVariables,
+  SaveViewStateMutation,
+  SaveViewStateMutationVariables,
+  ViewStateInput,
+} from '@/graphql/generated/types'
 
 const VIEW_STATE_QUERY = gql`
   query ViewState($threadId: ID!) {
@@ -22,28 +29,27 @@ const SAVE_VIEW_STATE = gql`
   }
 `
 
-interface ViewState {
-  scrollPosition: number
-  expandedMessageIds: string[]
-  inputDraft: string
-  citationExpansionState: string
-}
-
 const DEBOUNCE_MS = 500
 
 export function useViewState(threadId: string) {
-  const { data } = useQuery<any>(VIEW_STATE_QUERY, {
-    variables: { threadId },
-    skip: !threadId,
-  })
-  const [saveViewState] = useMutation<any>(SAVE_VIEW_STATE)
+  const { data } = useQuery<ViewStateQuery, ViewStateQueryVariables>(
+    VIEW_STATE_QUERY,
+    {
+      variables: { threadId },
+      skip: !threadId,
+    },
+  )
+  const [saveViewStateMutation] = useMutation<
+    SaveViewStateMutation,
+    SaveViewStateMutationVariables
+  >(SAVE_VIEW_STATE)
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
   const save = useCallback(
-    (state: ViewState) => {
+    (state: ViewStateInput) => {
       if (timerRef.current) clearTimeout(timerRef.current)
       timerRef.current = setTimeout(() => {
-        saveViewState({
+        saveViewStateMutation({
           variables: {
             threadId,
             state: {
@@ -56,7 +62,7 @@ export function useViewState(threadId: string) {
         })
       }, DEBOUNCE_MS)
     },
-    [threadId, saveViewState],
+    [threadId, saveViewStateMutation],
   )
 
   useEffect(() => {
@@ -66,7 +72,7 @@ export function useViewState(threadId: string) {
   }, [])
 
   return {
-    viewState: data?.viewState as ViewState | undefined,
+    viewState: data?.viewState ?? undefined,
     saveViewState: save,
   }
 }

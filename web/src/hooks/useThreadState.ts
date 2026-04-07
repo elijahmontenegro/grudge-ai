@@ -1,5 +1,6 @@
 import { gql } from '@apollo/client'
 import { useSubscription } from '@apollo/client/react'
+import type { ThreadStateChangesSubscription } from '@/graphql/generated/types'
 
 const THREAD_STATE_SUBSCRIPTION = gql`
   subscription ThreadStateChanges {
@@ -13,18 +14,9 @@ const THREAD_STATE_SUBSCRIPTION = gql`
   }
 `
 
-interface ThreadStateEvent {
-  threadId: string
-  status: string
-  mode: string
-  warmth: number
-  name: string
-}
-
 export function useThreadStateChanges() {
-  const { data, loading, error } = useSubscription<{
-    threadStateChanges: ThreadStateEvent
-  }>(THREAD_STATE_SUBSCRIPTION)
+  const { data, loading, error } =
+    useSubscription<ThreadStateChangesSubscription>(THREAD_STATE_SUBSCRIPTION)
 
   return {
     event: data?.threadStateChanges ?? null,

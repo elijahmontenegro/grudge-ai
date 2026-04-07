@@ -414,6 +414,44 @@ export type ViewStateInput = {
   scrollPosition: Scalars['Float']['input'];
 };
 
+export type ThreadBranchesQueryVariables = Exact<{
+  includeArchived?: InputMaybe<Scalars['Boolean']['input']>;
+}>;
+
+
+export type ThreadBranchesQuery = { __typename?: 'Query', threads: Array<{ __typename?: 'Thread', id: string, name: string, parentThreadId?: string | null, branchPointPosition?: number | null }> };
+
+export type StartAutonomousMutationVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+  prompt: Scalars['String']['input'];
+  duration: Scalars['String']['input'];
+}>;
+
+
+export type StartAutonomousMutation = { __typename?: 'Mutation', startAutonomous: boolean };
+
+export type PauseAgentMutationVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type PauseAgentMutation = { __typename?: 'Mutation', pauseAgent: boolean };
+
+export type ResumeAgentMutationVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+  correction?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type ResumeAgentMutation = { __typename?: 'Mutation', resumeAgent: boolean };
+
+export type StopAgentMutationVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type StopAgentMutation = { __typename?: 'Mutation', stopAgent: boolean };
+
 export type CommandPaletteThreadsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -427,17 +465,123 @@ export type SearchQueryVariables = Exact<{
 
 export type SearchQuery = { __typename?: 'Query', search: Array<{ __typename?: 'SearchResult', messageId: string, threadId: string, threadName: string, snippet: string, score: number }> };
 
-export type ThreadsQueryVariables = Exact<{
+export type SelectionResultQueryVariables = Exact<{
+  eventId: Scalars['ID']['input'];
+}>;
+
+
+export type SelectionResultQuery = { __typename?: 'Query', selectionResult?: { __typename?: 'SelectionResult', eventId: string, scope: SelectionScope, threadId: string, selected: Array<{ __typename?: 'SelectedMessage', messageId: string, effectiveScore: number, hopDepth: number, threadId: string, crossThread: boolean }>, excluded: Array<{ __typename?: 'ExcludedMessage', messageId: string, reason: string, score: number }> } | null };
+
+export type IntrospectionMessagesQueryVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type IntrospectionMessagesQuery = { __typename?: 'Query', messages: Array<{ __typename?: 'Message', id: string, role: string, content: string, position: number }> };
+
+export type QudGraphQueryVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type QudGraphQuery = { __typename?: 'Query', qudGraph?: { __typename?: 'QUDGraph', activeStack: Array<string>, quds: Array<{ __typename?: 'QUD', id: string, question: string, establishedBy: string, parentQudId?: string | null, status: string, addressedBy: Array<string> }> } | null };
+
+export type EnterPlanModeMutationVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type EnterPlanModeMutation = { __typename?: 'Mutation', enterPlanMode: boolean };
+
+export type ApprovePlanMutationVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+  executionMode: ExecutionMode;
+}>;
+
+
+export type ApprovePlanMutation = { __typename?: 'Mutation', approvePlan: boolean };
+
+export type SubagentProgressSubscriptionVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type SubagentProgressSubscription = { __typename?: 'Subscription', subagentProgress: { __typename?: 'SubagentProgress', threadId: string, forkThreadId: string, task: string, status: string, roundCount: number } };
+
+export type SidebarThreadsQueryVariables = Exact<{
   includeArchived?: InputMaybe<Scalars['Boolean']['input']>;
 }>;
 
 
-export type ThreadsQuery = { __typename?: 'Query', threads: Array<{ __typename?: 'Thread', id: string, name: string, createdAt: any, archivedAt?: any | null }> };
+export type SidebarThreadsQuery = { __typename?: 'Query', threads: Array<{ __typename?: 'Thread', id: string, name: string, createdAt: any, archivedAt?: any | null, parentThreadId?: string | null }> };
+
+export type CreateThreadMutationVariables = Exact<{
+  name?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type CreateThreadMutation = { __typename?: 'Mutation', createThread: { __typename?: 'Thread', id: string, name: string } };
+
+export type ApproveToolCallMutationVariables = Exact<{
+  callId: Scalars['ID']['input'];
+}>;
+
+
+export type ApproveToolCallMutation = { __typename?: 'Mutation', approveToolCall: boolean };
+
+export type DenyToolCallMutationVariables = Exact<{
+  callId: Scalars['ID']['input'];
+  reason?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type DenyToolCallMutation = { __typename?: 'Mutation', denyToolCall: boolean };
+
+export type AgentStateSubscriptionVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type AgentStateSubscription = { __typename?: 'Subscription', agentState: { __typename?: 'AgentState', threadId: string, status: AgentStatus, mode: AgentMode, roundCount: number, startedAt?: any | null, durationLimit?: string | null, elapsedTime?: string | null } };
+
+export type MessageStreamSubscriptionVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type MessageStreamSubscription = { __typename?: 'Subscription', messageStream: { __typename?: 'StreamEvent', messageId: string, delta?: string | null, thinking?: string | null, done: boolean, error?: string | null, toolCall?: { __typename?: 'ToolCallDelta', id: string, name: string, arguments?: string | null } | null } };
+
+export type ThreadStateChangesSubscriptionVariables = Exact<{ [key: string]: never; }>;
+
+
+export type ThreadStateChangesSubscription = { __typename?: 'Subscription', threadStateChanges: { __typename?: 'ThreadStateEvent', threadId: string, status: AgentStatus, mode: AgentMode, warmth: number, name: string } };
+
+export type ToolExecutionSubscriptionVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type ToolExecutionSubscription = { __typename?: 'Subscription', toolExecution: { __typename?: 'ToolExecution', threadId: string, callId: string, toolName: string, arguments: string, status: string, result?: string | null, isError?: boolean | null } };
+
+export type ViewStateQueryVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+}>;
+
+
+export type ViewStateQuery = { __typename?: 'Query', viewState?: { __typename?: 'ViewState', threadId: string, scrollPosition: number, expandedMessageIds: Array<string>, inputDraft: string, citationExpansionState: string } | null };
+
+export type SaveViewStateMutationVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+  state: ViewStateInput;
+}>;
+
+
+export type SaveViewStateMutation = { __typename?: 'Mutation', saveViewState: { __typename?: 'ViewState', threadId: string } };
 
 export type SettingsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type SettingsQuery = { __typename?: 'Query', settings: { __typename?: 'Settings', providers: string, permissions: string, mcpServers: string, preferences: string } };
+export type SettingsQuery = { __typename?: 'Query', settings: { __typename?: 'Settings', providers: string, permissions: string, preferences: string } };
 
 export type UpdateSettingsMutationVariables = Exact<{
   input: SettingsInput;
@@ -446,12 +590,12 @@ export type UpdateSettingsMutationVariables = Exact<{
 
 export type UpdateSettingsMutation = { __typename?: 'Mutation', updateSettings: { __typename?: 'Settings', providers: string, permissions: string, preferences: string } };
 
-export type MessagesQueryVariables = Exact<{
+export type ThreadMessagesQueryVariables = Exact<{
   threadId: Scalars['ID']['input'];
 }>;
 
 
-export type MessagesQuery = { __typename?: 'Query', messages: Array<{ __typename?: 'Message', id: string, role: string, content: string, position: number, createdAt: any }>, thread?: { __typename?: 'Thread', id: string, name: string } | null, selectionResult?: { __typename?: 'SelectionResult', eventId: string, selected: Array<{ __typename?: 'SelectedMessage', messageId: string, effectiveScore: number, hopDepth: number, crossThread: boolean }> } | null };
+export type ThreadMessagesQuery = { __typename?: 'Query', messages: Array<{ __typename?: 'Message', id: string, role: string, content: string, position: number, createdAt: any }>, thread?: { __typename?: 'Thread', id: string, name: string } | null };
 
 export type SendMessageMutationVariables = Exact<{
   threadId: Scalars['ID']['input'];

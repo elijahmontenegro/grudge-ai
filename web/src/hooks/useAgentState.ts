@@ -1,5 +1,9 @@
 import { gql } from '@apollo/client'
 import { useSubscription } from '@apollo/client/react'
+import type {
+  AgentStateSubscription,
+  AgentStateSubscriptionVariables,
+} from '@/graphql/generated/types'
 
 const AGENT_STATE_SUBSCRIPTION = gql`
   subscription AgentState($threadId: ID!) {
@@ -15,23 +19,11 @@ const AGENT_STATE_SUBSCRIPTION = gql`
   }
 `
 
-export type AgentStatus = 'IDLE' | 'RUNNING' | 'PAUSED'
-export type AgentMode = 'NORMAL' | 'AUTONOMOUS' | 'PLAN'
-
-interface AgentState {
-  threadId: string
-  status: AgentStatus
-  mode: AgentMode
-  roundCount: number
-  startedAt: string | null
-  durationLimit: string | null
-  elapsedTime: string | null
-}
-
 export function useAgentState(threadId: string) {
-  const { data, loading, error } = useSubscription<{
-    agentState: AgentState
-  }>(AGENT_STATE_SUBSCRIPTION, {
+  const { data, loading, error } = useSubscription<
+    AgentStateSubscription,
+    AgentStateSubscriptionVariables
+  >(AGENT_STATE_SUBSCRIPTION, {
     variables: { threadId },
     skip: !threadId,
   })
