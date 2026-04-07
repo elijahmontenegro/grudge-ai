@@ -250,7 +250,7 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 	}
 
 	msg := &pb.Message{
-		Id:        fmt.Sprintf("msg-%s-%d", threadID, len(corpus)),
+		Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 		Role:      pb.Role_ROLE_USER,
 		Content:   adapter.TextToProto(content),
 		Position:  int64(len(corpus)),
@@ -308,7 +308,7 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 
 	// Store assistant response
 	assistantMsg := &pb.Message{
-		Id:        fmt.Sprintf("msg-%s-%d", threadID, len(allMsgs)+1),
+		Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 		Role:      pb.Role_ROLE_ASSISTANT,
 		Content:   resp.Message.Content,
 		Position:  int64(len(allMsgs) + 1),
@@ -354,7 +354,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 		// Correction injected as user message — triggers new RRC selection
 		corpus, _ := r.DB.ThreadCorpus(threadID)
 		msg := &pb.Message{
-			Id:        fmt.Sprintf("msg-%s-%d", threadID, len(corpus)),
+			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 			Role:      pb.Role_ROLE_USER,
 			Content:   adapter.TextToProto(*correction),
 			Position:  int64(len(corpus)),
