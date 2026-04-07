@@ -149,7 +149,19 @@ func main() {
 		}
 	}
 	if webDist != "" {
-		mux.Handle("/", http.FileServer(http.Dir(webDist)))
+		fs := http.Dir(webDist)
+		fileServer := http.FileServer(fs)
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			// SPA fallback: try the file first, serve index.html for unknown paths
+			path := r.URL.Path
+			if path != "/" {
+				if _, err := fs.Open(path); err != nil {
+					// Not a static file — serve index.html for client-side routing
+					r.URL.Path = "/"
+				}
+			}
+			fileServer.ServeHTTP(w, r)
+		})
 		log.Printf("Serving web UI from %s", webDist)
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
