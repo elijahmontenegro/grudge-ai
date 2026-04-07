@@ -180,13 +180,13 @@ Classifier and completer are injected at construction. Methods operate on the en
 func NewEngine(cfg EngineConfig, classifier Classifier, completer Completer) *Engine
 
 // Score a new message against all predecessors. Returns created edges.
-func (e *Engine) OnMessage(msg *pb.Message, corpus []*pb.Message) ([]*pb.Edge, error)
+func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Message) ([]*pb.Edge, error)
 
 // Select prerequisites for a prompt. Returns ranked selection result.
 func (e *Engine) Select(promptID string, scope pb.SelectionScope, threadID string) (*pb.SelectionResult, error)
 
 // Process carry-forward from an LLM response. Updates QUD graph and DAG.
-func (e *Engine) CarryForward(input *pb.CarryForwardInput) error
+func (e *Engine) CarryForward(ctx context.Context, input *pb.CarryForwardInput) error
 
 // Create an ephemeral thread fork for subagent execution.
 func (e *Engine) Fork(parentThreadID string) (*Engine, error)
