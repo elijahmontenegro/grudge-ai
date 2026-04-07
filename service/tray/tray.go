@@ -3,7 +3,48 @@ package tray
 import (
 	"os/exec"
 	"runtime"
+
+	"fyne.io/systray"
 )
+
+const spideyURL = "http://spidey.localhost:8420"
+
+// Run starts the system tray. Blocks until quit is selected.
+// Call from a goroutine — the main thread runs the HTTP server.
+func Run(onQuit func()) {
+	systray.Run(onReady, func() {
+		if onQuit != nil {
+			onQuit()
+		}
+	})
+}
+
+func onReady() {
+	systray.SetTitle("Spidey")
+	systray.SetTooltip("Spidey — RRC-Native Agentic Framework")
+
+	mOpen := systray.AddMenuItem("Open Spidey", "Open in browser")
+	mSettings := systray.AddMenuItem("Settings", "Configure providers")
+	systray.AddSeparator()
+	mQuit := systray.AddMenuItem("Quit Spidey", "Stop the service")
+
+	// Open browser on launch
+	go OpenBrowser(spideyURL)
+
+	go func() {
+		for {
+			select {
+			case <-mOpen.ClickedCh:
+				OpenBrowser(spideyURL)
+			case <-mSettings.ClickedCh:
+				OpenBrowser(spideyURL + "/settings")
+			case <-mQuit.ClickedCh:
+				systray.Quit()
+				return
+			}
+		}
+	}()
+}
 
 // OpenBrowser opens the default browser to the given URL.
 func OpenBrowser(url string) error {
@@ -18,8 +59,3 @@ func OpenBrowser(url string) error {
 		return exec.Command("xdg-open", url).Start()
 	}
 }
-
-// Note: fyne.io/systray integration requires the systray dependency.
-// The full tray implementation (icon, menu, lifecycle) will be wired
-// when the systray dependency is added. The core service runs without
-// the tray (headless mode for testing/development).
