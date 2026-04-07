@@ -21,6 +21,8 @@ type Resolver struct {
 
 	// Selection results for introspection (keyed by event ID)
 	selectionResults map[string]*pb.SelectionResult
+	// Latest selection event per thread
+	latestSelection map[string]string // threadID -> eventID
 
 	// Per-thread subscription channels
 	streamSubs   map[string][]chan *StreamEvent

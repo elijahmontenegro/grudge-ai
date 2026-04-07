@@ -44,13 +44,14 @@ const QUD_QUERY = gql`
 
 interface Props {
   threadId: string
-  eventId?: string
 }
 
-export function IntrospectionPanel({ threadId, eventId }: Props) {
+export function IntrospectionPanel({ threadId }: Props) {
+  // Pass threadId as eventId — backend resolves to latest selection for the thread
   const { data: selData } = useQuery<any>(SELECTION_QUERY, {
-    variables: { eventId: eventId ?? '' },
-    skip: !eventId,
+    variables: { eventId: threadId },
+    skip: !threadId,
+    pollInterval: 2000,
   })
   const { data: qudData } = useQuery<any>(QUD_QUERY, {
     variables: { threadId },

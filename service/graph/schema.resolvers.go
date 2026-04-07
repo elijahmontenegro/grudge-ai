@@ -104,7 +104,12 @@ func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *in
 
 func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*SelectionResult, error) {
 	r.mu.RLock()
-	pbResult, ok := r.selectionResults[eventID]
+	// If eventID looks like a thread ID, resolve to latest selection for that thread
+	resolvedID := eventID
+	if latestID, ok := r.latestSelection[eventID]; ok {
+		resolvedID = latestID
+	}
+	pbResult, ok := r.selectionResults[resolvedID]
 	r.mu.RUnlock()
 	if !ok || pbResult == nil {
 		return nil, nil
@@ -319,6 +324,10 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 		r.selectionResults = make(map[string]*pb.SelectionResult)
 	}
 	r.selectionResults[result.EventId] = result
+	if r.latestSelection == nil {
+		r.latestSelection = make(map[string]string)
+	}
+	r.latestSelection[threadID] = result.EventId
 	r.mu.Unlock()
 
 	// Build LLM payload — selected prerequisites ordered CHRONOLOGICALLY.
