@@ -4,12 +4,20 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Badge } from '@/components/ui/badge'
+import { MessageBubble } from '@/components/molecules/MessageBubble'
+import { BranchNavigator } from '@/components/molecules/BranchNavigator'
+import { AutonomousControls } from '@/components/organisms/AutonomousControls'
+import { PlanMode } from '@/components/organisms/PlanMode'
+import { IntrospectionPanel } from '@/components/organisms/IntrospectionPanel'
+import { ThreadSidebar } from '@/components/organisms/ThreadSidebar'
+import { useMessageStream } from '@/hooks/useMessageStream'
+import { useAgentState } from '@/hooks/useAgentState'
+import { useViewState } from '@/hooks/useViewState'
 
 const MESSAGES_QUERY = gql`
-  query Messages($threadId: ID!) {
+  query ThreadMessages($threadId: ID!) {
     messages(threadId: $threadId) {
       id
       role
@@ -20,15 +28,6 @@ const MESSAGES_QUERY = gql`
     thread(id: $threadId) {
       id
       name
-    }
-    selectionResult(eventId: $threadId) {
-      eventId
-      selected {
-        messageId
-        effectiveScore
-        hopDepth
-        crossThread
-      }
     }
   }
 `
@@ -52,105 +51,126 @@ interface MessageData {
   createdAt: string
 }
 
-interface SelectedMessageData {
-  messageId: string
-  effectiveScore: number
-  hopDepth: number
-  crossThread: boolean
-}
-
 export function ThreadPage() {
   const { threadId } = useParams<{ threadId: string }>()
   const [input, setInput] = useState('')
+  const [showIntrospection, setShowIntrospection] = useState(false)
   const { data, loading, refetch } = useQuery(MESSAGES_QUERY, {
     variables: { threadId },
     skip: !threadId,
   })
   const [sendMessage, { loading: sending }] = useMutation(SEND_MESSAGE)
-
-  const selectedIds = new Set(
-    data?.selectionResult?.selected?.map((s: SelectedMessageData) => s.messageId) ?? []
-  )
-  const selectionMap = new Map(
-    data?.selectionResult?.selected?.map((s: SelectedMessageData) => [s.messageId, s]) ?? []
-  )
+  const { event: streamEvent } = useMessageStream(threadId ?? '')
+  const { state: agentState } = useAgentState(threadId ?? '')
+  const { saveViewState } = useViewState(threadId ?? '')
 
   const handleSend = async () => {
     if (!input.trim() || !threadId) return
-    await sendMessage({
-      variables: { threadId, content: input, scope: 'THREAD' },
-    })
+    const content = input
     setInput('')
+    saveViewState({
+      scrollPosition: 0,
+      expandedMessageIds: [],
+      inputDraft: '',
+      citationExpansionState: '{}',
+    })
+    await sendMessage({
+      variables: { threadId, content, scope: 'THREAD' },
+    })
     refetch()
   }
 
+  const handleInputChange = (value: string) => {
+    setInput(value)
+    saveViewState({
+      scrollPosition: 0,
+      expandedMessageIds: [],
+      inputDraft: value,
+      citationExpansionState: '{}',
+    })
+  }
+
   return (
-    <div className="flex h-screen flex-col">
-      <header className="border-b border-border p-4 flex items-center gap-3">
-        <h1 className="text-lg font-semibold flex-1">
-          {data?.thread?.name || 'Thread'}
-        </h1>
-        <Badge variant="outline">{data?.messages?.length ?? 0} messages</Badge>
-      </header>
+    <div className="flex h-screen">
+      <ThreadSidebar />
 
-      <ScrollArea className="flex-1 p-4">
-        <div className="space-y-3 max-w-3xl mx-auto">
-          {loading && <p className="text-sm text-muted">Loading messages...</p>}
-          {data?.messages?.map((msg: MessageData) => {
-            const isUser = msg.role === 'ROLE_USER'
-            const isSelected = selectedIds.has(msg.id)
-            const selection = selectionMap.get(msg.id) as SelectedMessageData | undefined
+      <main className="flex-1 flex flex-col min-w-0">
+        <header className="border-b border-border p-3 flex items-center gap-3">
+          <h1 className="text-sm font-semibold flex-1 truncate">
+            {data?.thread?.name || 'Thread'}
+          </h1>
+          {threadId && <BranchNavigator currentThreadId={threadId} />}
+          <Badge variant="outline" className="text-xs">
+            {data?.messages?.length ?? 0} msgs
+          </Badge>
+          {agentState && (
+            <Badge
+              variant={agentState.status === 'RUNNING' ? 'default' : 'secondary'}
+              className="text-xs"
+            >
+              {agentState.status}
+            </Badge>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-xs"
+            onClick={() => setShowIntrospection(!showIntrospection)}
+          >
+            {showIntrospection ? 'Hide' : 'RRC'}
+          </Button>
+        </header>
 
-            return (
-              <div
-                key={msg.id}
-                className={`p-3 rounded-lg ${
-                  isUser
-                    ? 'ml-auto bg-primary text-primary-foreground max-w-[80%]'
-                    : 'bg-card border border-border max-w-[90%]'
-                } ${isSelected ? 'ring-2 ring-primary/30' : ''}`}
-              >
-                <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
-                {isSelected && selection && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div className="mt-2 flex gap-1">
-                        <Badge variant="secondary" className="text-xs">
-                          score: {selection.effectiveScore.toFixed(2)}
-                        </Badge>
-                        <Badge variant="secondary" className="text-xs">
-                          depth: {selection.hopDepth}
-                        </Badge>
-                        {selection.crossThread && (
-                          <Badge variant="destructive" className="text-xs">cross-thread</Badge>
-                        )}
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      RRC prerequisite — selected for this response
-                    </TooltipContent>
-                  </Tooltip>
+        <div className="flex flex-1 min-h-0">
+          <div className="flex-1 flex flex-col min-w-0">
+            <ScrollArea className="flex-1 p-4">
+              <div className="space-y-3 max-w-3xl mx-auto">
+                {loading && <p className="text-sm text-muted">Loading...</p>}
+                {data?.messages?.map((msg: MessageData) => (
+                  <MessageBubble
+                    key={msg.id}
+                    id={msg.id}
+                    role={msg.role}
+                    content={msg.content}
+                  />
+                ))}
+                {streamEvent && !streamEvent.done && streamEvent.delta && (
+                  <div className="p-3 rounded-lg bg-card border border-border max-w-[90%] animate-pulse">
+                    <p className="text-sm whitespace-pre-wrap">{streamEvent.delta}</p>
+                  </div>
                 )}
               </div>
-            )
-          })}
-        </div>
-      </ScrollArea>
+            </ScrollArea>
 
-      <Separator />
-      <div className="p-4 flex gap-2 max-w-3xl mx-auto w-full">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-          placeholder="Send a message..."
-          className="flex-1"
-          disabled={sending}
-        />
-        <Button onClick={handleSend} disabled={sending || !input.trim()}>
-          Send
-        </Button>
-      </div>
+            {threadId && (
+              <div className="p-3 space-y-2 border-t border-border">
+                <div className="flex gap-2 max-w-3xl mx-auto">
+                  <AutonomousControls threadId={threadId} />
+                  <PlanMode threadId={threadId} />
+                </div>
+                <Separator />
+                <div className="flex gap-2 max-w-3xl mx-auto w-full">
+                  <Input
+                    value={input}
+                    onChange={(e) => handleInputChange(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+                    placeholder="Send a message..."
+                    className="flex-1"
+                    disabled={sending}
+                  />
+                  <Button onClick={handleSend} disabled={sending || !input.trim()}>
+                    Send
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {showIntrospection && threadId && (
+            <IntrospectionPanel threadId={threadId} />
+          )}
+        </div>
+      </main>
     </div>
   )
 }
