@@ -11,6 +11,7 @@ import { BranchNavigator } from '@/components/molecules/BranchNavigator'
 import { AutonomousControls } from '@/components/organisms/AutonomousControls'
 import { PlanMode } from '@/components/organisms/PlanMode'
 import { IntrospectionPanel } from '@/components/organisms/IntrospectionPanel'
+import { SubagentProgress } from '@/components/organisms/SubagentProgress'
 import { ThreadSidebar } from '@/components/organisms/ThreadSidebar'
 import { useMessageStream } from '@/hooks/useMessageStream'
 import { useAgentState } from '@/hooks/useAgentState'
@@ -144,9 +145,10 @@ export function ThreadPage() {
 
             {threadId && (
               <div className="p-3 space-y-2 border-t border-border">
-                <div className="flex gap-2 max-w-3xl mx-auto">
+                <div className="flex gap-2 max-w-3xl mx-auto flex-wrap">
                   <AutonomousControls threadId={threadId} />
                   <PlanMode threadId={threadId} />
+                  <SubagentProgress threadId={threadId} />
                 </div>
                 <Separator />
                 <div className="flex gap-2 max-w-3xl mx-auto w-full">

@@ -5,6 +5,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { WarmthIndicator } from '@/components/atoms/WarmthIndicator'
 import { useThreadStateChanges } from '@/hooks/useThreadState'
 
 const THREADS_QUERY = gql`
@@ -72,6 +73,9 @@ export function ThreadSidebar() {
               )}
             >
               {thread.parentThreadId && <span className="text-xs text-muted">&#8627;</span>}
+              {stateEvent?.threadId === thread.id && (
+                <WarmthIndicator warmth={stateEvent.warmth} />
+              )}
               <span className="truncate flex-1">{thread.name || 'Untitled'}</span>
               {thread.archivedAt && <Badge variant="secondary" className="text-[10px]">A</Badge>}
             </button>
