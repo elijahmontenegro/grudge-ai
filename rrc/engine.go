@@ -115,14 +115,9 @@ func (e *Engine) Select(promptID string, scope pb.SelectionScope, threadID strin
 	if scope == pb.SelectionScope_SELECTION_SCOPE_THREAD && threadID == "" {
 		return nil, ErrThreadNotFound
 	}
-	if scope == pb.SelectionScope_SELECTION_SCOPE_THREAD {
-		if _, ok := e.qudGraphs[threadID]; !ok {
-			// Thread must have been seen (at least via a message arrival)
-			if !e.dag.HasMessage(promptID) {
-				return nil, ErrMessageNotFound
-			}
-		}
-	}
+
+	// Zero-return is valid — if the prompt has no edges, return empty selection.
+	// The model is capable without augmentation for a novel prompt.
 
 	// Subgraph extraction
 	selected := extractSubgraph(e.dag, promptID, threadID, scope, e.cfg)
