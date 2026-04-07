@@ -63,7 +63,16 @@ func main() {
 		} else {
 			providers = append(providers, p)
 			classifier, _ = p.Classifier(clsCfg.Model)
-			embedder, _ = p.Embedder(clsCfg.Model)
+		}
+	}
+
+	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
+		p, err := config.BuildProvider(embCfg)
+		if err != nil {
+			log.Printf("embedder provider: %v", err)
+		} else {
+			providers = append(providers, p)
+			embedder, _ = p.Embedder(embCfg.Model)
 		}
 	}
 
@@ -87,8 +96,8 @@ func main() {
 		log.Printf("WARNING: providers not fully configured — configure at http://spidey.localhost:8420/settings")
 	}
 
-	// Initialize RRC engine (classifier/completer may be nil on first run)
-	engine := rrc.NewEngine(rrc.DefaultConfig(), classifier, smallCompleter)
+	// Initialize RRC engine — embedder for dependency scoring, classifier optional
+	engine := rrc.NewEngine(rrc.DefaultConfig(), classifier, embedder, smallCompleter)
 
 	// Load persisted state
 	if edges, err := db.AllEdges(); err == nil && len(edges) > 0 {
@@ -128,7 +137,7 @@ func main() {
 	gqlSrv.AddTransport(transport.Websocket{})
 
 	// Proxy
-	proxyHandler := proxy.NewHandler(classifier, mainCompleter, rrc.DefaultConfig())
+	proxyHandler := proxy.NewHandler(classifier, embedder, mainCompleter, rrc.DefaultConfig())
 
 	// Routes
 	mux := http.NewServeMux()

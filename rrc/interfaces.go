@@ -18,3 +18,9 @@ type Classifier interface {
 type Completer interface {
 	Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error)
 }
+
+// Embedder produces vector embeddings for similarity-based dependency scoring.
+// Consumer-defined interface — any core.Embedder satisfies this.
+type Embedder interface {
+	Embed(ctx context.Context, text string) ([]float32, error)
+}

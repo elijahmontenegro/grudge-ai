@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
@@ -15,6 +16,7 @@ import (
 // or via Load methods.
 type Engine struct {
 	classifier Classifier
+	embedder   Embedder
 	completer  Completer
 	dag        *DAG
 	scores     *ScoreCache
@@ -22,10 +24,12 @@ type Engine struct {
 	cfg        EngineConfig
 }
 
-// NewEngine creates an RRC engine with injected classifier and completer.
-func NewEngine(cfg EngineConfig, classifier Classifier, completer Completer) *Engine {
+// NewEngine creates an RRC engine. Embedder is used for dependency scoring
+// via cosine similarity. Classifier is optional (legacy NLI path).
+func NewEngine(cfg EngineConfig, classifier Classifier, embedder Embedder, completer Completer) *Engine {
 	return &Engine{
 		classifier: classifier,
+		embedder:   embedder,
 		completer:  completer,
 		dag:        newDAG(),
 		scores:     newScoreCache(),
@@ -37,39 +41,31 @@ func NewEngine(cfg EngineConfig, classifier Classifier, completer Completer) *En
 // OnMessage scores a new message against all predecessors in the corpus.
 // Returns created edges. O(N) classifier calls where N is corpus size.
 func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Message) ([]*pb.Edge, error) {
-	if len(corpus) == 0 {
+	if len(corpus) == 0 || e.embedder == nil {
 		return nil, nil
 	}
 
-	// Build batch classify request: score every (predecessor, msg) pair
-	pairs := make([]*pb.ClassifyRequest, 0, len(corpus))
-	for _, prior := range corpus {
-		if prior.Id == msg.Id {
-			continue
-		}
-		pairs = append(pairs, &pb.ClassifyRequest{
-			TextA: textFromMessage(prior),
-			TextB: textFromMessage(msg),
-		})
-	}
-
-	if len(pairs) == 0 {
-		return nil, nil
-	}
-
-	resp, err := e.classifier.ClassifyBatch(ctx, &pb.BatchClassifyRequest{Pairs: pairs})
+	// Embed the new message
+	msgText := textFromMessage(msg)
+	msgVec, err := e.embedder.Embed(ctx, msgText)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrClassifierFailed, err)
 	}
 
+	// Score every (predecessor, msg) pair via cosine similarity
 	var edges []*pb.Edge
-	pairIdx := 0
 	for _, prior := range corpus {
 		if prior.Id == msg.Id {
 			continue
 		}
 
-		ceScore := entailmentScore(resp.Results[pairIdx])
+		priorText := textFromMessage(prior)
+		priorVec, err := e.embedder.Embed(ctx, priorText)
+		if err != nil {
+			continue // skip failed embeddings, don't fail the whole batch
+		}
+
+		ceScore := cosineSimilarity(priorVec, msgVec)
 		e.scores.Set(prior.Id, msg.Id, ceScore)
 
 		if ceScore >= e.cfg.EdgeThreshold {
@@ -102,10 +98,26 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 			e.dag.AddEdge(edge)
 			edges = append(edges, edge)
 		}
-		pairIdx++
 	}
 
 	return edges, nil
+}
+
+// cosineSimilarity computes cosine similarity between two float32 vectors.
+func cosineSimilarity(a, b []float32) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+	var dot, normA, normB float64
+	for i := range a {
+		dot += float64(a[i]) * float64(b[i])
+		normA += float64(a[i]) * float64(a[i])
+		normB += float64(b[i]) * float64(b[i])
+	}
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
 // Select performs prerequisite selection for a prompt. Best-first backward
