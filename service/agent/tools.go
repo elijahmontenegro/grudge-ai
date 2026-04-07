@@ -2,9 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"net/http"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -207,6 +208,22 @@ type TaskOutputResult struct {
 type ToolDeps struct {
 	Sandboxed   bool
 	WorkingDirs []string
+	Tasks       *TaskStore
+	Skills      []SkillDef
+	// AskCh receives question, caller reads response from RespCh
+	AskCh       chan<- AskRequest
+}
+
+// SkillDef is a minimal skill reference for the tool.
+type SkillDef struct {
+	Name    string
+	Content string
+}
+
+// AskRequest is sent to the UI when AskUserQuestion is called.
+type AskRequest struct {
+	Question string
+	RespCh   chan string
 }
 
 // BuildTools creates all ADK FunctionTools for the agent.
@@ -340,10 +357,19 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	tools = append(tools, webFetch)
 
 	askUser, _ := functiontool.New(
-		functiontool.Config{Name: "AskUserQuestion", Description: "Ask the user a question and wait for their response."},
+		functiontool.Config{Name: "AskUserQuestion", Description: "Ask the user a question and wait for their response. The question is surfaced in the UI; execution pauses until the user responds."},
 		func(ctx tool.Context, args AskUserArgs) (AskUserResult, error) {
-			// The question is surfaced via subscription; response comes via GraphQL mutation
-			return AskUserResult{Response: "[awaiting user response]"}, nil
+			if deps.AskCh == nil {
+				return AskUserResult{Response: "[no user interaction channel]"}, nil
+			}
+			respCh := make(chan string, 1)
+			deps.AskCh <- AskRequest{Question: args.Question, RespCh: respCh}
+			select {
+			case <-ctx.Done():
+				return AskUserResult{}, ctx.Err()
+			case resp := <-respCh:
+				return AskUserResult{Response: resp}, nil
+			}
 		},
 	)
 	tools = append(tools, askUser)
@@ -385,15 +411,47 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	tools = append(tools, fileWrite)
 
 	notebookEdit, _ := functiontool.New(
-		functiontool.Config{Name: "NotebookEdit", Description: "Edit a cell in a Jupyter notebook."},
+		functiontool.Config{Name: "NotebookEdit", Description: "Edit a cell in a Jupyter notebook (.ipynb). Replaces the source content of the specified cell."},
 		func(ctx tool.Context, args NotebookEditArgs) (NotebookEditResult, error) {
 			data, err := os.ReadFile(args.Path)
 			if err != nil {
 				return NotebookEditResult{}, err
 			}
-			content := string(data)
-			// Simple cell replacement — notebook is JSON with cells array
-			_ = content
+			var nb map[string]any
+			if err := json.Unmarshal(data, &nb); err != nil {
+				return NotebookEditResult{}, fmt.Errorf("invalid notebook JSON: %w", err)
+			}
+			cells, ok := nb["cells"].([]any)
+			if !ok {
+				return NotebookEditResult{}, fmt.Errorf("notebook has no cells array")
+			}
+			if args.CellIdx < 0 || args.CellIdx >= len(cells) {
+				return NotebookEditResult{}, fmt.Errorf("cell index %d out of range (0-%d)", args.CellIdx, len(cells)-1)
+			}
+			cell, ok := cells[args.CellIdx].(map[string]any)
+			if !ok {
+				return NotebookEditResult{}, fmt.Errorf("cell %d is not a valid object", args.CellIdx)
+			}
+			// Notebook source is an array of lines
+			lines := strings.Split(args.Content, "\n")
+			sourceLines := make([]any, len(lines))
+			for i, l := range lines {
+				if i < len(lines)-1 {
+					sourceLines[i] = l + "\n"
+				} else {
+					sourceLines[i] = l
+				}
+			}
+			cell["source"] = sourceLines
+			cells[args.CellIdx] = cell
+			nb["cells"] = cells
+			out, err := json.MarshalIndent(nb, "", " ")
+			if err != nil {
+				return NotebookEditResult{}, err
+			}
+			if err := os.WriteFile(args.Path, out, 0o644); err != nil {
+				return NotebookEditResult{}, err
+			}
 			return NotebookEditResult{Success: true}, nil
 		},
 	)
@@ -402,9 +460,18 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	// --- Skill tools (Ask) ---
 
 	skill, _ := functiontool.New(
-		functiontool.Config{Name: "Skill", Description: "Invoke a skill by name with optional arguments."},
+		functiontool.Config{Name: "Skill", Description: "Invoke a skill by name with optional arguments. Skill content is injected as context."},
 		func(ctx tool.Context, args SkillArgs) (SkillResult, error) {
-			return SkillResult{Output: fmt.Sprintf("Skill '%s' invoked", args.Name)}, nil
+			for _, s := range deps.Skills {
+				if s.Name == args.Name {
+					content := s.Content
+					if args.Args != "" {
+						content = strings.Replace(content, "$ARGUMENTS", args.Args, -1)
+					}
+					return SkillResult{Output: content}, nil
+				}
+			}
+			return SkillResult{}, fmt.Errorf("skill '%s' not found", args.Name)
 		},
 	)
 	tools = append(tools, skill)
@@ -454,49 +521,90 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	tools = append(tools, sendMsg)
 
 	taskCreate, _ := functiontool.New(
-		functiontool.Config{Name: "TaskCreate", Description: "Create a task to track work progress."},
+		functiontool.Config{Name: "TaskCreate", Description: "Create a task to track work progress. Returns the task ID."},
 		func(ctx tool.Context, args TaskCreateArgs) (TaskCreateResult, error) {
-			return TaskCreateResult{TaskID: fmt.Sprintf("task-%d", 0)}, nil
+			if deps.Tasks == nil {
+				return TaskCreateResult{}, fmt.Errorf("task store not initialized")
+			}
+			t := deps.Tasks.Create(args.Subject, args.Description, "")
+			return TaskCreateResult{TaskID: t.ID}, nil
 		},
 	)
 	tools = append(tools, taskCreate)
 
 	taskGet, _ := functiontool.New(
-		functiontool.Config{Name: "TaskGet", Description: "Get details of a specific task."},
+		functiontool.Config{Name: "TaskGet", Description: "Get details of a specific task by ID."},
 		func(ctx tool.Context, args TaskGetArgs) (TaskGetResult, error) {
-			return TaskGetResult{Subject: "task", Status: "pending"}, nil
+			if deps.Tasks == nil {
+				return TaskGetResult{}, fmt.Errorf("task store not initialized")
+			}
+			t := deps.Tasks.Get(args.TaskID)
+			if t == nil {
+				return TaskGetResult{}, fmt.Errorf("task %s not found", args.TaskID)
+			}
+			return TaskGetResult{Subject: t.Subject, Status: t.Status}, nil
 		},
 	)
 	tools = append(tools, taskGet)
 
 	taskUpdate, _ := functiontool.New(
-		functiontool.Config{Name: "TaskUpdate", Description: "Update a task's status."},
+		functiontool.Config{Name: "TaskUpdate", Description: "Update a task's status (pending, in_progress, completed) or delete it (status=deleted)."},
 		func(ctx tool.Context, args TaskUpdateArgs) (TaskUpdateResult, error) {
+			if deps.Tasks == nil {
+				return TaskUpdateResult{}, fmt.Errorf("task store not initialized")
+			}
+			if args.Status == "deleted" {
+				deps.Tasks.Delete(args.TaskID)
+				return TaskUpdateResult{Success: true}, nil
+			}
+			ok := deps.Tasks.Update(args.TaskID, args.Status, "", "", "")
+			if !ok {
+				return TaskUpdateResult{}, fmt.Errorf("task %s not found", args.TaskID)
+			}
 			return TaskUpdateResult{Success: true}, nil
 		},
 	)
 	tools = append(tools, taskUpdate)
 
 	taskList, _ := functiontool.New(
-		functiontool.Config{Name: "TaskList", Description: "List all tasks."},
+		functiontool.Config{Name: "TaskList", Description: "List all tasks with their status."},
 		func(ctx tool.Context, args TaskListArgs) (TaskListResult, error) {
-			return TaskListResult{Tasks: []string{}}, nil
+			if deps.Tasks == nil {
+				return TaskListResult{Tasks: []string{}}, nil
+			}
+			tasks := deps.Tasks.List()
+			lines := make([]string, len(tasks))
+			for i, t := range tasks {
+				lines[i] = fmt.Sprintf("#%s [%s] %s", t.ID, t.Status, t.Subject)
+			}
+			return TaskListResult{Tasks: lines}, nil
 		},
 	)
 	tools = append(tools, taskList)
 
 	taskStop, _ := functiontool.New(
-		functiontool.Config{Name: "TaskStop", Description: "Stop a running task."},
+		functiontool.Config{Name: "TaskStop", Description: "Stop a running task by marking it completed."},
 		func(ctx tool.Context, args TaskStopArgs) (TaskStopResult, error) {
-			return TaskStopResult{Success: true}, nil
+			if deps.Tasks == nil {
+				return TaskStopResult{}, fmt.Errorf("task store not initialized")
+			}
+			ok := deps.Tasks.Update(args.TaskID, "completed", "", "", "")
+			return TaskStopResult{Success: ok}, nil
 		},
 	)
 	tools = append(tools, taskStop)
 
 	taskOutput, _ := functiontool.New(
-		functiontool.Config{Name: "TaskOutput", Description: "Get the output of a completed task."},
+		functiontool.Config{Name: "TaskOutput", Description: "Get the description and status of a task."},
 		func(ctx tool.Context, args TaskOutputArgs) (TaskOutputResult, error) {
-			return TaskOutputResult{Output: ""}, nil
+			if deps.Tasks == nil {
+				return TaskOutputResult{}, fmt.Errorf("task store not initialized")
+			}
+			t := deps.Tasks.Get(args.TaskID)
+			if t == nil {
+				return TaskOutputResult{}, fmt.Errorf("task %s not found", args.TaskID)
+			}
+			return TaskOutputResult{Output: fmt.Sprintf("[%s] %s: %s", t.Status, t.Subject, t.Description)}, nil
 		},
 	)
 	tools = append(tools, taskOutput)
