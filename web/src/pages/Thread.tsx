@@ -1,10 +1,9 @@
 import { useParams } from 'react-router'
 import { gql } from '@apollo/client'
 import { useQuery, useMutation } from '@apollo/client/react'
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
 import { MessageBubble } from '@/components/molecules/MessageBubble'
@@ -14,9 +13,7 @@ import { PlanMode } from '@/components/organisms/PlanMode'
 import { IntrospectionPanel } from '@/components/organisms/IntrospectionPanel'
 import { SubagentProgress } from '@/components/organisms/SubagentProgress'
 import { ThreadSidebar } from '@/components/organisms/ThreadSidebar'
-import { useMessageStream } from '@/hooks/useMessageStream'
 import { useAgentState } from '@/hooks/useAgentState'
-import { useViewState } from '@/hooks/useViewState'
 
 const MESSAGES_QUERY = gql`
   query ThreadMessages($threadId: ID!) {
@@ -57,39 +54,36 @@ export function ThreadPage() {
   const { threadId } = useParams<{ threadId: string }>()
   const [input, setInput] = useState('')
   const [showIntrospection, setShowIntrospection] = useState(false)
+  const [thinking, setThinking] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const { data, loading, refetch } = useQuery<any>(MESSAGES_QUERY, {
     variables: { threadId },
     skip: !threadId,
+    pollInterval: thinking ? 1000 : 0,
   })
   const [sendMessage, { loading: sending }] = useMutation<any>(SEND_MESSAGE)
-  const { event: streamEvent } = useMessageStream(threadId ?? '')
   const { state: agentState } = useAgentState(threadId ?? '')
-  const { saveViewState } = useViewState(threadId ?? '')
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [data?.messages?.length])
 
   const handleSend = async () => {
-    if (!input.trim() || !threadId) return
+    if (!input.trim() || !threadId || sending) return
     const content = input
     setInput('')
-    saveViewState({
-      scrollPosition: 0,
-      expandedMessageIds: [],
-      inputDraft: '',
-      citationExpansionState: '{}',
-    })
-    await sendMessage({
-      variables: { threadId, content, scope: 'THREAD' },
-    })
-    refetch()
-  }
-
-  const handleInputChange = (value: string) => {
-    setInput(value)
-    saveViewState({
-      scrollPosition: 0,
-      expandedMessageIds: [],
-      inputDraft: value,
-      citationExpansionState: '{}',
-    })
+    setThinking(true)
+    try {
+      await sendMessage({
+        variables: { threadId, content, scope: 'THREAD' },
+      })
+    } finally {
+      setThinking(false)
+      refetch()
+    }
   }
 
   return (
@@ -105,12 +99,15 @@ export function ThreadPage() {
           <Badge variant="outline" className="text-xs">
             {data?.messages?.length ?? 0} msgs
           </Badge>
-          {agentState && (
+          {(sending || thinking) && (
+            <Badge className="text-xs animate-pulse">Thinking...</Badge>
+          )}
+          {agentState && !sending && (
             <Badge
               variant={agentState.status === 'RUNNING' ? 'default' : 'secondary'}
               className="text-xs"
             >
-              {agentState.status}
+              {agentState.mode !== 'NORMAL' ? agentState.mode : agentState.status}
             </Badge>
           )}
           <Button
@@ -119,13 +116,13 @@ export function ThreadPage() {
             className="text-xs"
             onClick={() => setShowIntrospection(!showIntrospection)}
           >
-            {showIntrospection ? 'Hide' : 'RRC'}
+            {showIntrospection ? 'Hide RRC' : 'RRC'}
           </Button>
         </header>
 
         <div className="flex flex-1 min-h-0">
           <div className="flex-1 flex flex-col min-w-0">
-            <ScrollArea className="flex-1 p-4">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
               <div className="space-y-3 max-w-3xl mx-auto">
                 {loading && <p className="text-sm text-muted">Loading...</p>}
                 {data?.messages?.map((msg: MessageData) => (
@@ -136,13 +133,16 @@ export function ThreadPage() {
                     content={msg.content}
                   />
                 ))}
-                {streamEvent && !streamEvent.done && streamEvent.delta && (
-                  <div className="p-3 rounded-lg bg-card border border-border max-w-[90%] animate-pulse">
-                    <p className="text-sm whitespace-pre-wrap">{streamEvent.delta}</p>
+                {(sending || thinking) && (
+                  <div className="p-3 rounded-lg bg-card border border-border max-w-[90%]">
+                    <div className="flex items-center gap-2 text-sm text-muted">
+                      <span className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse" />
+                      Thinking...
+                    </div>
                   </div>
                 )}
               </div>
-            </ScrollArea>
+            </div>
 
             {threadId && (
               <div className="p-3 space-y-2 border-t border-border">
@@ -155,14 +155,14 @@ export function ThreadPage() {
                 <div className="flex gap-2 max-w-3xl mx-auto w-full">
                   <Input
                     value={input}
-                    onChange={(e) => handleInputChange(e.target.value)}
+                    onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
                     placeholder="Send a message..."
                     className="flex-1"
-                    disabled={sending}
+                    disabled={sending || thinking}
                   />
-                  <Button onClick={handleSend} disabled={sending || !input.trim()}>
-                    Send
+                  <Button onClick={handleSend} disabled={sending || thinking || !input.trim()}>
+                    {sending || thinking ? '...' : 'Send'}
                   </Button>
                 </div>
               </div>
