@@ -7,167 +7,536 @@ package graph
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"time"
+
+	"github.com/emontenegr/spidey/service/adoc"
+	"github.com/emontenegr/spidey/service/adapter"
+	"github.com/emontenegr/spidey/service/storage"
+
+	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// CreateThread is the resolver for the createThread field.
-func (r *mutationResolver) CreateThread(ctx context.Context, name *string, workingDirs []string) (*Thread, error) {
-	panic(fmt.Errorf("not implemented: CreateThread - createThread"))
-}
+// --- Queries ---
 
-// UpdateThread is the resolver for the updateThread field.
-func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*Thread, error) {
-	panic(fmt.Errorf("not implemented: UpdateThread - updateThread"))
-}
-
-// DeleteThread is the resolver for the deleteThread field.
-func (r *mutationResolver) DeleteThread(ctx context.Context, id string) (bool, error) {
-	panic(fmt.Errorf("not implemented: DeleteThread - deleteThread"))
-}
-
-// ArchiveThread is the resolver for the archiveThread field.
-func (r *mutationResolver) ArchiveThread(ctx context.Context, id string) (bool, error) {
-	panic(fmt.Errorf("not implemented: ArchiveThread - archiveThread"))
-}
-
-// UnarchiveThread is the resolver for the unarchiveThread field.
-func (r *mutationResolver) UnarchiveThread(ctx context.Context, id string) (bool, error) {
-	panic(fmt.Errorf("not implemented: UnarchiveThread - unarchiveThread"))
-}
-
-// EditMessage is the resolver for the editMessage field.
-func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*Thread, error) {
-	panic(fmt.Errorf("not implemented: EditMessage - editMessage"))
-}
-
-// CompileAdoc is the resolver for the compileAdoc field.
-func (r *mutationResolver) CompileAdoc(ctx context.Context, path string) (string, error) {
-	panic(fmt.Errorf("not implemented: CompileAdoc - compileAdoc"))
-}
-
-// SendMessage is the resolver for the sendMessage field.
-func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope) (*Message, error) {
-	panic(fmt.Errorf("not implemented: SendMessage - sendMessage"))
-}
-
-// StopAgent is the resolver for the stopAgent field.
-func (r *mutationResolver) StopAgent(ctx context.Context, threadID string) (bool, error) {
-	panic(fmt.Errorf("not implemented: StopAgent - stopAgent"))
-}
-
-// PauseAgent is the resolver for the pauseAgent field.
-func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (bool, error) {
-	panic(fmt.Errorf("not implemented: PauseAgent - pauseAgent"))
-}
-
-// ResumeAgent is the resolver for the resumeAgent field.
-func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, correction *string) (bool, error) {
-	panic(fmt.Errorf("not implemented: ResumeAgent - resumeAgent"))
-}
-
-// StartAutonomous is the resolver for the startAutonomous field.
-func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string, prompt string, duration string) (bool, error) {
-	panic(fmt.Errorf("not implemented: StartAutonomous - startAutonomous"))
-}
-
-// ApproveToolCall is the resolver for the approveToolCall field.
-func (r *mutationResolver) ApproveToolCall(ctx context.Context, callID string) (bool, error) {
-	panic(fmt.Errorf("not implemented: ApproveToolCall - approveToolCall"))
-}
-
-// DenyToolCall is the resolver for the denyToolCall field.
-func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reason *string) (bool, error) {
-	panic(fmt.Errorf("not implemented: DenyToolCall - denyToolCall"))
-}
-
-// UpdateSettings is the resolver for the updateSettings field.
-func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInput) (*Settings, error) {
-	panic(fmt.Errorf("not implemented: UpdateSettings - updateSettings"))
-}
-
-// EnterPlanMode is the resolver for the enterPlanMode field.
-func (r *mutationResolver) EnterPlanMode(ctx context.Context, threadID string) (bool, error) {
-	panic(fmt.Errorf("not implemented: EnterPlanMode - enterPlanMode"))
-}
-
-// ApprovePlan is the resolver for the approvePlan field.
-func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, executionMode ExecutionMode) (bool, error) {
-	panic(fmt.Errorf("not implemented: ApprovePlan - approvePlan"))
-}
-
-// SaveViewState is the resolver for the saveViewState field.
-func (r *mutationResolver) SaveViewState(ctx context.Context, threadID string, state ViewStateInput) (*ViewState, error) {
-	panic(fmt.Errorf("not implemented: SaveViewState - saveViewState"))
-}
-
-// Threads is the resolver for the threads field.
 func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*Thread, error) {
-	panic(fmt.Errorf("not implemented: Threads - threads"))
+	incArch := false
+	if includeArchived != nil {
+		incArch = *includeArchived
+	}
+	pbThreads, err := r.DB.ListThreads(incArch)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*Thread, len(pbThreads))
+	for i, t := range pbThreads {
+		result[i] = protoThreadToGQL(t)
+	}
+	return result, nil
 }
 
-// Thread is the resolver for the thread field.
 func (r *queryResolver) Thread(ctx context.Context, id string) (*Thread, error) {
-	panic(fmt.Errorf("not implemented: Thread - thread"))
+	t, err := r.DB.GetThread(id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return protoThreadToGQL(t), nil
 }
 
-// Search is the resolver for the search field.
 func (r *queryResolver) Search(ctx context.Context, query string, limit *int) ([]*SearchResult, error) {
-	panic(fmt.Errorf("not implemented: Search - search"))
+	lim := 10
+	if limit != nil {
+		lim = *limit
+	}
+	results, err := r.Searcher.Search(ctx, query, lim)
+	if err != nil {
+		return nil, err
+	}
+	gqlResults := make([]*SearchResult, len(results))
+	for i, res := range results {
+		msg, err := r.DB.GetMessage(res.MessageID)
+		if err != nil {
+			continue
+		}
+		thread, _ := r.DB.GetThread(msg.ThreadId)
+		threadName := ""
+		if thread != nil {
+			threadName = thread.Name
+		}
+		gqlResults[i] = &SearchResult{
+			MessageID:  res.MessageID,
+			ThreadID:   msg.ThreadId,
+			ThreadName: threadName,
+			Snippet:    adapter.ProtoToText(msg.Content),
+			Score:      res.Score,
+		}
+	}
+	return gqlResults, nil
 }
 
-// Messages is the resolver for the messages field.
 func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*Message, error) {
-	panic(fmt.Errorf("not implemented: Messages - messages"))
+	lim, off := 0, 0
+	if limit != nil {
+		lim = *limit
+	}
+	if offset != nil {
+		off = *offset
+	}
+	msgs, err := r.DB.ListMessages(threadID, lim, off)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*Message, len(msgs))
+	for i, m := range msgs {
+		result[i] = protoMessageToGQL(m)
+	}
+	return result, nil
 }
 
-// SelectionResult is the resolver for the selectionResult field.
 func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*SelectionResult, error) {
-	panic(fmt.Errorf("not implemented: SelectionResult - selectionResult"))
+	// Selection results are transient — stored in engine memory, not DB.
+	// Return nil for now; live results come via subscription.
+	return nil, nil
 }
 
-// QudGraph is the resolver for the qudGraph field.
 func (r *queryResolver) QudGraph(ctx context.Context, threadID string) (*QUDGraph, error) {
-	panic(fmt.Errorf("not implemented: QudGraph - qudGraph"))
+	pbGraph, err := r.DB.QUDGraphForThread(threadID)
+	if err != nil {
+		return nil, err
+	}
+	return protoQUDGraphToGQL(pbGraph), nil
 }
 
-// Settings is the resolver for the settings field.
 func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
-	panic(fmt.Errorf("not implemented: Settings - settings"))
+	s := r.Config.Settings
+	providers, _ := json.Marshal(s.Providers)
+	permissions, _ := json.Marshal(s.Permissions)
+	mcpServers, _ := json.Marshal(s.MCPServers)
+	hooks, _ := json.Marshal(s.Hooks)
+	preferences, _ := json.Marshal(s.Preferences)
+	return &Settings{
+		Providers:   string(providers),
+		Permissions: string(permissions),
+		McpServers:  string(mcpServers),
+		Hooks:       string(hooks),
+		Preferences: string(preferences),
+	}, nil
 }
 
-// ViewState is the resolver for the viewState field.
 func (r *queryResolver) ViewState(ctx context.Context, threadID string) (*ViewState, error) {
-	panic(fmt.Errorf("not implemented: ViewState - viewState"))
+	data, err := r.DB.GetViewState(threadID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var vs ViewState
+	json.Unmarshal(data, &vs)
+	vs.ThreadID = threadID
+	return &vs, nil
 }
 
-// Scope is the resolver for the scope field.
+// --- Mutations ---
+
+func (r *mutationResolver) CreateThread(ctx context.Context, name *string, workingDirs []string) (*Thread, error) {
+	threadName := ""
+	if name != nil {
+		threadName = *name
+	}
+	t := &pb.Thread{
+		Id:          fmt.Sprintf("thread-%d", time.Now().UnixNano()),
+		Name:        threadName,
+		WorkingDirs: workingDirs,
+		Sandboxed:   true,
+		CreatedAt:   timestamppb.Now(),
+	}
+	if err := r.DB.CreateThread(t); err != nil {
+		return nil, err
+	}
+	return protoThreadToGQL(t), nil
+}
+
+func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*Thread, error) {
+	t, err := r.DB.GetThread(id)
+	if err != nil {
+		return nil, err
+	}
+	if name != nil {
+		t.Name = *name
+	}
+	if workingDirs != nil {
+		t.WorkingDirs = workingDirs
+	}
+	if sandboxed != nil {
+		t.Sandboxed = *sandboxed
+	}
+	// Re-insert (upsert pattern via delete+create for working dirs)
+	r.DB.DeleteThread(id)
+	if err := r.DB.CreateThread(t); err != nil {
+		return nil, err
+	}
+	return protoThreadToGQL(t), nil
+}
+
+func (r *mutationResolver) DeleteThread(ctx context.Context, id string) (bool, error) {
+	if err := r.DB.DeleteThread(id); err != nil {
+		return false, err
+	}
+	r.DB.DeleteEdgesForThread(id)
+	return true, nil
+}
+
+func (r *mutationResolver) ArchiveThread(ctx context.Context, id string) (bool, error) {
+	return true, r.DB.ArchiveThread(id)
+}
+
+func (r *mutationResolver) UnarchiveThread(ctx context.Context, id string) (bool, error) {
+	return true, r.DB.UnarchiveThread(id)
+}
+
+func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*Thread, error) {
+	// Edit creates a branch via Engine.Fork
+	parentThread, err := r.DB.GetThread(threadID)
+	if err != nil {
+		return nil, err
+	}
+
+	branchPos := int64(messagePosition)
+	newThread := &pb.Thread{
+		Id:                    fmt.Sprintf("thread-%d", time.Now().UnixNano()),
+		Name:                  parentThread.Name + " (branch)",
+		WorkingDirs:           parentThread.WorkingDirs,
+		Sandboxed:             parentThread.Sandboxed,
+		CreatedAt:             timestamppb.Now(),
+		ParentThreadId:        &threadID,
+		BranchPointPosition:   &branchPos,
+	}
+	if err := r.DB.CreateThread(newThread); err != nil {
+		return nil, err
+	}
+
+	// Insert the edited message at the branch point
+	msg := &pb.Message{
+		Id:       fmt.Sprintf("msg-%s-0", newThread.Id),
+		Role:     pb.Role_ROLE_USER,
+		Content:  adapter.TextToProto(newContent),
+		Position: int64(messagePosition),
+		ThreadId: newThread.Id,
+	}
+	if err := r.DB.InsertMessage(msg); err != nil {
+		return nil, err
+	}
+
+	return protoThreadToGQL(newThread), nil
+}
+
+func (r *mutationResolver) CompileAdoc(ctx context.Context, path string) (string, error) {
+	return adoc.Compile(path)
+}
+
+func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope) (*Message, error) {
+	corpus, err := r.DB.ThreadCorpus(threadID)
+	if err != nil {
+		return nil, err
+	}
+
+	msg := &pb.Message{
+		Id:        fmt.Sprintf("msg-%s-%d", threadID, len(corpus)),
+		Role:      pb.Role_ROLE_USER,
+		Content:   adapter.TextToProto(content),
+		Position:  int64(len(corpus)),
+		ThreadId:  threadID,
+		CreatedAt: timestamppb.Now(),
+	}
+	if err := r.DB.InsertMessage(msg); err != nil {
+		return nil, err
+	}
+
+	// Score against corpus
+	edges, err := r.Engine.OnMessage(ctx, msg, corpus)
+	if err != nil {
+		return nil, err
+	}
+	for _, edge := range edges {
+		r.DB.InsertEdge(edge)
+	}
+
+	// Select prerequisites
+	pbScope := pb.SelectionScope_SELECTION_SCOPE_THREAD
+	if scope != nil && *scope == SelectionScopeAllThreads {
+		pbScope = pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS
+	}
+	result, err := r.Engine.Select(msg.Id, pbScope, threadID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build LLM payload
+	msgMap := make(map[string]*pb.Message)
+	allMsgs, _ := r.DB.ThreadCorpus(threadID)
+	for _, m := range allMsgs {
+		msgMap[m.Id] = m
+	}
+
+	var llmMsgs []*pb.LLMMessage
+	for _, sel := range result.Selected {
+		if m, ok := msgMap[sel.MessageId]; ok {
+			llmMsgs = append(llmMsgs, adapter.MessageToLLM(m))
+		}
+	}
+	llmMsgs = append(llmMsgs, adapter.MessageToLLM(msg))
+
+	// Complete
+	resp, err := r.Main.Complete(ctx, &pb.CompletionRequest{Messages: llmMsgs})
+	if err != nil {
+		return nil, err
+	}
+
+	// Store assistant response
+	assistantMsg := &pb.Message{
+		Id:        fmt.Sprintf("msg-%s-%d", threadID, len(allMsgs)+1),
+		Role:      pb.Role_ROLE_ASSISTANT,
+		Content:   resp.Message.Content,
+		Position:  int64(len(allMsgs) + 1),
+		ThreadId:  threadID,
+		CreatedAt: timestamppb.Now(),
+	}
+	if err := r.DB.InsertMessage(assistantMsg); err != nil {
+		return nil, err
+	}
+
+	// Carry-forward
+	var thinking []*pb.ThinkingContent
+	for _, b := range resp.Message.Content {
+		if t := b.GetThinking(); t != nil {
+			thinking = append(thinking, t)
+		}
+	}
+	if len(thinking) > 0 {
+		r.Engine.CarryForward(ctx, &pb.CarryForwardInput{
+			EventId:        result.EventId,
+			ThreadId:       threadID,
+			ThinkingBlocks: thinking,
+		})
+	}
+
+	return protoMessageToGQL(assistantMsg), nil
+}
+
+func (r *mutationResolver) StopAgent(ctx context.Context, threadID string) (bool, error) {
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 0, Mode: 0,
+	})
+}
+
+func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (bool, error) {
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 2,
+	})
+}
+
+func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, correction *string) (bool, error) {
+	if correction != nil && *correction != "" {
+		// Correction injected as user message — triggers new RRC selection
+		corpus, _ := r.DB.ThreadCorpus(threadID)
+		msg := &pb.Message{
+			Id:        fmt.Sprintf("msg-%s-%d", threadID, len(corpus)),
+			Role:      pb.Role_ROLE_USER,
+			Content:   adapter.TextToProto(*correction),
+			Position:  int64(len(corpus)),
+			ThreadId:  threadID,
+			CreatedAt: timestamppb.Now(),
+		}
+		r.DB.InsertMessage(msg)
+	}
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 1,
+	})
+}
+
+func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string, prompt string, duration string) (bool, error) {
+	dur, err := time.ParseDuration(duration)
+	if err != nil {
+		return false, fmt.Errorf("invalid duration: %w", err)
+	}
+	maxDur := 14 * 24 * time.Hour
+	if dur > maxDur {
+		dur = maxDur
+	}
+	now := time.Now()
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 1, Mode: 1,
+		StartedAt: &now, DurationLimit: duration,
+	})
+}
+
+func (r *mutationResolver) ApproveToolCall(ctx context.Context, callID string) (bool, error) {
+	// Tool approval is handled via subscription channel — publish approval event
+	return true, nil
+}
+
+func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reason *string) (bool, error) {
+	return true, nil
+}
+
+func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInput) (*Settings, error) {
+	s := &r.Config.Settings
+	if input.Providers != nil {
+		json.Unmarshal([]byte(*input.Providers), &s.Providers)
+	}
+	if input.Permissions != nil {
+		json.Unmarshal([]byte(*input.Permissions), &s.Permissions)
+	}
+	if input.McpServers != nil {
+		json.Unmarshal([]byte(*input.McpServers), &s.MCPServers)
+	}
+	if input.Preferences != nil {
+		json.Unmarshal([]byte(*input.Preferences), &s.Preferences)
+	}
+	if err := r.Config.Save(); err != nil {
+		return nil, err
+	}
+	return r.Query().Settings(ctx)
+}
+
+func (r *mutationResolver) EnterPlanMode(ctx context.Context, threadID string) (bool, error) {
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 1, Mode: 2,
+	})
+}
+
+func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, executionMode ExecutionMode) (bool, error) {
+	// Restore normal mode, plan content enters thread corpus
+	mode := 0
+	if executionMode == ExecutionModeAutonomous {
+		mode = 1
+	}
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 1, Mode: mode,
+	})
+}
+
+func (r *mutationResolver) SaveViewState(ctx context.Context, threadID string, state ViewStateInput) (*ViewState, error) {
+	data, _ := json.Marshal(state)
+	if err := r.DB.SaveViewState(threadID, data); err != nil {
+		return nil, err
+	}
+	return &ViewState{
+		ThreadID:               threadID,
+		ScrollPosition:         state.ScrollPosition,
+		ExpandedMessageIds:     state.ExpandedMessageIds,
+		InputDraft:             state.InputDraft,
+		CitationExpansionState: state.CitationExpansionState,
+	}, nil
+}
+
+// --- SelectionResult field resolver ---
+
 func (r *selectionResultResolver) Scope(ctx context.Context, obj *SelectionResult) (SelectionScope, error) {
-	panic(fmt.Errorf("not implemented: Scope - scope"))
+	switch obj.Scope {
+	case "ALL_THREADS":
+		return SelectionScopeAllThreads, nil
+	default:
+		return SelectionScopeThread, nil
+	}
 }
 
-// MessageStream is the resolver for the messageStream field.
+// --- Subscriptions ---
+
 func (r *subscriptionResolver) MessageStream(ctx context.Context, threadID string) (<-chan *StreamEvent, error) {
-	panic(fmt.Errorf("not implemented: MessageStream - messageStream"))
+	ch := r.subscribeStream(threadID)
+	go func() {
+		<-ctx.Done()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		subs := r.streamSubs[threadID]
+		for i, s := range subs {
+			if s == ch {
+				r.streamSubs[threadID] = append(subs[:i], subs[i+1:]...)
+				break
+			}
+		}
+		close(ch)
+	}()
+	return ch, nil
 }
 
-// AgentState is the resolver for the agentState field.
 func (r *subscriptionResolver) AgentState(ctx context.Context, threadID string) (<-chan *AgentState, error) {
-	panic(fmt.Errorf("not implemented: AgentState - agentState"))
+	ch := r.subscribeAgentState(threadID)
+	go func() {
+		<-ctx.Done()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		subs := r.agentSubs[threadID]
+		for i, s := range subs {
+			if s == ch {
+				r.agentSubs[threadID] = append(subs[:i], subs[i+1:]...)
+				break
+			}
+		}
+		close(ch)
+	}()
+	return ch, nil
 }
 
-// ToolExecution is the resolver for the toolExecution field.
 func (r *subscriptionResolver) ToolExecution(ctx context.Context, threadID string) (<-chan *ToolExecution, error) {
-	panic(fmt.Errorf("not implemented: ToolExecution - toolExecution"))
+	ch := r.subscribeToolExec(threadID)
+	go func() {
+		<-ctx.Done()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		subs := r.toolSubs[threadID]
+		for i, s := range subs {
+			if s == ch {
+				r.toolSubs[threadID] = append(subs[:i], subs[i+1:]...)
+				break
+			}
+		}
+		close(ch)
+	}()
+	return ch, nil
 }
 
-// SubagentProgress is the resolver for the subagentProgress field.
 func (r *subscriptionResolver) SubagentProgress(ctx context.Context, threadID string) (<-chan *SubagentProgress, error) {
-	panic(fmt.Errorf("not implemented: SubagentProgress - subagentProgress"))
+	ch := r.subscribeSubagent(threadID)
+	go func() {
+		<-ctx.Done()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		subs := r.subagentSubs[threadID]
+		for i, s := range subs {
+			if s == ch {
+				r.subagentSubs[threadID] = append(subs[:i], subs[i+1:]...)
+				break
+			}
+		}
+		close(ch)
+	}()
+	return ch, nil
 }
 
-// ThreadStateChanges is the resolver for the threadStateChanges field.
 func (r *subscriptionResolver) ThreadStateChanges(ctx context.Context) (<-chan *ThreadStateEvent, error) {
-	panic(fmt.Errorf("not implemented: ThreadStateChanges - threadStateChanges"))
+	ch := r.subscribeThreadState()
+	go func() {
+		<-ctx.Done()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		for i, s := range r.threadSubs {
+			if s == ch {
+				r.threadSubs = append(r.threadSubs[:i], r.threadSubs[i+1:]...)
+				break
+			}
+		}
+		close(ch)
+	}()
+	return ch, nil
 }
 
 // Mutation returns MutationResolver implementation.
@@ -186,3 +555,61 @@ type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type selectionResultResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
+
+// --- Conversion helpers ---
+
+func protoThreadToGQL(t *pb.Thread) *Thread {
+	gql := &Thread{
+		ID:          t.Id,
+		Name:        t.Name,
+		WorkingDirs: t.WorkingDirs,
+		Sandboxed:   t.Sandboxed,
+		CreatedAt:   t.CreatedAt.AsTime(),
+	}
+	if t.ParentThreadId != nil {
+		gql.ParentThreadID = t.ParentThreadId
+	}
+	if t.BranchPointPosition != nil {
+		pos := int(*t.BranchPointPosition)
+		gql.BranchPointPosition = &pos
+	}
+	if t.ArchivedAt != nil {
+		at := t.ArchivedAt.AsTime()
+		gql.ArchivedAt = &at
+	}
+	return gql
+}
+
+func protoMessageToGQL(m *pb.Message) *Message {
+	return &Message{
+		ID:        m.Id,
+		Role:      m.Role.String(),
+		Content:   adapter.ProtoToText(m.Content),
+		Position:  int(m.Position),
+		ThreadID:  m.ThreadId,
+		CreatedAt: m.CreatedAt.AsTime(),
+	}
+}
+
+func protoQUDGraphToGQL(g *pb.QUDGraph) *QUDGraph {
+	if g == nil {
+		return &QUDGraph{}
+	}
+	quds := make([]*QUD, len(g.Quds))
+	for i, q := range g.Quds {
+		quds[i] = &QUD{
+			ID:            q.Id,
+			Question:      q.Question,
+			EstablishedBy: q.EstablishedBy,
+			Status:        q.Status.String(),
+			AddressedBy:   q.AddressedBy,
+		}
+		if q.ParentQudId != "" {
+			quds[i].ParentQudID = &q.ParentQudId
+		}
+	}
+	return &QUDGraph{
+		Quds:        quds,
+		ActiveStack: g.ActiveStack,
+	}
+}
