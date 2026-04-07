@@ -1,0 +1,201 @@
+scalar DateTime
+
+enum SelectionScope { THREAD, ALL_THREADS }
+enum ExecutionMode { MANUAL, AUTONOMOUS }
+enum AgentStatus { IDLE, RUNNING, PAUSED }
+enum AgentMode { NORMAL, AUTONOMOUS, PLAN }
+
+type Thread {
+  id: ID!
+  name: String!
+  workingDirs: [String!]!
+  sandboxed: Boolean!
+  createdAt: DateTime!
+  parentThreadId: ID
+  branchPointPosition: Int
+  archivedAt: DateTime
+}
+
+type Message {
+  id: ID!
+  role: String!
+  content: String!
+  position: Int!
+  threadId: ID!
+  createdAt: DateTime!
+}
+
+type Edge {
+  fromMessageId: ID!
+  toMessageId: ID!
+  score: Float!
+  source: String!
+  crossEncoderScore: Float!
+  qudWeight: Float!
+  temporalProximity: Float!
+}
+
+type SelectedMessage {
+  messageId: ID!
+  effectiveScore: Float!
+  hopDepth: Int!
+  threadId: ID!
+  crossThread: Boolean!
+}
+
+type ExcludedMessage {
+  messageId: ID!
+  reason: String!
+  score: Float!
+}
+
+type SelectionResult {
+  eventId: ID!
+  scope: SelectionScope!
+  threadId: ID!
+  selected: [SelectedMessage!]!
+  excluded: [ExcludedMessage!]!
+}
+
+type QUD {
+  id: ID!
+  question: String!
+  establishedBy: ID!
+  parentQudId: ID
+  status: String!
+  addressedBy: [ID!]!
+}
+
+type QUDGraph {
+  quds: [QUD!]!
+  activeStack: [ID!]!
+}
+
+type Settings {
+  providers: String!
+  permissions: String!
+  mcpServers: String!
+  hooks: String!
+  preferences: String!
+}
+
+type ViewState {
+  threadId: ID!
+  scrollPosition: Float!
+  expandedMessageIds: [ID!]!
+  inputDraft: String!
+  citationExpansionState: String!
+}
+
+type StreamEvent {
+  messageId: ID!
+  delta: String
+  thinking: String
+  toolCall: ToolCallDelta
+  done: Boolean!
+  error: String
+}
+
+type ToolCallDelta {
+  id: ID!
+  name: String!
+  arguments: String
+}
+
+type AgentState {
+  threadId: ID!
+  status: AgentStatus!
+  mode: AgentMode!
+  roundCount: Int!
+  startedAt: DateTime
+  durationLimit: String
+  elapsedTime: String
+}
+
+type ToolExecution {
+  threadId: ID!
+  callId: ID!
+  toolName: String!
+  arguments: String!
+  status: String!
+  result: String
+  isError: Boolean
+}
+
+type SubagentProgress {
+  threadId: ID!
+  forkThreadId: ID!
+  task: String!
+  status: String!
+  roundCount: Int!
+}
+
+type ThreadStateEvent {
+  threadId: ID!
+  status: AgentStatus!
+  mode: AgentMode!
+  warmth: Int!
+  name: String!
+}
+
+type SearchResult {
+  messageId: ID!
+  threadId: ID!
+  threadName: String!
+  snippet: String!
+  score: Float!
+}
+
+input ViewStateInput {
+  scrollPosition: Float!
+  expandedMessageIds: [ID!]!
+  inputDraft: String!
+  citationExpansionState: String!
+}
+
+input SettingsInput {
+  providers: String
+  permissions: String
+  mcpServers: String
+  preferences: String
+}
+
+type Query {
+  threads(includeArchived: Boolean): [Thread!]!
+  thread(id: ID!): Thread
+  search(query: String!, limit: Int): [SearchResult!]!
+  messages(threadId: ID!, limit: Int, offset: Int): [Message!]!
+  selectionResult(eventId: ID!): SelectionResult
+  qudGraph(threadId: ID!): QUDGraph
+  settings: Settings!
+  viewState(threadId: ID!): ViewState
+}
+
+type Mutation {
+  createThread(name: String, workingDirs: [String!]): Thread!
+  updateThread(id: ID!, name: String, workingDirs: [String!], sandboxed: Boolean): Thread!
+  deleteThread(id: ID!): Boolean!
+  archiveThread(id: ID!): Boolean!
+  unarchiveThread(id: ID!): Boolean!
+  editMessage(threadId: ID!, messagePosition: Int!, newContent: String!): Thread!
+  compileAdoc(path: String!): String!
+  sendMessage(threadId: ID!, content: String!, scope: SelectionScope): Message!
+  stopAgent(threadId: ID!): Boolean!
+  pauseAgent(threadId: ID!): Boolean!
+  resumeAgent(threadId: ID!, correction: String): Boolean!
+  startAutonomous(threadId: ID!, prompt: String!, duration: String!): Boolean!
+  approveToolCall(callId: ID!): Boolean!
+  denyToolCall(callId: ID!, reason: String): Boolean!
+  updateSettings(input: SettingsInput!): Settings!
+  enterPlanMode(threadId: ID!): Boolean!
+  approvePlan(threadId: ID!, executionMode: ExecutionMode!): Boolean!
+  saveViewState(threadId: ID!, state: ViewStateInput!): ViewState!
+}
+
+type Subscription {
+  messageStream(threadId: ID!): StreamEvent!
+  agentState(threadId: ID!): AgentState!
+  toolExecution(threadId: ID!): ToolExecution!
+  subagentProgress(threadId: ID!): SubagentProgress!
+  threadStateChanges: ThreadStateEvent!
+}
