@@ -10,8 +10,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/service/adoc"
 	"github.com/emontenegr/spidey/service/adapter"
 	"github.com/emontenegr/spidey/service/storage"
@@ -259,6 +261,11 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 		return nil, err
 	}
 
+	// Embed on arrival (async, alongside scoring)
+	if r.Searcher != nil {
+		go r.Searcher.EmbedMessage(ctx, msg.Id, content)
+	}
+
 	// Score against corpus
 	edges, err := r.Engine.OnMessage(ctx, msg, corpus)
 	if err != nil {
@@ -293,8 +300,8 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 	}
 	llmMsgs = append(llmMsgs, adapter.MessageToLLM(msg))
 
-	// Complete
-	resp, err := r.Main.Complete(ctx, &pb.CompletionRequest{Messages: llmMsgs})
+	// Complete with payload sizing backoff
+	resp, err := completeWithBackoff(ctx, r.Main, llmMsgs, result.Selected)
 	if err != nil {
 		return nil, err
 	}
@@ -555,6 +562,35 @@ type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
 type selectionResultResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
+
+// --- Payload sizing backoff ---
+
+// completeWithBackoff calls the LLM. If it returns a context-length error,
+// drops the lowest-scored selected message and retries. Repeat until the
+// payload fits. Error-driven — no tokenizer, no estimation.
+func completeWithBackoff(ctx context.Context, completer core.Completer, msgs []*pb.LLMMessage, selected []*pb.SelectedMessage) (*pb.CompletionResponse, error) {
+	for {
+		resp, err := completer.Complete(ctx, &pb.CompletionRequest{Messages: msgs})
+		if err == nil {
+			return resp, nil
+		}
+
+		// Check if it's a context-length error (provider returns this in error message)
+		errMsg := err.Error()
+		isContextLength := strings.Contains(errMsg, "context_length") ||
+			strings.Contains(errMsg, "maximum context") ||
+			strings.Contains(errMsg, "too many tokens") ||
+			strings.Contains(errMsg, "max_tokens")
+
+		if !isContextLength || len(msgs) <= 1 {
+			return nil, err
+		}
+
+		// Drop the lowest-scored message (last in selected, which is lowest score)
+		// The prompt (last message) is never dropped
+		msgs = msgs[1:] // drop first selected message (lowest after prompt)
+	}
+}
 
 // --- Conversion helpers ---
 

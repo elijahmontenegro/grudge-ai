@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 
 	"github.com/emontenegr/spidey/core"
@@ -10,18 +11,27 @@ import (
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/adapter"
 	"github.com/emontenegr/spidey/service/storage"
+
+	adkagent "google.golang.org/adk/agent"
+	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/model"
+	"google.golang.org/adk/runner"
+	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
+	"google.golang.org/genai"
 )
 
-// Runner orchestrates the agent loop for a thread. Sequential per thread —
-// one active LLM call at a time. RRC integrates transparently.
+// Runner orchestrates the agent loop for a thread via ADK.
+// RRC integrates as the model.LLM implementation — ADK doesn't know.
 type Runner struct {
-	engine     *rrc.Engine
-	completer  core.Completer
-	db         *storage.DB
-	threadID   string
-	mu         sync.Mutex
-	roundCount int
-	mode       Mode
+	engine    *rrc.Engine
+	completer core.Completer
+	db        *storage.DB
+	threadID  string
+	tools     []tool.Tool
+	adkRunner *runner.Runner
+	mu        sync.Mutex
+	mode      Mode
 }
 
 // Mode represents the agent's current mode.
@@ -34,123 +44,123 @@ const (
 )
 
 // NewRunner creates an agent runner for a thread.
-func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string) *Runner {
-	return &Runner{
+func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName string) (*Runner, error) {
+	r := &Runner{
 		engine:    engine,
 		completer: completer,
 		db:        db,
 		threadID:  threadID,
+		tools:     tools,
 	}
+
+	// RRC-as-LLM: ADK calls this thinking it's an LLM
+	rrcLLM := adapter.NewRRCLLM(engine, completer, db, threadID, modelName)
+
+	// Create the ADK agent with RRC as its model
+	rootAgent, err := llmagent.New(llmagent.Config{
+		Name:        "spidey",
+		Description: "Spidey agentic assistant with RRC-powered selective memory",
+		Model:       rrcLLM,
+		Tools:       tools,
+		AfterModelCallbacks: []llmagent.AfterModelCallback{
+			r.afterModelCallback,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create agent: %w", err)
+	}
+
+	// Create the ADK runner
+	adkRunner, err := runner.New(runner.Config{
+		AppName:           "spidey",
+		Agent:             rootAgent,
+		SessionService:    session.InMemoryService(),
+		AutoCreateSession: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create runner: %w", err)
+	}
+
+	r.adkRunner = adkRunner
+	return r, nil
 }
 
-// SendMessage processes a user message: store, score, select, complete, carry-forward.
+// SendMessage processes a user message through the ADK agent loop.
 func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.SelectionScope) (*pb.Message, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Get corpus
+	// Store user message
 	corpus, err := r.db.ThreadCorpus(r.threadID)
 	if err != nil {
 		return nil, fmt.Errorf("load corpus: %w", err)
 	}
 
-	// Create user message
-	msg := &pb.Message{
+	userMsg := &pb.Message{
 		Id:       fmt.Sprintf("msg-%s-%d", r.threadID, len(corpus)),
 		Role:     pb.Role_ROLE_USER,
 		Content:  adapter.TextToProto(content),
 		Position: int64(len(corpus)),
 		ThreadId: r.threadID,
 	}
-	if err := r.db.InsertMessage(msg); err != nil {
-		return nil, fmt.Errorf("store message: %w", err)
+	if err := r.db.InsertMessage(userMsg); err != nil {
+		return nil, err
 	}
 
-	// Score against corpus
-	edges, err := r.engine.OnMessage(ctx, msg, corpus)
-	if err != nil {
-		return nil, fmt.Errorf("scoring: %w", err)
-	}
-	for _, edge := range edges {
-		r.db.InsertEdge(edge)
+	// Run through ADK
+	msg := &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: content}},
 	}
 
-	// Select prerequisites
-	result, err := r.engine.Select(msg.Id, scope, r.threadID)
-	if err != nil {
-		return nil, fmt.Errorf("selection: %w", err)
-	}
-
-	// Build LLM payload from selection
-	allMsgs, _ := r.db.ThreadCorpus(r.threadID)
-	msgMap := make(map[string]*pb.Message)
-	for _, m := range allMsgs {
-		msgMap[m.Id] = m
-	}
-
-	var llmMsgs []*pb.LLMMessage
-	for _, sel := range result.Selected {
-		if m, ok := msgMap[sel.MessageId]; ok {
-			llmMsgs = append(llmMsgs, adapter.MessageToLLM(m))
+	var lastEvent *session.Event
+	for event, err := range r.adkRunner.Run(ctx, "user", r.threadID, msg, adkagent.RunConfig{}) {
+		if err != nil {
+			log.Printf("adk event error: %v", err)
+			continue
 		}
-	}
-	// Always include the prompt
-	llmMsgs = append(llmMsgs, adapter.MessageToLLM(msg))
-
-	// Complete
-	resp, err := r.completer.Complete(ctx, &pb.CompletionRequest{
-		Messages: llmMsgs,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("completion: %w", err)
+		lastEvent = event
 	}
 
-	// Store assistant response
-	assistantMsg := &pb.Message{
-		Id:       fmt.Sprintf("msg-%s-%d", r.threadID, len(allMsgs)+1),
-		Role:     pb.Role_ROLE_ASSISTANT,
-		Content:  resp.Message.Content,
-		Position: int64(len(allMsgs) + 1),
-		ThreadId: r.threadID,
-	}
-	if err := r.db.InsertMessage(assistantMsg); err != nil {
-		return nil, fmt.Errorf("store response: %w", err)
-	}
-
-	// Score assistant message
-	updatedCorpus, _ := r.db.ThreadCorpus(r.threadID)
-	edges, err = r.engine.OnMessage(ctx, assistantMsg, updatedCorpus[:len(updatedCorpus)-1])
-	if err != nil {
-		return nil, fmt.Errorf("scoring response: %w", err)
-	}
-	for _, edge := range edges {
-		r.db.InsertEdge(edge)
-	}
-
-	// Carry-forward: extract thinking blocks
-	var thinkingBlocks []*pb.ThinkingContent
-	for _, b := range resp.Message.Content {
-		if t := b.GetThinking(); t != nil {
-			thinkingBlocks = append(thinkingBlocks, t)
+	// Extract assistant response from last event
+	if lastEvent != nil && lastEvent.LLMResponse.Content != nil {
+		protoMsg := adapter.GenaiContentToProto(lastEvent.LLMResponse.Content)
+		assistantMsg := &pb.Message{
+			Id:       fmt.Sprintf("msg-%s-%d", r.threadID, len(corpus)+1),
+			Role:     pb.Role_ROLE_ASSISTANT,
+			Content:  protoMsg.Content,
+			Position: int64(len(corpus) + 1),
+			ThreadId: r.threadID,
 		}
+		if err := r.db.InsertMessage(assistantMsg); err != nil {
+			return nil, err
+		}
+		return assistantMsg, nil
 	}
-	if len(thinkingBlocks) > 0 {
+
+	return nil, fmt.Errorf("no response from agent")
+}
+
+// afterModelCallback extracts thinking blocks for carry-forward after every LLM call.
+func (r *Runner) afterModelCallback(
+	ctx adkagent.CallbackContext,
+	llmResponse *model.LLMResponse,
+	llmResponseError error,
+) (*model.LLMResponse, error) {
+	if llmResponseError != nil || llmResponse == nil || llmResponse.Content == nil {
+		return llmResponse, llmResponseError
+	}
+
+	thinking := adapter.ExtractThinkingFromGenai(llmResponse.Content)
+	if len(thinking) > 0 {
 		r.engine.CarryForward(ctx, &pb.CarryForwardInput{
-			EventId:        result.EventId,
+			EventId:        fmt.Sprintf("cf-%s", r.threadID),
 			ThreadId:       r.threadID,
-			ThinkingBlocks: thinkingBlocks,
+			ThinkingBlocks: thinking,
 		})
 	}
 
-	r.roundCount++
-	return assistantMsg, nil
-}
-
-// RoundCount returns the number of completed rounds.
-func (r *Runner) RoundCount() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.roundCount
+	return llmResponse, nil
 }
 
 // SetMode sets the agent's current mode.
@@ -158,4 +168,9 @@ func (r *Runner) SetMode(m Mode) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.mode = m
+}
+
+// Engine exposes the runner's engine for fork/merge operations.
+func (r *Runner) Engine() *rrc.Engine {
+	return r.engine
 }
