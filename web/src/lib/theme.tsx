@@ -20,7 +20,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     return (stored as Theme) || 'system'
   })
 
-  const [resolved, setResolved] = useState<'light' | 'dark'>('dark')
+  const [resolved, setResolved] = useState<'light' | 'dark'>(
+    () => window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  )
 
   const setTheme = (t: Theme) => {
     setThemeState(t)

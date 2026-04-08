@@ -126,7 +126,8 @@ export function IntrospectionPanel({ threadId }: Props) {
                 {messages
                   .filter((msg) => selectedIds.has(msg.id))
                   .map((msg) => {
-                    const sel = selectionMap.get(msg.id)!
+                    const sel = selectionMap.get(msg.id)
+                    if (!sel) return null
                     const isUser = msg.role === 'ROLE_USER'
                     return (
                       <div

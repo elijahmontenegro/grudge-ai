@@ -102,7 +102,7 @@ function ProviderForm({
               onChange({
                 adapter: e.target.value,
                 model: config.model,
-                base_url: adapter?.defaultURL ?? config.base_url,
+                base_url: config.base_url || adapter?.defaultURL || '',
               })
             }}
             className="w-full border border-input rounded-md px-2 py-1.5 text-sm bg-background"

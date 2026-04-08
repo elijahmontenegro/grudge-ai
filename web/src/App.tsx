@@ -33,7 +33,11 @@ export default function App() {
     <>
       <CommandPalette />
       <Routes>
-        <Route path="/" element={needsSetup === true ? <Navigate to="/settings" replace /> : <HomePage />} />
+        <Route path="/" element={
+          needsSetup === null ? null :
+          needsSetup === true ? <Navigate to="/settings" replace /> :
+          <HomePage />
+        } />
         <Route path="/thread/:threadId" element={<ThreadPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Routes>

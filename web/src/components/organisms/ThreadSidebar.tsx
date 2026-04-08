@@ -67,7 +67,11 @@ export function ThreadSidebar() {
   const [archiveThread] = useMutation(ARCHIVE_THREAD)
   const [deleteThread] = useMutation(DELETE_THREAD)
   const { resolved, setTheme } = useTheme()
-  useThreadStateChanges()
+  const { event: stateChange } = useThreadStateChanges()
+  // Refetch thread list when any thread state changes
+  if (stateChange) {
+    refetch()
+  }
 
   const handleNew = async () => {
     const result = await createThread({ variables: { name: null } })
@@ -124,10 +128,10 @@ export function ThreadSidebar() {
             const isActive = threadId === thread.id
             const isBranch = !!thread.parentThreadId
             return (
-              <div
+              <button
                 key={thread.id}
                 className={cn(
-                  'group flex items-center w-full text-left px-3 py-2.5 rounded-xl cursor-pointer transition-all relative',
+                  'group flex items-center w-full text-left px-3 py-2.5 rounded-xl transition-all relative',
                   isActive
                     ? 'sidebar-item-active text-foreground'
                     : 'text-muted-foreground hover:text-foreground hover:bg-foreground/[0.03]',
@@ -167,7 +171,7 @@ export function ThreadSidebar() {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
                   </button>
                 </span>
-              </div>
+              </button>
             )
           })}
         </div>

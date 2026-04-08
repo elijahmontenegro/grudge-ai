@@ -177,7 +177,7 @@ export function ThreadPage() {
       textareaRef.current.style.height = 'auto'
     }
     setThinking(true)
-    saveViewState({ scrollPosition: 0, expandedMessageIds: [], inputDraft: '', citationExpansionState: '{}' })
+    saveViewState({ scrollPosition: scrollRef.current?.scrollTop ?? 0, expandedMessageIds: [], inputDraft: '', citationExpansionState: '{}' })
     try {
       setError(null)
       await sendMessage({ variables: { threadId, content, scope } })
@@ -278,7 +278,7 @@ export function ThreadPage() {
           {/* Message area */}
           <div className="flex-1 flex flex-col min-w-0">
             <div ref={scrollRef} className="flex-1 overflow-y-auto">
-              <div className="max-w-[680px] mx-auto px-6 py-8 space-y-6">
+              <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
                 {loading && (
                   <p className="text-sm text-muted-foreground text-center py-12">Loading...</p>
                 )}
@@ -381,7 +381,7 @@ export function ThreadPage() {
             {threadId && (
               <div className="pb-5 px-6">
                 {/* Mode controls + active status */}
-                <div className="max-w-[680px] mx-auto">
+                <div className="max-w-3xl mx-auto">
                   <SubagentProgress threadId={threadId} />
                   <div className="flex items-start gap-1 mb-2">
                     <AutonomousControls threadId={threadId} />
@@ -390,7 +390,7 @@ export function ThreadPage() {
                 </div>
 
                 {/* Composer */}
-                <div className="max-w-[680px] mx-auto">
+                <div className="max-w-3xl mx-auto">
                   <div className="composer">
                     <textarea
                       ref={textareaRef}

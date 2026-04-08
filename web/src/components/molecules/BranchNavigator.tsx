@@ -32,9 +32,9 @@ export function BranchNavigator({ currentThreadId }: Props) {
   const parent = current?.parentThreadId
     ? threads.find((t) => t.id === current.parentThreadId)
     : null
-  const siblings = threads.filter(
-    (t) => t.parentThreadId === current?.parentThreadId && t.id !== currentThreadId,
-  )
+  const siblings = current?.parentThreadId
+    ? threads.filter((t) => t.parentThreadId === current.parentThreadId && t.id !== currentThreadId)
+    : []
   const children = threads.filter(
     (t) => t.parentThreadId === currentThreadId,
   )

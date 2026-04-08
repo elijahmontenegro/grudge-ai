@@ -49,7 +49,13 @@
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.06) transparent;
+  scrollbar-color: rgba(0,0,0,0.15) transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+  * {
+    scrollbar-color: rgba(255,255,255,0.06) transparent;
+  }
 }
 
 body {

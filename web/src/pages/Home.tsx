@@ -26,7 +26,7 @@ type HomeData = { threads: Thread[] }
 
 export function HomePage() {
   const navigate = useNavigate()
-  const { data } = useQuery<HomeData>(THREADS_QUERY)
+  const { data } = useQuery<HomeData>(THREADS_QUERY, { pollInterval: 5000 })
   const [createThread] = useMutation<{createThread: {id: string; name: string}}>(CREATE_THREAD)
   const threads = (data?.threads ?? []).filter((t) => !t.archivedAt)
   const totalMessages = threads.reduce((sum, t) => sum + (t.messageCount ?? 0), 0)
