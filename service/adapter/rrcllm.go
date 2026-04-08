@@ -16,12 +16,17 @@ import (
 // RRCLLM implements model.LLM. ADK calls this thinking it's an LLM;
 // RRC intercepts transparently, selects prerequisites, forwards to the
 // real LLM, and feeds carry-forward back.
+// StreamCallback is called for each streaming delta so the service can
+// publish to GraphQL subscriptions.
+type StreamCallback func(delta, thinking string, done bool)
+
 type RRCLLM struct {
 	engine    *rrc.Engine
 	completer core.Completer
 	db        *storage.DB
 	threadID  string
 	modelName string
+	OnStream  StreamCallback // set by service to publish deltas
 }
 
 // NewRRCLLM creates an RRC-as-LLM adapter.
@@ -132,11 +137,17 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 						Role:  "model",
 						Parts: []*genai.Part{{Text: t.Text}},
 					}
+					if r.OnStream != nil {
+						r.OnStream(t.Text, "", false)
+					}
 				}
 				if t := chunk.GetThinking(); t != nil {
 					resp.Content = &genai.Content{
 						Role:  "model",
 						Parts: []*genai.Part{{Text: t.Text, Thought: true}},
+					}
+					if r.OnStream != nil {
+						r.OnStream("", t.Text, false)
 					}
 				}
 				if chunk.Done {
@@ -144,6 +155,9 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 					resp.TurnComplete = true
 					if chunk.Error != nil {
 						resp.ErrorMessage = *chunk.Error
+					}
+					if r.OnStream != nil {
+						r.OnStream("", "", true)
 					}
 				}
 				if !yield(resp, nil) {

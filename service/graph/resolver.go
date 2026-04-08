@@ -134,6 +134,18 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 		return nil, err
 	}
 
+	// Wire streaming deltas to GraphQL subscriptions
+	runner.SetStreamCallback(func(delta, thinking string, done bool) {
+		event := &StreamEvent{MessageID: threadID, Done: done}
+		if delta != "" {
+			event.Delta = &delta
+		}
+		if thinking != "" {
+			event.Thinking = &thinking
+		}
+		r.publishStream(threadID, event)
+	})
+
 	r.runners[threadID] = &runnerEntry{runner: runner}
 	return runner, nil
 }

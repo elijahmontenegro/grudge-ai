@@ -143,7 +143,20 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 		r.DB.UpdateThreadName(threadID, name)
 	}
 
-	// Store user message
+	// Try ADK runner path first (handles message storage internally)
+	if runner, err := r.getOrCreateRunner(threadID); err == nil {
+		pbScope := pb.SelectionScope_SELECTION_SCOPE_THREAD
+		if scope != nil && *scope == SelectionScopeAllThreads {
+			pbScope = pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS
+		}
+		if resp, err := runner.SendMessage(ctx, content, pbScope); err == nil && resp != nil {
+			return protoMessageToGQL(resp), nil
+		} else if err != nil {
+			log.Printf("[SendMessage] Runner failed, using direct path: %v", err)
+		}
+	}
+
+	// Direct path fallback — store user message here (runner handles its own)
 	msg := &pb.Message{
 		Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 		Role:      pb.Role_ROLE_USER,
@@ -155,41 +168,9 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 	if err := r.DB.InsertMessage(msg); err != nil {
 		return nil, err
 	}
-
-	// Embed on arrival (async)
 	if r.Searcher != nil {
 		go r.Searcher.EmbedMessage(ctx, msg.Id, content)
 	}
-
-	// Try ADK runner path (RRC-as-LLM via ADK, enables multi-step reasoning)
-	if runner, err := r.getOrCreateRunner(threadID); err == nil {
-		pbScope := pb.SelectionScope_SELECTION_SCOPE_THREAD
-		if scope != nil && *scope == SelectionScopeAllThreads {
-			pbScope = pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS
-		}
-		if resp, err := runner.SendMessage(ctx, content, pbScope); err == nil && resp != nil {
-			r.engineMu.RLock()
-			result, selErr := r.Engine.Select(msg.Id, pbScope, threadID)
-			r.engineMu.RUnlock()
-			if selErr == nil {
-				r.mu.Lock()
-				if r.selectionResults == nil {
-					r.selectionResults = make(map[string]*pb.SelectionResult)
-				}
-				r.selectionResults[result.EventId] = result
-				if r.latestSelection == nil {
-					r.latestSelection = make(map[string]string)
-				}
-				r.latestSelection[threadID] = result.EventId
-				r.mu.Unlock()
-			}
-			return protoMessageToGQL(resp), nil
-		} else if err != nil {
-			log.Printf("[SendMessage] Runner failed, using direct path: %v", err)
-		}
-	}
-
-	// Direct path fallback (no tool use, but reliable)
 	r.engineMu.Lock()
 	edges, err := r.Engine.OnMessage(ctx, msg, corpus)
 	r.engineMu.Unlock()

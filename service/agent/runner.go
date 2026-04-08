@@ -33,6 +33,7 @@ type Runner struct {
 	mu        sync.Mutex
 	mode      Mode
 	autoState *AutonomousState
+	onStream  adapter.StreamCallback
 }
 
 // Mode represents the agent's current mode.
@@ -45,6 +46,11 @@ const (
 )
 
 // NewRunner creates an agent runner for a thread.
+// SetStreamCallback sets the callback for streaming deltas (for subscription publishing).
+func (r *Runner) SetStreamCallback(cb adapter.StreamCallback) {
+	r.onStream = cb
+}
+
 func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName string) (*Runner, error) {
 	r := &Runner{
 		engine:    engine,
@@ -56,6 +62,12 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 
 	// RRC-as-LLM: ADK calls this thinking it's an LLM
 	rrcLLM := adapter.NewRRCLLM(engine, completer, db, threadID, modelName)
+	// Wire streaming: use closure so it captures the runner's current callback
+	rrcLLM.OnStream = func(delta, thinking string, done bool) {
+		if r.onStream != nil {
+			r.onStream(delta, thinking, done)
+		}
+	}
 
 	// Create the ADK agent with RRC as its model
 	rootAgent, err := llmagent.New(llmagent.Config{
