@@ -14,6 +14,7 @@ type Thread {
   parentThreadId: ID
   branchPointPosition: Int
   archivedAt: DateTime
+  messageCount: Int!
 }
 
 type Message {
@@ -41,6 +42,9 @@ type SelectedMessage {
   hopDepth: Int!
   threadId: ID!
   crossThread: Boolean!
+  crossEncoderScore: Float!
+  qudWeight: Float!
+  temporalProximity: Float!
 }
 
 type ExcludedMessage {

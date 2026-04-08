@@ -10,6 +10,13 @@ const httpLink = new HttpLink({
 const wsLink = new GraphQLWsLink(
   createClient({
     url: `ws://${window.location.host}/graphql`,
+    retryAttempts: 3,
+    shouldRetry: () => true,
+    on: {
+      error: () => {
+        // Silently handle WebSocket errors — subscriptions degrade gracefully
+      },
+    },
   }),
 )
 

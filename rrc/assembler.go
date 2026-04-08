@@ -18,10 +18,11 @@ type SelectionEntry struct {
 }
 
 // extractSubgraph performs best-first backward traversal from promptID through
-// the DAG. Applies thread scope filtering and score floor cutoff.
-func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.SelectionScope, cfg EngineConfig) []SelectionEntry {
+// the DAG. Returns selected entries and a map of messages excluded due to score floor.
+func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.SelectionScope, cfg EngineConfig) ([]SelectionEntry, map[string]float64) {
 	visited := make(map[string]bool)
 	visited[promptID] = true
+	belowFloor := make(map[string]float64) // messageID -> score (excluded by floor)
 
 	pq := &priorityQueue{}
 	heap.Init(pq)
@@ -57,6 +58,7 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 		visited[entry.MessageID] = true
 
 		if entry.EffectiveScore < cfg.ScoreFloor {
+			belowFloor[entry.MessageID] = entry.EffectiveScore
 			continue
 		}
 
@@ -86,7 +88,7 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 		}
 	}
 
-	return selected
+	return selected, belowFloor
 }
 
 // transitiveReduction removes redundant edges from the selected subgraph.

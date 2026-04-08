@@ -152,7 +152,7 @@ func (h *Handler) runStatelessRRC(ctx context.Context, messages []*pb.Message) (
 }
 
 func (h *Handler) completeOpenAI(ctx context.Context, w http.ResponseWriter, req *pb.CompletionRequest) {
-	resp, err := h.completer.Complete(ctx, req)
+	resp, err := h.completeWithBackoff(ctx, req)
 	if err != nil {
 		writeProxyError(w, err)
 		return
@@ -190,9 +190,9 @@ func (h *Handler) streamOpenAI(ctx context.Context, w http.ResponseWriter, req *
 }
 
 func (h *Handler) completeAnthropic(ctx context.Context, w http.ResponseWriter, req *pb.CompletionRequest) {
-	resp, err := h.completer.Complete(ctx, req)
+	resp, err := h.completeWithBackoff(ctx, req)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeProxyError(w, err)
 		return
 	}
 
@@ -366,6 +366,21 @@ func protoToAnthropicEvent(chunk *pb.StreamChunk) map[string]any {
 		}
 	}
 	return map[string]any{"type": "ping"}
+}
+
+// completeWithBackoff retries completion with fewer messages on context-length errors.
+func (h *Handler) completeWithBackoff(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error) {
+	for {
+		resp, err := h.completer.Complete(ctx, req)
+		if err == nil {
+			return resp, nil
+		}
+		if !isContextLengthErr(err) || len(req.Messages) <= 1 {
+			return nil, err
+		}
+		// Drop the first message (lowest priority — prompt is last)
+		req.Messages = req.Messages[1:]
+	}
 }
 
 // writeProxyError maps provider errors to appropriate HTTP status codes.

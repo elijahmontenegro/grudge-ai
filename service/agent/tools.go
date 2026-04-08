@@ -215,6 +215,7 @@ type ToolDeps struct {
 	ThreadID    string
 	DB          interface{ InsertMessage(interface{}) error } // storage.DB
 	AgentState  func(mode string) error                      // transition agent mode
+	IsPlanMode  func() bool                                  // check if plan mode active
 	CompileAdoc func(path string) (string, error)            // adoc.Compile
 	PlanDir     string                                       // $XDG_DATA_HOME/spidey/plans/
 	// Subagent spawner — service wires this to create forked runners
@@ -236,10 +237,21 @@ type AskRequest struct {
 }
 
 // BuildTools creates all ADK FunctionTools for the agent.
+// ErrPlanModeWriteDisabled is returned when a write tool is called during plan mode.
+var ErrPlanModeWriteDisabled = fmt.Errorf("write tools are disabled in plan mode — use read tools to explore, then exit plan mode to execute")
+
 func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	baseDir := ""
 	if len(deps.WorkingDirs) > 0 {
 		baseDir = deps.WorkingDirs[0]
+	}
+
+	// planGuard returns an error if plan mode is active. Called by all write tools.
+	planGuard := func() error {
+		if deps.IsPlanMode != nil && deps.IsPlanMode() {
+			return ErrPlanModeWriteDisabled
+		}
+		return nil
 	}
 
 	execCmd := func(ctx context.Context, command, dir string) (string, int) {
@@ -274,6 +286,9 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	bash, _ := functiontool.New(
 		functiontool.Config{Name: "Bash", Description: "Execute a shell command. Returns stdout/stderr and exit code."},
 		func(ctx tool.Context, args BashArgs) (BashResult, error) {
+			if err := planGuard(); err != nil {
+				return BashResult{Output: err.Error(), ExitCode: 1}, nil
+			}
 			if sandbox.DetectDestructive(args.Command) {
 				return BashResult{Output: "destructive command detected — requires explicit approval", ExitCode: 1}, nil
 			}
@@ -383,11 +398,14 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	)
 	tools = append(tools, askUser)
 
-	// --- Write tools (Ask) ---
+	// --- Write tools (Ask) — disabled in plan mode ---
 
 	fileEdit, _ := functiontool.New(
 		functiontool.Config{Name: "FileEdit", Description: "Replace old_string with new_string in the file at path. The old_string must be unique in the file."},
 		func(ctx tool.Context, args FileEditArgs) (FileEditResult, error) {
+			if err := planGuard(); err != nil {
+				return FileEditResult{}, err
+			}
 			data, err := os.ReadFile(args.Path)
 			if err != nil {
 				return FileEditResult{}, err
@@ -408,6 +426,9 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	fileWrite, _ := functiontool.New(
 		functiontool.Config{Name: "FileWrite", Description: "Write content to file, creating directories as needed."},
 		func(ctx tool.Context, args FileWriteArgs) (FileWriteResult, error) {
+			if err := planGuard(); err != nil {
+				return FileWriteResult{}, err
+			}
 			if err := os.MkdirAll(filepath.Dir(args.Path), 0o755); err != nil {
 				return FileWriteResult{}, err
 			}
@@ -488,6 +509,12 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	todoWrite, _ := functiontool.New(
 		functiontool.Config{Name: "TodoWrite", Description: "Create a structured task list for tracking work."},
 		func(ctx tool.Context, args TodoWriteArgs) (TodoWriteResult, error) {
+			if deps.Tasks == nil {
+				return TodoWriteResult{}, fmt.Errorf("task store not available")
+			}
+			for _, desc := range args.Tasks {
+				deps.Tasks.Create(desc, desc, "todo")
+			}
 			return TodoWriteResult{Success: true}, nil
 		},
 	)
@@ -659,5 +686,12 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	)
 	tools = append(tools, taskOutput)
 
-	return tools, nil
+	// Filter out nil tools (functiontool.New can return nil on error)
+	var validTools []tool.Tool
+	for _, t := range tools {
+		if t != nil {
+			validTools = append(validTools, t)
+		}
+	}
+	return validTools, nil
 }

@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { gql } from '@apollo/client'
 import { useMutation } from '@apollo/client/react'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 import { useAgentState } from '@/hooks/useAgentState'
 
 const START_AUTONOMOUS = gql`
@@ -32,6 +31,7 @@ export function AutonomousControls({ threadId }: Props) {
   const [prompt, setPrompt] = useState('')
   const [duration, setDuration] = useState('1h')
   const [correction, setCorrection] = useState('')
+  const [expanded, setExpanded] = useState(false)
   const { state } = useAgentState(threadId)
 
   const [startAutonomous] = useMutation<{startAutonomous: boolean}>(START_AUTONOMOUS)
@@ -43,74 +43,140 @@ export function AutonomousControls({ threadId }: Props) {
   const isPaused = state?.status === 'PAUSED'
   const isAutonomous = state?.mode === 'AUTONOMOUS'
 
+  // Running state — prominent status bar
   if (isAutonomous && (isRunning || isPaused)) {
     return (
-      <div className="border border-border rounded-lg p-3 space-y-2 bg-card">
-        <div className="flex items-center gap-2">
-          <Badge variant={isRunning ? 'default' : 'secondary'}>
-            {state?.status}
-          </Badge>
-          <Badge variant="outline">Round {state?.roundCount}</Badge>
+      <div className="rounded-xl bg-card p-4 mb-3 animate-fade-in">
+        <div className="flex items-center gap-3 mb-3">
+          <span className={cn(
+            'h-2 w-2 rounded-full shrink-0',
+            isRunning ? 'bg-emerald-500 animate-pulse-subtle' : 'bg-amber-500'
+          )} />
+          <span className="text-sm font-medium">{isRunning ? 'Autonomous' : 'Paused'}</span>
+          <span className="text-xs text-muted-foreground/50">Round {state?.roundCount ?? 0}</span>
           {state?.elapsedTime && (
-            <span className="text-xs text-muted">{state.elapsedTime}</span>
+            <span className="text-xs text-muted-foreground/40 tabular-nums">{state.elapsedTime}</span>
           )}
         </div>
 
-        <div className="flex gap-2">
+        {isPaused && (
+          <div className="flex items-center gap-2 mb-3">
+            <Input
+              value={correction}
+              onChange={(e) => setCorrection(e.target.value)}
+              placeholder="Course correction (optional)..."
+              className="flex-1 h-8 text-sm"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  resumeAgent({ variables: { threadId, correction: correction || null } })
+                  setCorrection('')
+                }
+              }}
+            />
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
           {isRunning && (
-            <Button size="sm" variant="outline" onClick={() => pauseAgent({ variables: { threadId } })}>
+            <button
+              onClick={() => pauseAgent({ variables: { threadId } })}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-foreground/[0.05] hover:bg-foreground/[0.08] transition-colors"
+            >
               Pause
-            </Button>
+            </button>
           )}
           {isPaused && (
-            <>
-              <Input
-                value={correction}
-                onChange={(e) => setCorrection(e.target.value)}
-                placeholder="Course correction (optional)"
-                className="flex-1 text-sm"
-              />
-              <Button size="sm" onClick={() => {
+            <button
+              onClick={() => {
                 resumeAgent({ variables: { threadId, correction: correction || null } })
                 setCorrection('')
-              }}>
-                Resume
-              </Button>
-            </>
+              }}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+            >
+              Resume
+            </button>
           )}
-          <Button size="sm" variant="destructive" onClick={() => stopAgent({ variables: { threadId } })}>
+          <button
+            onClick={() => stopAgent({ variables: { threadId } })}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+          >
             Stop
-          </Button>
+          </button>
         </div>
       </div>
     )
   }
 
-  return (
-    <div className="border border-border rounded-lg p-3 space-y-2 bg-card">
-      <h3 className="text-sm font-medium">Autonomous Mode</h3>
-      <Input
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder="What should Spidey work on?"
-      />
-      <div className="flex gap-2 items-center">
-        <Input
-          value={duration}
-          onChange={(e) => setDuration(e.target.value)}
-          placeholder="Duration (e.g. 1h, 30m)"
-          className="w-32"
-        />
-        <Button
-          size="sm"
-          disabled={!prompt.trim()}
-          onClick={() => startAutonomous({
-            variables: { threadId, prompt, duration },
-          })}
-        >
-          Start
-        </Button>
+  // Setup form
+  if (expanded) {
+    return (
+      <div className="rounded-xl bg-card p-4 mb-3 animate-fade-in">
+        <div className="text-sm font-medium mb-1">Autonomous mode</div>
+        <p className="text-xs text-muted-foreground/40 mb-3">
+          The agent works independently on a task. RRC scores every round.
+        </p>
+        <div className="space-y-2">
+          <Input
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && prompt.trim()) {
+                startAutonomous({ variables: { threadId, prompt, duration } })
+                setExpanded(false)
+              }
+              if (e.key === 'Escape') setExpanded(false)
+            }}
+            placeholder="What should Spidey work on?"
+            className="text-sm"
+            autoFocus
+          />
+          <div className="flex items-center gap-2">
+            <Input
+              value={duration}
+              onChange={(e) => setDuration(e.target.value)}
+              placeholder="1h"
+              className="w-20 text-sm text-center"
+            />
+            <button
+              disabled={!prompt.trim()}
+              onClick={() => {
+                startAutonomous({ variables: { threadId, prompt, duration } })
+                setExpanded(false)
+              }}
+              className={cn(
+                'px-4 py-1.5 rounded-lg text-xs font-medium transition-colors',
+                prompt.trim()
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'bg-foreground/[0.05] text-muted-foreground/30'
+              )}
+            >
+              Start
+            </button>
+            <button
+              onClick={() => setExpanded(false)}
+              className="px-3 py-1.5 rounded-lg text-xs text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
+    )
+  }
+
+  // Trigger — proper button with icon and description, not a text link
+  return (
+    <button
+      onClick={() => setExpanded(true)}
+      className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-foreground/[0.03] transition-colors text-left group"
+    >
+      <span className="h-7 w-7 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-500 shrink-0 group-hover:bg-emerald-500/20 transition-colors">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      </span>
+      <div>
+        <div className="text-xs font-medium text-muted-foreground group-hover:text-foreground transition-colors">Autonomous</div>
+        <div className="text-[10px] text-muted-foreground/30">Agent works independently</div>
+      </div>
+    </button>
   )
 }

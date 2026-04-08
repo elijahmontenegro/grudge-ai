@@ -4,8 +4,7 @@ import { useQuery, useMutation } from '@apollo/client/react'
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
-import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 import { MessageBubble } from '@/components/molecules/MessageBubble'
 import { BranchNavigator } from '@/components/molecules/BranchNavigator'
 import { AutonomousControls } from '@/components/organisms/AutonomousControls'
@@ -70,9 +69,20 @@ const SELECTION_QUERY = gql`
   }
 `
 
+const RENAME_THREAD = gql`
+  mutation RenameThread($id: ID!, $name: String!) {
+    updateThread(id: $id, name: $name) { id name }
+  }
+`
+
 type MessagesQueryData = {
   messages: Message[]
   thread: { id: string; name: string } | null
+}
+
+function autoResize(el: HTMLTextAreaElement) {
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px'
 }
 
 export function ThreadPage() {
@@ -85,7 +95,11 @@ export function ThreadPage() {
   const [editingMsg, setEditingMsg] = useState<Message | null>(null)
   const [editContent, setEditContent] = useState('')
   const [streamText, setStreamText] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState(false)
+  const [nameInput, setNameInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const { data, loading, refetch } = useQuery<MessagesQueryData>(MESSAGES_QUERY, {
     variables: { threadId },
@@ -94,6 +108,7 @@ export function ThreadPage() {
   })
   const [sendMessage, { loading: sending }] = useMutation<{ sendMessage: Message }>(SEND_MESSAGE)
   const [editMessage] = useMutation<{ editMessage: { id: string; name: string } }>(EDIT_MESSAGE)
+  const [renameThread] = useMutation<{ updateThread: { id: string; name: string } }>(RENAME_THREAD)
 
   type SelectionData = { selectionResult: { selected: SelectedMessage[] } | null }
   const { data: selData } = useQuery<SelectionData>(SELECTION_QUERY, {
@@ -107,12 +122,10 @@ export function ThreadPage() {
   const { execution: toolExec } = useToolExecution(threadId ?? '')
   const { viewState, saveViewState } = useViewState(threadId ?? '')
 
-  // Build selection map for citation display
   const selectionMap = new Map<string, SelectedMessage>(
     selData?.selectionResult?.selected?.map((s: SelectedMessage) => [s.messageId, s]) ?? []
   )
 
-  // Streaming text accumulation
   useEffect(() => {
     if (streamEvent) {
       if (streamEvent.done) {
@@ -124,28 +137,54 @@ export function ThreadPage() {
     }
   }, [streamEvent, refetch])
 
-  // Restore input draft from view state
   useEffect(() => {
     if (viewState?.inputDraft && !input) {
       setInput(viewState.inputDraft)
     }
   }, [viewState]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-scroll
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight
     }
   }, [data?.messages?.length, streamText])
 
+  // Auto-focus composer on thread navigation
+  useEffect(() => {
+    if (threadId && textareaRef.current) {
+      textareaRef.current.focus()
+    }
+  }, [threadId])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showIntrospection) setShowIntrospection(false)
+        if (editingName) setEditingName(false)
+        if (editingMsg) setEditingMsg(null)
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [showIntrospection, editingName, editingMsg])
+
   const handleSend = useCallback(async () => {
     if (!input.trim() || !threadId || sending) return
     const content = input
     setInput('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
     setThinking(true)
     saveViewState({ scrollPosition: 0, expandedMessageIds: [], inputDraft: '', citationExpansionState: '{}' })
     try {
+      setError(null)
       await sendMessage({ variables: { threadId, content, scope } })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to send message'
+      setError(msg)
+      setInput(content)
     } finally {
       setThinking(false)
       refetch()
@@ -169,133 +208,249 @@ export function ThreadPage() {
     saveViewState({ scrollPosition: 0, expandedMessageIds: [], inputDraft: value, citationExpansionState: '{}' })
   }
 
+  const threadName = data?.thread?.name
+  const displayName = threadName && threadName !== 'New Thread' ? threadName : 'New conversation'
+
   return (
     <div className="flex h-screen">
       <ThreadSidebar />
 
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="border-b border-border p-3 flex items-center gap-2">
-          <h1 className="text-sm font-semibold flex-1 truncate">
-            {data?.thread?.name || 'Thread'}
-          </h1>
-          {threadId && <BranchNavigator currentThreadId={threadId} />}
-          <Badge variant="outline" className="text-[10px]">
-            {data?.messages?.length ?? 0} msgs
-          </Badge>
-          {(sending || thinking) && (
-            <Badge className="text-[10px] animate-pulse">Thinking...</Badge>
-          )}
-          {agentState && !sending && (
-            <Badge
-              variant={agentState.status === 'RUNNING' ? 'default' : 'secondary'}
-              className="text-[10px]"
+        {/* Header — glass, floating */}
+        <header className="glass h-12 px-5 flex items-center gap-3 shrink-0 bg-background/70 z-10">
+          {editingName ? (
+            <input
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              onKeyDown={async (e) => {
+                if (e.key === 'Enter' && nameInput.trim() && threadId) {
+                  await renameThread({ variables: { id: threadId, name: nameInput.trim() } })
+                  setEditingName(false)
+                  refetch()
+                }
+                if (e.key === 'Escape') setEditingName(false)
+              }}
+              onBlur={() => setEditingName(false)}
+              className="text-[15px] font-medium flex-1 bg-transparent border-none outline-none text-foreground/90 truncate"
+              autoFocus
+            />
+          ) : (
+            <h1
+              className="text-[15px] font-medium flex-1 truncate text-foreground/90 cursor-pointer hover:text-foreground transition-colors"
+              onClick={() => { setNameInput(displayName); setEditingName(true) }}
+              title="Click to rename"
             >
-              {agentState.mode !== 'NORMAL' ? agentState.mode : agentState.status}
-            </Badge>
+              {displayName}
+            </h1>
           )}
-          <Button
-            variant={showIntrospection ? 'default' : 'ghost'}
-            size="sm"
-            className="text-[10px] h-6"
-            onClick={() => setShowIntrospection(!showIntrospection)}
-          >
-            RRC
-          </Button>
+
+          <div className="flex items-center gap-2">
+            {threadId && <BranchNavigator currentThreadId={threadId} />}
+
+            {(sending || thinking) && (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse-subtle" />
+                <span>Generating</span>
+              </div>
+            )}
+
+            {agentState && !sending && agentState.mode !== 'NORMAL' && (
+              <span className="text-xs text-primary/80 font-medium">
+                {agentState.mode === 'AUTONOMOUS' ? 'Autonomous' : 'Planning'}
+              </span>
+            )}
+
+            <button
+              onClick={() => setShowIntrospection(!showIntrospection)}
+              className={cn(
+                'h-7 px-2.5 rounded-lg text-xs transition-all',
+                showIntrospection
+                  ? 'bg-primary/15 text-primary font-medium shadow-[0_0_12px_-2px_rgba(167,139,250,0.3)]'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04]'
+              )}
+            >
+              RRC
+            </button>
+          </div>
         </header>
 
         <div className="flex flex-1 min-h-0">
+          {/* Message area */}
           <div className="flex-1 flex flex-col min-w-0">
-            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
-              <div className="space-y-3 max-w-3xl mx-auto">
-                {loading && <p className="text-sm text-muted">Loading...</p>}
+            <div ref={scrollRef} className="flex-1 overflow-y-auto">
+              <div className="max-w-[680px] mx-auto px-6 py-8 space-y-6">
+                {loading && (
+                  <p className="text-sm text-muted-foreground text-center py-12">Loading...</p>
+                )}
+
+                {!loading && data?.messages?.length === 0 && (
+                  <div className="text-center py-24 space-y-3 animate-fade-in">
+                    <p className="text-xl font-medium text-foreground/30">Start a conversation</p>
+                    <p className="text-sm text-muted-foreground/40">
+                      RRC selects only the messages that matter
+                    </p>
+                  </div>
+                )}
+
                 {data?.messages?.map((msg) => (
                   editingMsg?.id === msg.id ? (
-                    <div key={msg.id} className="p-3 border border-primary rounded-lg space-y-2">
+                    <div key={msg.id} id={`msg-${msg.id}`} className="p-5 rounded-2xl space-y-3 bg-card shadow-lg animate-fade-in">
+                      <label className="text-xs text-muted-foreground">Edit message to create a branch</label>
                       <Input
                         value={editContent}
                         onChange={(e) => setEditContent(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleEdit(msg)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleEdit(msg)
+                          if (e.key === 'Escape') setEditingMsg(null)
+                        }}
                         autoFocus
                       />
                       <div className="flex gap-2">
-                        <Button size="sm" onClick={() => handleEdit(msg)}>Branch</Button>
+                        <Button size="sm" onClick={() => handleEdit(msg)}>Create branch</Button>
                         <Button size="sm" variant="ghost" onClick={() => setEditingMsg(null)}>Cancel</Button>
                       </div>
                     </div>
                   ) : (
-                    <MessageBubble
-                      key={msg.id}
-                      message={msg}
-                      selection={selectionMap.get(msg.id) ?? undefined}
-                      onEdit={msg.role === 'ROLE_USER' ? () => {
-                        setEditingMsg(msg)
-                        setEditContent(msg.content)
-                      } : undefined}
-                    />
+                    <div key={msg.id} id={`msg-${msg.id}`}>
+                      <MessageBubble
+                        message={msg}
+                        selection={selectionMap.get(msg.id) ?? undefined}
+                        onEdit={msg.role === 'ROLE_USER' ? () => {
+                          setEditingMsg(msg)
+                          setEditContent(msg.content)
+                        } : undefined}
+                      />
+                    </div>
                   )
                 ))}
 
                 {toolExec && toolExec.status !== 'completed' && (
-                  <ToolCallDisplay
-                    callId={toolExec.callId}
-                    toolName={toolExec.toolName}
-                    arguments={toolExec.arguments}
-                    status={toolExec.status}
-                    result={toolExec.result ?? null}
-                    isError={toolExec.isError ?? null}
-                  />
+                  <div className="animate-fade-in-up">
+                    <ToolCallDisplay
+                      callId={toolExec.callId}
+                      toolName={toolExec.toolName}
+                      arguments={toolExec.arguments}
+                      status={toolExec.status}
+                      result={toolExec.result ?? null}
+                      isError={toolExec.isError ?? null}
+                    />
+                  </div>
                 )}
 
-                {(streamText || thinking) && (
-                  <div className="p-3 rounded-lg bg-card border border-border max-w-[90%]">
-                    {streamText ? (
-                      <p className="text-sm whitespace-pre-wrap">{streamText}</p>
-                    ) : (
-                      <div className="flex items-center gap-2 text-sm text-muted">
-                        <span className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse" />
-                        Thinking...
+                {/* Error display */}
+                {error && (
+                  <div className="animate-fade-in-up max-w-[85%]">
+                    <div className="rounded-2xl px-4 py-3 bg-destructive/10 text-destructive text-sm">
+                      <div className="flex items-start gap-2">
+                        <span className="shrink-0 mt-0.5">&#9888;</span>
+                        <div>
+                          <p className="font-medium text-xs mb-1">Failed to get response</p>
+                          <p className="text-xs text-destructive/70">{error}</p>
+                        </div>
+                        <button
+                          onClick={() => setError(null)}
+                          className="ml-auto shrink-0 text-destructive/40 hover:text-destructive text-xs"
+                        >
+                          &#10005;
+                        </button>
                       </div>
-                    )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Streaming / thinking */}
+                {(streamText || thinking) && (
+                  <div className="max-w-[85%] animate-fade-in-up">
+                    <div className="text-[11px] text-muted-foreground/60 font-medium mb-2 pl-1">Spidey</div>
+                    <div className="pl-1">
+                      {streamText ? (
+                        <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{streamText}</p>
+                      ) : (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground/50">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse-subtle" />
+                          Thinking...
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
             </div>
 
+            {/* Footer — composer */}
             {threadId && (
-              <div className="border-t border-border p-3 space-y-2">
-                <div className="flex gap-2 max-w-3xl mx-auto flex-wrap">
-                  <AutonomousControls threadId={threadId} />
-                  <PlanMode threadId={threadId} />
+              <div className="pb-5 px-6">
+                {/* Mode controls + active status */}
+                <div className="max-w-[680px] mx-auto">
                   <SubagentProgress threadId={threadId} />
+                  <div className="flex items-start gap-1 mb-2">
+                    <AutonomousControls threadId={threadId} />
+                    <PlanMode threadId={threadId} />
+                  </div>
                 </div>
-                <Separator />
-                <div className="flex gap-2 max-w-3xl mx-auto w-full items-center">
-                  <Button
-                    variant={scope === 'ALL_THREADS' ? 'default' : 'outline'}
-                    size="sm"
-                    className="text-[10px] h-7 shrink-0"
-                    onClick={() => setScope(s => s === 'THREAD' ? 'ALL_THREADS' : 'THREAD')}
-                  >
-                    {scope === 'THREAD' ? 'Thread' : 'All'}
-                  </Button>
-                  <Input
-                    value={input}
-                    onChange={(e) => handleInputChange(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-                    placeholder="Send a message..."
-                    className="flex-1"
-                    disabled={sending || thinking}
-                  />
-                  <Button onClick={handleSend} disabled={sending || thinking || !input.trim()}>
-                    {sending || thinking ? '...' : 'Send'}
-                  </Button>
+
+                {/* Composer */}
+                <div className="max-w-[680px] mx-auto">
+                  <div className="composer">
+                    <textarea
+                      ref={textareaRef}
+                      value={input}
+                      onChange={(e) => {
+                        handleInputChange(e.target.value)
+                        autoResize(e.target)
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault()
+                          handleSend()
+                        }
+                      }}
+                      placeholder="Message Spidey..."
+                      disabled={sending || thinking}
+                      rows={1}
+                    />
+                    <div className="flex items-center justify-between px-3 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setScope(s => s === 'THREAD' ? 'ALL_THREADS' : 'THREAD')}
+                          className={cn(
+                            'text-[11px] px-2 py-1 rounded-md transition-all',
+                            scope === 'ALL_THREADS'
+                              ? 'text-primary bg-primary/10'
+                              : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-foreground/[0.04]'
+                          )}
+                          title={scope === 'THREAD' ? 'Searching this thread' : 'Searching all threads'}
+                        >
+                          {scope === 'THREAD' ? 'This thread' : 'All threads'}
+                        </button>
+                      </div>
+                      <button
+                        onClick={handleSend}
+                        disabled={sending || thinking || !input.trim()}
+                        className={cn(
+                          'h-8 w-8 rounded-lg flex items-center justify-center transition-all',
+                          input.trim()
+                            ? 'bg-primary text-primary-foreground shadow-[0_0_12px_-2px_rgba(167,139,250,0.4)] hover:shadow-[0_0_16px_-2px_rgba(167,139,250,0.5)]'
+                            : 'text-muted-foreground/30'
+                        )}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <line x1="22" y1="2" x2="11" y2="13" />
+                          <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
           </div>
 
+          {/* Introspection panel */}
           {showIntrospection && threadId && (
-            <IntrospectionPanel threadId={threadId} />
+            <div className="animate-slide-in-right">
+              <IntrospectionPanel threadId={threadId} />
+            </div>
           )}
         </div>
       </main>

@@ -274,10 +274,13 @@ export type SearchResult = {
 
 export type SelectedMessage = {
   __typename?: 'SelectedMessage';
+  crossEncoderScore: Scalars['Float']['output'];
   crossThread: Scalars['Boolean']['output'];
   effectiveScore: Scalars['Float']['output'];
   hopDepth: Scalars['Int']['output'];
   messageId: Scalars['ID']['output'];
+  qudWeight: Scalars['Float']['output'];
+  temporalProximity: Scalars['Float']['output'];
   threadId: Scalars['ID']['output'];
 };
 
@@ -365,6 +368,7 @@ export type Thread = {
   branchPointPosition?: Maybe<Scalars['Int']['output']>;
   createdAt: Scalars['DateTime']['output'];
   id: Scalars['ID']['output'];
+  messageCount: Scalars['Int']['output'];
   name: Scalars['String']['output'];
   parentThreadId?: Maybe<Scalars['ID']['output']>;
   sandboxed: Scalars['Boolean']['output'];
@@ -413,6 +417,11 @@ export type ViewStateInput = {
   inputDraft: Scalars['String']['input'];
   scrollPosition: Scalars['Float']['input'];
 };
+
+export type SettingsCheckQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type SettingsCheckQuery = { __typename?: 'Query', settings: { __typename?: 'Settings', providers: string } };
 
 export type ThreadBranchesQueryVariables = Exact<{
   includeArchived?: InputMaybe<Scalars['Boolean']['input']>;
@@ -465,12 +474,19 @@ export type SearchQueryVariables = Exact<{
 
 export type SearchQuery = { __typename?: 'Query', search: Array<{ __typename?: 'SearchResult', messageId: string, threadId: string, threadName: string, snippet: string, score: number }> };
 
+export type PaletteCreateThreadMutationVariables = Exact<{
+  name?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type PaletteCreateThreadMutation = { __typename?: 'Mutation', createThread: { __typename?: 'Thread', id: string, name: string } };
+
 export type SelectionResultQueryVariables = Exact<{
   eventId: Scalars['ID']['input'];
 }>;
 
 
-export type SelectionResultQuery = { __typename?: 'Query', selectionResult?: { __typename?: 'SelectionResult', eventId: string, scope: SelectionScope, threadId: string, selected: Array<{ __typename?: 'SelectedMessage', messageId: string, effectiveScore: number, hopDepth: number, threadId: string, crossThread: boolean }>, excluded: Array<{ __typename?: 'ExcludedMessage', messageId: string, reason: string, score: number }> } | null };
+export type SelectionResultQuery = { __typename?: 'Query', selectionResult?: { __typename?: 'SelectionResult', eventId: string, scope: SelectionScope, threadId: string, selected: Array<{ __typename?: 'SelectedMessage', messageId: string, effectiveScore: number, hopDepth: number, threadId: string, crossThread: boolean, crossEncoderScore: number, qudWeight: number, temporalProximity: number }>, excluded: Array<{ __typename?: 'ExcludedMessage', messageId: string, reason: string, score: number }> } | null };
 
 export type IntrospectionMessagesQueryVariables = Exact<{
   threadId: Scalars['ID']['input'];
@@ -521,6 +537,20 @@ export type CreateThreadMutationVariables = Exact<{
 
 
 export type CreateThreadMutation = { __typename?: 'Mutation', createThread: { __typename?: 'Thread', id: string, name: string } };
+
+export type ArchiveThreadMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type ArchiveThreadMutation = { __typename?: 'Mutation', archiveThread: boolean };
+
+export type DeleteThreadMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+}>;
+
+
+export type DeleteThreadMutation = { __typename?: 'Mutation', deleteThread: boolean };
 
 export type ApproveToolCallMutationVariables = Exact<{
   callId: Scalars['ID']['input'];
@@ -578,6 +608,18 @@ export type SaveViewStateMutationVariables = Exact<{
 
 export type SaveViewStateMutation = { __typename?: 'Mutation', saveViewState: { __typename?: 'ViewState', threadId: string } };
 
+export type HomeThreadsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type HomeThreadsQuery = { __typename?: 'Query', threads: Array<{ __typename?: 'Thread', id: string, name: string, createdAt: any, archivedAt?: any | null }> };
+
+export type HomeCreateThreadMutationVariables = Exact<{
+  name?: InputMaybe<Scalars['String']['input']>;
+}>;
+
+
+export type HomeCreateThreadMutation = { __typename?: 'Mutation', createThread: { __typename?: 'Thread', id: string, name: string } };
+
 export type SettingsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -605,3 +647,27 @@ export type SendMessageMutationVariables = Exact<{
 
 
 export type SendMessageMutation = { __typename?: 'Mutation', sendMessage: { __typename?: 'Message', id: string, role: string, content: string, position: number } };
+
+export type EditMessageMutationVariables = Exact<{
+  threadId: Scalars['ID']['input'];
+  messagePosition: Scalars['Int']['input'];
+  newContent: Scalars['String']['input'];
+}>;
+
+
+export type EditMessageMutation = { __typename?: 'Mutation', editMessage: { __typename?: 'Thread', id: string, name: string } };
+
+export type LatestSelectionQueryVariables = Exact<{
+  eventId: Scalars['ID']['input'];
+}>;
+
+
+export type LatestSelectionQuery = { __typename?: 'Query', selectionResult?: { __typename?: 'SelectionResult', selected: Array<{ __typename?: 'SelectedMessage', messageId: string, effectiveScore: number, hopDepth: number, crossThread: boolean, threadId: string }> } | null };
+
+export type RenameThreadMutationVariables = Exact<{
+  id: Scalars['ID']['input'];
+  name: Scalars['String']['input'];
+}>;
+
+
+export type RenameThreadMutation = { __typename?: 'Mutation', updateThread: { __typename?: 'Thread', id: string, name: string } };

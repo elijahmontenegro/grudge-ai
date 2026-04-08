@@ -128,11 +128,14 @@ type ComplexityRoot struct {
 	}
 
 	SelectedMessage struct {
-		CrossThread    func(childComplexity int) int
-		EffectiveScore func(childComplexity int) int
-		HopDepth       func(childComplexity int) int
-		MessageID      func(childComplexity int) int
-		ThreadID       func(childComplexity int) int
+		CrossEncoderScore func(childComplexity int) int
+		CrossThread       func(childComplexity int) int
+		EffectiveScore    func(childComplexity int) int
+		HopDepth          func(childComplexity int) int
+		MessageID         func(childComplexity int) int
+		QudWeight         func(childComplexity int) int
+		TemporalProximity func(childComplexity int) int
+		ThreadID          func(childComplexity int) int
 	}
 
 	SelectionResult struct {
@@ -181,6 +184,7 @@ type ComplexityRoot struct {
 		BranchPointPosition func(childComplexity int) int
 		CreatedAt           func(childComplexity int) int
 		ID                  func(childComplexity int) int
+		MessageCount        func(childComplexity int) int
 		Name                func(childComplexity int) int
 		ParentThreadID      func(childComplexity int) int
 		Sandboxed           func(childComplexity int) int
@@ -781,6 +785,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.SearchResult.ThreadName(childComplexity), true
 
+	case "SelectedMessage.crossEncoderScore":
+		if e.ComplexityRoot.SelectedMessage.CrossEncoderScore == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SelectedMessage.CrossEncoderScore(childComplexity), true
 	case "SelectedMessage.crossThread":
 		if e.ComplexityRoot.SelectedMessage.CrossThread == nil {
 			break
@@ -805,6 +815,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SelectedMessage.MessageID(childComplexity), true
+	case "SelectedMessage.qudWeight":
+		if e.ComplexityRoot.SelectedMessage.QudWeight == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SelectedMessage.QudWeight(childComplexity), true
+	case "SelectedMessage.temporalProximity":
+		if e.ComplexityRoot.SelectedMessage.TemporalProximity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SelectedMessage.TemporalProximity(childComplexity), true
 	case "SelectedMessage.threadId":
 		if e.ComplexityRoot.SelectedMessage.ThreadID == nil {
 			break
@@ -1017,6 +1039,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Thread.ID(childComplexity), true
+	case "Thread.messageCount":
+		if e.ComplexityRoot.Thread.MessageCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Thread.MessageCount(childComplexity), true
 	case "Thread.name":
 		if e.ComplexityRoot.Thread.Name == nil {
 			break
@@ -2462,6 +2490,8 @@ func (ec *executionContext) fieldContext_Mutation_createThread(ctx context.Conte
 				return ec.fieldContext_Thread_branchPointPosition(ctx, field)
 			case "archivedAt":
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
+			case "messageCount":
+				return ec.fieldContext_Thread_messageCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -2521,6 +2551,8 @@ func (ec *executionContext) fieldContext_Mutation_updateThread(ctx context.Conte
 				return ec.fieldContext_Thread_branchPointPosition(ctx, field)
 			case "archivedAt":
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
+			case "messageCount":
+				return ec.fieldContext_Thread_messageCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -2703,6 +2735,8 @@ func (ec *executionContext) fieldContext_Mutation_editMessage(ctx context.Contex
 				return ec.fieldContext_Thread_branchPointPosition(ctx, field)
 			case "archivedAt":
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
+			case "messageCount":
+				return ec.fieldContext_Thread_messageCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -3538,6 +3572,8 @@ func (ec *executionContext) fieldContext_Query_threads(ctx context.Context, fiel
 				return ec.fieldContext_Thread_branchPointPosition(ctx, field)
 			case "archivedAt":
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
+			case "messageCount":
+				return ec.fieldContext_Thread_messageCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -3597,6 +3633,8 @@ func (ec *executionContext) fieldContext_Query_thread(ctx context.Context, field
 				return ec.fieldContext_Thread_branchPointPosition(ctx, field)
 			case "archivedAt":
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
+			case "messageCount":
+				return ec.fieldContext_Thread_messageCount(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -4315,6 +4353,93 @@ func (ec *executionContext) fieldContext_SelectedMessage_crossThread(_ context.C
 	return fc, nil
 }
 
+func (ec *executionContext) _SelectedMessage_crossEncoderScore(ctx context.Context, field graphql.CollectedField, obj *SelectedMessage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SelectedMessage_crossEncoderScore,
+		func(ctx context.Context) (any, error) {
+			return obj.CrossEncoderScore, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SelectedMessage_crossEncoderScore(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SelectedMessage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SelectedMessage_qudWeight(ctx context.Context, field graphql.CollectedField, obj *SelectedMessage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SelectedMessage_qudWeight,
+		func(ctx context.Context) (any, error) {
+			return obj.QudWeight, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SelectedMessage_qudWeight(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SelectedMessage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SelectedMessage_temporalProximity(ctx context.Context, field graphql.CollectedField, obj *SelectedMessage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SelectedMessage_temporalProximity,
+		func(ctx context.Context) (any, error) {
+			return obj.TemporalProximity, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SelectedMessage_temporalProximity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SelectedMessage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _SelectionResult_eventId(ctx context.Context, field graphql.CollectedField, obj *SelectionResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -4436,6 +4561,12 @@ func (ec *executionContext) fieldContext_SelectionResult_selected(_ context.Cont
 				return ec.fieldContext_SelectedMessage_threadId(ctx, field)
 			case "crossThread":
 				return ec.fieldContext_SelectedMessage_crossThread(ctx, field)
+			case "crossEncoderScore":
+				return ec.fieldContext_SelectedMessage_crossEncoderScore(ctx, field)
+			case "qudWeight":
+				return ec.fieldContext_SelectedMessage_qudWeight(ctx, field)
+			case "temporalProximity":
+				return ec.fieldContext_SelectedMessage_temporalProximity(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type SelectedMessage", field.Name)
 		},
@@ -5442,6 +5573,35 @@ func (ec *executionContext) fieldContext_Thread_archivedAt(_ context.Context, fi
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type DateTime does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Thread_messageCount(ctx context.Context, field graphql.CollectedField, obj *Thread) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Thread_messageCount,
+		func(ctx context.Context) (any, error) {
+			return obj.MessageCount, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Thread_messageCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Thread",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -8407,6 +8567,21 @@ func (ec *executionContext) _SelectedMessage(ctx context.Context, sel ast.Select
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "crossEncoderScore":
+			out.Values[i] = ec._SelectedMessage_crossEncoderScore(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "qudWeight":
+			out.Values[i] = ec._SelectedMessage_qudWeight(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "temporalProximity":
+			out.Values[i] = ec._SelectedMessage_temporalProximity(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -8760,6 +8935,11 @@ func (ec *executionContext) _Thread(ctx context.Context, sel ast.SelectionSet, o
 			out.Values[i] = ec._Thread_branchPointPosition(ctx, field, obj)
 		case "archivedAt":
 			out.Values[i] = ec._Thread_archivedAt(ctx, field, obj)
+		case "messageCount":
+			out.Values[i] = ec._Thread_messageCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

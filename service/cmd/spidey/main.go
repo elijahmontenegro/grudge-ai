@@ -8,13 +8,16 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
+	"github.com/gorilla/websocket"
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/adapter/tei"
 	"github.com/emontenegr/spidey/rrc"
+	"github.com/emontenegr/spidey/service/agent"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/graph"
 	"github.com/emontenegr/spidey/service/proxy"
@@ -37,6 +40,11 @@ func main() {
 		log.Fatalf("storage: %v", err)
 	}
 	defer db.Close()
+
+	// Backfill unnamed threads from first message content
+	if n := db.BackfillThreadNames(); n > 0 {
+		log.Printf("Named %d unnamed threads from first message", n)
+	}
 
 	// Build providers from config — nil when not yet configured (first run)
 	var (
@@ -135,12 +143,30 @@ func main() {
 		searcher = search.NewSearcher(embedder, model, db)
 	}
 
+	// Load MCP tools from config
+	var mcpConfigs []agent.MCPServerConfig
+	for _, srv := range cfg.Settings.MCPServers {
+		mcpConfigs = append(mcpConfigs, agent.MCPServerConfig{
+			Name: srv.Name, Endpoint: srv.Endpoint, Enabled: srv.Enabled,
+		})
+	}
+	mcpToolsets := agent.LoadMCPTools(mcpConfigs)
+	if len(mcpToolsets) > 0 {
+		log.Printf("Loaded %d MCP toolsets", len(mcpToolsets))
+	}
+
 	// GraphQL
 	resolver := graph.NewResolver(db, engine, cfg, searcher, mainCompleter)
 	gqlSrv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: resolver}))
 	gqlSrv.SetErrorPresenter(graph.ErrorPresenter)
 	gqlSrv.AddTransport(transport.POST{})
-	gqlSrv.AddTransport(transport.Websocket{})
+	gqlSrv.AddTransport(transport.Websocket{
+		KeepAlivePingInterval: 10 * time.Second,
+		Upgrader: websocket.Upgrader{
+			CheckOrigin:  func(r *http.Request) bool { return true },
+			Subprotocols: []string{"graphql-transport-ws", "graphql-ws"},
+		},
+	})
 
 	// Proxy
 	proxyHandler := proxy.NewHandler(classifier, mainCompleter, rrc.DefaultConfig())

@@ -119,8 +119,8 @@ func (e *Engine) Select(promptID string, scope pb.SelectionScope, threadID strin
 	// Zero-return is valid — if the prompt has no edges, return empty selection.
 	// The model is capable without augmentation for a novel prompt.
 
-	// Subgraph extraction
-	selected := extractSubgraph(e.dag, promptID, threadID, scope, e.cfg)
+	// Subgraph extraction with exclusion tracking
+	selected, belowFloor := extractSubgraph(e.dag, promptID, threadID, scope, e.cfg)
 
 	// Transitive reduction on selected subgraph
 	selected = transitiveReduction(selected)
@@ -132,13 +132,9 @@ func (e *Engine) Select(promptID string, scope pb.SelectionScope, threadID strin
 		ThreadId: threadID,
 	}
 
-	// Collect all scored but unselected messages for the excluded list
-	excluded := make(map[string]bool)
+	selectedIDs := make(map[string]bool)
 	for _, s := range selected {
-		excluded[s.MessageID] = true
-	}
-
-	for _, s := range selected {
+		selectedIDs[s.MessageID] = true
 		result.Selected = append(result.Selected, &pb.SelectedMessage{
 			MessageId:      s.MessageID,
 			EffectiveScore: float32(s.EffectiveScore),
@@ -147,6 +143,34 @@ func (e *Engine) Select(promptID string, scope pb.SelectionScope, threadID strin
 			ThreadId:       s.ThreadID,
 			CrossThread:    s.CrossThread,
 		})
+	}
+
+	// Build excluded list: messages that had edges but weren't selected
+	for msgID, score := range belowFloor {
+		if !selectedIDs[msgID] {
+			result.Excluded = append(result.Excluded, &pb.ExcludedMessage{
+				MessageId: msgID,
+				Reason:    pb.ExclusionReason_EXCLUSION_REASON_BELOW_THRESHOLD,
+				Score:     float32(score),
+			})
+		}
+	}
+
+	// Messages with edges that were scored but below the edge threshold
+	// are tracked in the score cache — add them as excluded too
+	for _, edge := range e.dag.Prerequisites(promptID) {
+		fromID := edge.FromMessageId
+		if selectedIDs[fromID] || belowFloor[fromID] > 0 {
+			continue
+		}
+		// This message was a direct prereq but got filtered by scope
+		if !scopeAllows(edge, threadID, scope) {
+			result.Excluded = append(result.Excluded, &pb.ExcludedMessage{
+				MessageId: fromID,
+				Reason:    pb.ExclusionReason_EXCLUSION_REASON_UNSPECIFIED,
+				Score:     edge.Score,
+			})
+		}
 	}
 
 	return result, nil

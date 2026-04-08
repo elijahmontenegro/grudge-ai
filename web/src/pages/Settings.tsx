@@ -3,9 +3,8 @@ import { gql } from '@apollo/client'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 
 const SETTINGS_QUERY = gql`
   query Settings {
@@ -46,28 +45,28 @@ const ROLES = [
   {
     key: 'main',
     label: 'Main Model',
-    description: 'Your primary LLM for reasoning, tool use, and responses.',
+    description: 'Primary LLM for reasoning, tool use, and responses.',
     placeholder: 'claude-sonnet-4-20250514',
     adapters: ['anthropic', 'openai', 'googleai', 'ollama', 'vllm'],
   },
   {
     key: 'classifier',
     label: 'Cross-Encoder (RRC)',
-    description: 'NLI model for prerequisite detection. Runs locally via TEI in Docker — no GPU required.',
+    description: 'NLI model for prerequisite detection. Runs locally via TEI.',
     placeholder: 'cross-encoder/nli-deberta-v3-base',
     adapters: ['tei'],
   },
   {
     key: 'embedder',
     label: 'Embedder (RRC + Search)',
-    description: 'Embedding model for similarity scoring and semantic search. Combined with NLI classifier for dependency detection.',
+    description: 'Embedding model for similarity scoring and semantic search.',
     placeholder: 'BAAI/bge-small-en-v1.5',
     adapters: ['tei', 'openai'],
   },
   {
     key: 'small_fast',
     label: 'Small Fast Model',
-    description: 'QUD extraction, autocomplete, annotations. Sub-second latency preferred.',
+    description: 'QUD extraction, autocomplete, annotations.',
     placeholder: 'claude-haiku-4-5-20251001',
     adapters: ['anthropic', 'openai', 'googleai', 'ollama', 'vllm'],
   },
@@ -86,15 +85,15 @@ function ProviderForm({
   const selectedAdapter = ADAPTERS.find((a) => a.value === config.adapter)
 
   return (
-    <div className="space-y-3 p-4 border border-border rounded-lg">
+    <div className="space-y-3 p-4 rounded-xl bg-card border border-border">
       <div>
-        <h3 className="text-sm font-semibold">{role.label}</h3>
-        <p className="text-xs text-muted">{role.description}</p>
+        <h3 className="text-sm font-medium">{role.label}</h3>
+        <p className="text-xs text-muted-foreground mt-0.5">{role.description}</p>
       </div>
 
       <div className="grid grid-cols-3 gap-2">
         <div>
-          <label className="text-xs text-muted block mb-1">Provider</label>
+          <label className="text-[11px] text-muted-foreground block mb-1">Provider</label>
           <select
             value={config.adapter}
             onChange={(e) => {
@@ -105,7 +104,7 @@ function ProviderForm({
                 base_url: adapter?.defaultURL ?? config.base_url,
               })
             }}
-            className="w-full border border-border rounded-md px-2 py-1.5 text-sm bg-background"
+            className="w-full border border-input rounded-md px-2 py-1.5 text-sm bg-background"
           >
             <option value="">Select...</option>
             {availableAdapters.map((a) => (
@@ -115,7 +114,7 @@ function ProviderForm({
         </div>
 
         <div>
-          <label className="text-xs text-muted block mb-1">Model</label>
+          <label className="text-[11px] text-muted-foreground block mb-1">Model</label>
           <Input
             value={config.model}
             onChange={(e) => onChange({ ...config, model: e.target.value })}
@@ -125,7 +124,7 @@ function ProviderForm({
         </div>
 
         <div>
-          <label className="text-xs text-muted block mb-1">Endpoint</label>
+          <label className="text-[11px] text-muted-foreground block mb-1">Endpoint</label>
           <Input
             value={config.base_url}
             onChange={(e) => onChange({ ...config, base_url: e.target.value })}
@@ -137,8 +136,9 @@ function ProviderForm({
 
       {selectedAdapter?.needsKey && (
         <div>
-          <label className="text-xs text-muted block mb-1">
-            API Key <Badge variant="secondary" className="text-[10px] ml-1">stored in OS keychain</Badge>
+          <label className="text-[11px] text-muted-foreground block mb-1">
+            API Key
+            <span className="text-muted-foreground/50 ml-1">stored in OS keychain</span>
           </label>
           <Input
             type="password"
@@ -182,7 +182,7 @@ export function SettingsPage() {
     setSaved(true)
   }
 
-  if (loading) return <div className="p-8 text-muted">Loading settings...</div>
+  if (loading) return <div className="p-8 text-muted-foreground">Loading settings...</div>
 
   const allConfigured = ROLES.every((role) => {
     const p = providers[role.key]
@@ -193,22 +193,23 @@ export function SettingsPage() {
     <ScrollArea className="h-screen">
       <div className="max-w-2xl mx-auto p-8 space-y-6">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Spidey Settings</h1>
-          <p className="text-sm text-muted mt-1">
-            All three model roles are required. RRC has no degraded mode.
+          <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Configure model providers. All roles are required for RRC.
           </p>
         </div>
 
         {!allConfigured && (
-          <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4">
-            <p className="text-sm font-medium">Providers not fully configured</p>
-            <p className="text-xs text-muted mt-1">Configure all three roles below to start using Spidey.</p>
+          <div className={cn(
+            'rounded-xl p-4 text-sm border',
+            'border-amber-500/20 bg-amber-500/5 text-amber-200'
+          )}>
+            <p className="font-medium text-xs">Providers not fully configured</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Configure all roles below to start using Spidey.</p>
           </div>
         )}
 
-        <Separator />
-
-        <div className="space-y-4">
+        <div className="space-y-3">
           {ROLES.map((role) => (
             <ProviderForm
               key={role.key}
@@ -223,16 +224,16 @@ export function SettingsPage() {
           <Button onClick={handleSave} disabled={saving}>
             {saving ? 'Saving...' : 'Save'}
           </Button>
-          {saved && <span className="text-sm text-muted">Saved. Restart the service to apply.</span>}
+          {saved && <span className="text-sm text-emerald-500/70">Settings applied.</span>}
         </div>
 
-        <Separator />
-
-        <details className="text-xs text-muted">
-          <summary className="cursor-pointer font-medium text-sm">Cross-encoder setup (Docker)</summary>
-          <div className="mt-2 space-y-2">
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer font-medium text-sm hover:text-foreground transition-colors">
+            Cross-encoder setup (Docker)
+          </summary>
+          <div className="mt-3 space-y-2">
             <p>The RRC cross-encoder requires TEI serving DeBERTa-v3 NLI locally:</p>
-            <pre className="bg-secondary p-3 rounded font-mono text-xs overflow-x-auto">
+            <pre className="bg-secondary/50 p-3 rounded-lg font-mono text-xs overflow-x-auto">
 docker run -p 8080:80 ghcr.io/huggingface/text-embeddings-inference:latest \
   --model-id cross-encoder/nli-deberta-v3-base</pre>
             <p>CPU inference. ~184MB model download. No GPU required.</p>

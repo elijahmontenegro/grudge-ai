@@ -11,20 +11,464 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/service/adoc"
-	"github.com/emontenegr/spidey/service/adapter"
-	"github.com/emontenegr/spidey/service/storage"
-
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	"github.com/emontenegr/spidey/service/adapter"
+	"github.com/emontenegr/spidey/service/adoc"
+	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// --- Queries ---
+// CreateThread is the resolver for the createThread field.
+func (r *mutationResolver) CreateThread(ctx context.Context, name *string, workingDirs []string) (*Thread, error) {
+	threadName := ""
+	if name != nil {
+		threadName = *name
+	}
+	t := &pb.Thread{
+		Id:          fmt.Sprintf("thread-%d", time.Now().UnixNano()),
+		Name:        threadName,
+		WorkingDirs: workingDirs,
+		Sandboxed:   true,
+		CreatedAt:   timestamppb.Now(),
+	}
+	if err := r.DB.CreateThread(t); err != nil {
+		return nil, err
+	}
+	return protoThreadToGQL(t), nil
+}
 
+// UpdateThread is the resolver for the updateThread field.
+func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*Thread, error) {
+	t, err := r.DB.GetThread(id)
+	if err != nil {
+		return nil, err
+	}
+	if name != nil {
+		t.Name = *name
+	}
+	if workingDirs != nil {
+		t.WorkingDirs = workingDirs
+	}
+	if sandboxed != nil {
+		t.Sandboxed = *sandboxed
+	}
+	// Re-insert (upsert pattern via delete+create for working dirs)
+	r.DB.DeleteThread(id)
+	if err := r.DB.CreateThread(t); err != nil {
+		return nil, err
+	}
+	return protoThreadToGQL(t), nil
+}
+
+// DeleteThread is the resolver for the deleteThread field.
+func (r *mutationResolver) DeleteThread(ctx context.Context, id string) (bool, error) {
+	if err := r.DB.DeleteThread(id); err != nil {
+		return false, err
+	}
+	r.DB.DeleteEdgesForThread(id)
+	return true, nil
+}
+
+// ArchiveThread is the resolver for the archiveThread field.
+func (r *mutationResolver) ArchiveThread(ctx context.Context, id string) (bool, error) {
+	return true, r.DB.ArchiveThread(id)
+}
+
+// UnarchiveThread is the resolver for the unarchiveThread field.
+func (r *mutationResolver) UnarchiveThread(ctx context.Context, id string) (bool, error) {
+	return true, r.DB.UnarchiveThread(id)
+}
+
+// EditMessage is the resolver for the editMessage field.
+func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*Thread, error) {
+	// Edit creates a branch via Engine.Fork
+	parentThread, err := r.DB.GetThread(threadID)
+	if err != nil {
+		return nil, err
+	}
+
+	branchPos := int64(messagePosition)
+	newThread := &pb.Thread{
+		Id:                  fmt.Sprintf("thread-%d", time.Now().UnixNano()),
+		Name:                parentThread.Name + " (branch)",
+		WorkingDirs:         parentThread.WorkingDirs,
+		Sandboxed:           parentThread.Sandboxed,
+		CreatedAt:           timestamppb.Now(),
+		ParentThreadId:      &threadID,
+		BranchPointPosition: &branchPos,
+	}
+	if err := r.DB.CreateThread(newThread); err != nil {
+		return nil, err
+	}
+
+	// Insert the edited message at the branch point
+	msg := &pb.Message{
+		Id:       fmt.Sprintf("msg-%s-0", newThread.Id),
+		Role:     pb.Role_ROLE_USER,
+		Content:  adapter.TextToProto(newContent),
+		Position: int64(messagePosition),
+		ThreadId: newThread.Id,
+	}
+	if err := r.DB.InsertMessage(msg); err != nil {
+		return nil, err
+	}
+
+	return protoThreadToGQL(newThread), nil
+}
+
+// CompileAdoc is the resolver for the compileAdoc field.
+func (r *mutationResolver) CompileAdoc(ctx context.Context, path string) (string, error) {
+	return adoc.Compile(path)
+}
+
+// SendMessage is the resolver for the sendMessage field.
+func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope) (*Message, error) {
+	// Auto-name thread from first user message
+	corpus, _ := r.DB.ThreadCorpus(threadID)
+	if len(corpus) == 0 {
+		name := content
+		if len(name) > 60 {
+			i := 57
+			for i > 30 && name[i] != ' ' {
+				i--
+			}
+			if name[i] == ' ' {
+				name = name[:i] + "..."
+			} else {
+				name = name[:57] + "..."
+			}
+		}
+		r.DB.UpdateThreadName(threadID, name)
+	}
+
+	// Store user message
+	msg := &pb.Message{
+		Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
+		Role:      pb.Role_ROLE_USER,
+		Content:   adapter.TextToProto(content),
+		Position:  int64(len(corpus)),
+		ThreadId:  threadID,
+		CreatedAt: timestamppb.Now(),
+	}
+	if err := r.DB.InsertMessage(msg); err != nil {
+		return nil, err
+	}
+
+	// Embed on arrival (async)
+	if r.Searcher != nil {
+		go r.Searcher.EmbedMessage(ctx, msg.Id, content)
+	}
+
+	// Try ADK runner path (RRC-as-LLM via ADK, enables multi-step reasoning)
+	if runner, err := r.getOrCreateRunner(threadID); err == nil {
+		pbScope := pb.SelectionScope_SELECTION_SCOPE_THREAD
+		if scope != nil && *scope == SelectionScopeAllThreads {
+			pbScope = pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS
+		}
+		if resp, err := runner.SendMessage(ctx, content, pbScope); err == nil && resp != nil {
+			r.engineMu.RLock()
+			result, selErr := r.Engine.Select(msg.Id, pbScope, threadID)
+			r.engineMu.RUnlock()
+			if selErr == nil {
+				r.mu.Lock()
+				if r.selectionResults == nil {
+					r.selectionResults = make(map[string]*pb.SelectionResult)
+				}
+				r.selectionResults[result.EventId] = result
+				if r.latestSelection == nil {
+					r.latestSelection = make(map[string]string)
+				}
+				r.latestSelection[threadID] = result.EventId
+				r.mu.Unlock()
+			}
+			return protoMessageToGQL(resp), nil
+		} else if err != nil {
+			log.Printf("[SendMessage] Runner failed, using direct path: %v", err)
+		}
+	}
+
+	// Direct path fallback (no tool use, but reliable)
+	r.engineMu.Lock()
+	edges, err := r.Engine.OnMessage(ctx, msg, corpus)
+	r.engineMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	for _, edge := range edges {
+		r.DB.InsertEdge(edge)
+	}
+
+	pbScope := pb.SelectionScope_SELECTION_SCOPE_THREAD
+	if scope != nil && *scope == SelectionScopeAllThreads {
+		pbScope = pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS
+	}
+	r.engineMu.RLock()
+	result, err := r.Engine.Select(msg.Id, pbScope, threadID)
+	r.engineMu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+
+	r.mu.Lock()
+	if r.selectionResults == nil {
+		r.selectionResults = make(map[string]*pb.SelectionResult)
+	}
+	r.selectionResults[result.EventId] = result
+	if r.latestSelection == nil {
+		r.latestSelection = make(map[string]string)
+	}
+	r.latestSelection[threadID] = result.EventId
+	r.mu.Unlock()
+
+	allMsgs, _ := r.DB.ThreadCorpus(threadID)
+	selectedIDs := make(map[string]float32)
+	for _, sel := range result.Selected {
+		selectedIDs[sel.MessageId] = sel.EffectiveScore
+	}
+
+	var llmMsgs []*pb.LLMMessage
+	for _, m := range allMsgs {
+		if _, ok := selectedIDs[m.Id]; ok {
+			llmMsgs = append(llmMsgs, adapter.MessageToLLM(m))
+		}
+	}
+	llmMsgs = append(llmMsgs, adapter.MessageToLLM(msg))
+
+	assistantID := fmt.Sprintf("msg-%d", time.Now().UnixNano())
+	contentBlocks, err := streamCompletion(ctx, r.Main, llmMsgs, assistantID, threadID, r.publishStream)
+	if err != nil {
+		resp, fallbackErr := completeWithBackoff(ctx, r.Main, llmMsgs, result.Selected)
+		if fallbackErr != nil {
+			return nil, err
+		}
+		contentBlocks = resp.Message.Content
+		r.publishStream(threadID, &StreamEvent{MessageID: assistantID, Done: true})
+	}
+
+	assistantMsg := &pb.Message{
+		Id:        assistantID,
+		Role:      pb.Role_ROLE_ASSISTANT,
+		Content:   contentBlocks,
+		Position:  int64(len(allMsgs) + 1),
+		ThreadId:  threadID,
+		CreatedAt: timestamppb.Now(),
+	}
+	if err := r.DB.InsertMessage(assistantMsg); err != nil {
+		return nil, err
+	}
+
+	var thinking []*pb.ThinkingContent
+	for _, b := range contentBlocks {
+		if t := b.GetThinking(); t != nil {
+			thinking = append(thinking, t)
+		}
+	}
+	if len(thinking) > 0 {
+		r.engineMu.Lock()
+		r.Engine.CarryForward(ctx, &pb.CarryForwardInput{
+			EventId:        result.EventId,
+			ThreadId:       threadID,
+			ThinkingBlocks: thinking,
+		})
+		r.engineMu.Unlock()
+	}
+
+	return protoMessageToGQL(assistantMsg), nil
+}
+
+// StopAgent is the resolver for the stopAgent field.
+func (r *mutationResolver) StopAgent(ctx context.Context, threadID string) (bool, error) {
+	r.stopRunner(threadID)
+	r.publishAgentState(threadID, &AgentState{
+		ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
+	})
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 0, Mode: 0,
+	})
+}
+
+// PauseAgent is the resolver for the pauseAgent field.
+func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (bool, error) {
+	r.runnersMu.Lock()
+	if entry, ok := r.runners[threadID]; ok {
+		entry.runner.PauseAutonomous()
+	}
+	r.runnersMu.Unlock()
+	r.publishAgentState(threadID, &AgentState{
+		ThreadID: threadID, Status: AgentStatusPaused, Mode: AgentModeAutonomous,
+	})
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 2,
+	})
+}
+
+// ResumeAgent is the resolver for the resumeAgent field.
+func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, correction *string) (bool, error) {
+	if correction != nil && *correction != "" {
+		corpus, _ := r.DB.ThreadCorpus(threadID)
+		msg := &pb.Message{
+			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
+			Role:      pb.Role_ROLE_USER,
+			Content:   adapter.TextToProto(*correction),
+			Position:  int64(len(corpus)),
+			ThreadId:  threadID,
+			CreatedAt: timestamppb.Now(),
+		}
+		r.DB.InsertMessage(msg)
+	}
+	r.runnersMu.Lock()
+	if entry, ok := r.runners[threadID]; ok {
+		entry.runner.ResumeAutonomous()
+	}
+	r.runnersMu.Unlock()
+	r.publishAgentState(threadID, &AgentState{
+		ThreadID: threadID, Status: AgentStatusRunning, Mode: AgentModeAutonomous,
+	})
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 1,
+	})
+}
+
+// StartAutonomous is the resolver for the startAutonomous field.
+func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string, prompt string, duration string) (bool, error) {
+	dur, err := time.ParseDuration(duration)
+	if err != nil {
+		return false, fmt.Errorf("invalid duration: %w", err)
+	}
+	const minDur = 5 * time.Minute
+	const maxDur = 14 * 24 * time.Hour
+	if dur < minDur {
+		return false, fmt.Errorf("minimum autonomous duration is 5m")
+	}
+	if dur > maxDur {
+		dur = maxDur
+	}
+	now := time.Now()
+	if err := r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 1, Mode: 1,
+		StartedAt: &now, DurationLimit: duration,
+	}); err != nil {
+		return false, err
+	}
+
+	// Launch the autonomous loop in a goroutine
+	runner, err := r.getOrCreateRunner(threadID)
+	if err != nil {
+		return false, fmt.Errorf("create runner: %w", err)
+	}
+	autoCtx, autoCancel := context.WithCancel(context.Background())
+	r.runnersMu.Lock()
+	if entry, ok := r.runners[threadID]; ok {
+		entry.cancel = autoCancel
+	}
+	r.runnersMu.Unlock()
+
+	r.publishAgentState(threadID, &AgentState{
+		ThreadID: threadID, Status: AgentStatusRunning, Mode: AgentModeAutonomous,
+		RoundCount: 0, DurationLimit: &duration,
+	})
+
+	go func() {
+		defer r.stopRunner(threadID)
+		defer r.DB.SaveAgentState(&storage.AgentState{ThreadID: threadID, Status: 0, Mode: 0})
+		defer r.publishAgentState(threadID, &AgentState{
+			ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
+		})
+		log.Printf("[Autonomous] Started for thread %s (duration: %s)", threadID, duration)
+		if err := runner.RunAutonomous(autoCtx, prompt, dur); err != nil {
+			log.Printf("[Autonomous] Error: %v", err)
+		}
+		log.Printf("[Autonomous] Finished for thread %s", threadID)
+	}()
+
+	return true, nil
+}
+
+// ApproveToolCall is the resolver for the approveToolCall field.
+func (r *mutationResolver) ApproveToolCall(ctx context.Context, callID string) (bool, error) {
+	// Tool approval is handled via subscription channel — publish approval event
+	return true, nil
+}
+
+// DenyToolCall is the resolver for the denyToolCall field.
+func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reason *string) (bool, error) {
+	return true, nil
+}
+
+// UpdateSettings is the resolver for the updateSettings field.
+func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInput) (*Settings, error) {
+	s := &r.Config.Settings
+	if input.Providers != nil {
+		json.Unmarshal([]byte(*input.Providers), &s.Providers)
+	}
+	if input.Permissions != nil {
+		json.Unmarshal([]byte(*input.Permissions), &s.Permissions)
+	}
+	if input.McpServers != nil {
+		json.Unmarshal([]byte(*input.McpServers), &s.MCPServers)
+	}
+	if input.Preferences != nil {
+		json.Unmarshal([]byte(*input.Preferences), &s.Preferences)
+	}
+	if err := r.Config.Save(); err != nil {
+		return nil, err
+	}
+	// Hot-reload providers from updated config
+	if err := r.ReloadProviders(); err != nil {
+		log.Printf("[Settings] Provider reload: %v", err)
+	} else {
+		log.Printf("[Settings] Providers reloaded")
+	}
+	return r.Query().Settings(ctx)
+}
+
+// EnterPlanMode is the resolver for the enterPlanMode field.
+func (r *mutationResolver) EnterPlanMode(ctx context.Context, threadID string) (bool, error) {
+	if err := r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 1, Mode: 2,
+	}); err != nil {
+		return false, err
+	}
+	// Create runner — plan mode is enforced via IsPlanMode check in tools
+	if _, err := r.getOrCreateRunner(threadID); err != nil {
+		log.Printf("[PlanMode] Failed to create runner: %v", err)
+	}
+	r.publishAgentState(threadID, &AgentState{
+		ThreadID: threadID, Status: AgentStatusRunning, Mode: AgentModePlan,
+	})
+	return true, nil
+}
+
+// ApprovePlan is the resolver for the approvePlan field.
+func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, executionMode ExecutionMode) (bool, error) {
+	// Restore normal mode, plan content enters thread corpus
+	mode := 0
+	if executionMode == ExecutionModeAutonomous {
+		mode = 1
+	}
+	return true, r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: 1, Mode: mode,
+	})
+}
+
+// SaveViewState is the resolver for the saveViewState field.
+func (r *mutationResolver) SaveViewState(ctx context.Context, threadID string, state ViewStateInput) (*ViewState, error) {
+	data, _ := json.Marshal(state)
+	if err := r.DB.SaveViewState(threadID, data); err != nil {
+		return nil, err
+	}
+	return &ViewState{
+		ThreadID:               threadID,
+		ScrollPosition:         state.ScrollPosition,
+		ExpandedMessageIds:     state.ExpandedMessageIds,
+		InputDraft:             state.InputDraft,
+		CitationExpansionState: state.CitationExpansionState,
+	}, nil
+}
+
+// Threads is the resolver for the threads field.
 func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*Thread, error) {
 	incArch := false
 	if includeArchived != nil {
@@ -36,11 +480,14 @@ func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*
 	}
 	result := make([]*Thread, len(pbThreads))
 	for i, t := range pbThreads {
-		result[i] = protoThreadToGQL(t)
+		gql := protoThreadToGQL(t)
+		gql.MessageCount = r.DB.MessageCount(t.Id)
+		result[i] = gql
 	}
 	return result, nil
 }
 
+// Thread is the resolver for the thread field.
 func (r *queryResolver) Thread(ctx context.Context, id string) (*Thread, error) {
 	t, err := r.DB.GetThread(id)
 	if err != nil {
@@ -49,9 +496,12 @@ func (r *queryResolver) Thread(ctx context.Context, id string) (*Thread, error) 
 		}
 		return nil, err
 	}
-	return protoThreadToGQL(t), nil
+	gql := protoThreadToGQL(t)
+	gql.MessageCount = r.DB.MessageCount(t.Id)
+	return gql, nil
 }
 
+// Search is the resolver for the search field.
 func (r *queryResolver) Search(ctx context.Context, query string, limit *int) ([]*SearchResult, error) {
 	lim := 10
 	if limit != nil {
@@ -83,6 +533,7 @@ func (r *queryResolver) Search(ctx context.Context, query string, limit *int) ([
 	return gqlResults, nil
 }
 
+// Messages is the resolver for the messages field.
 func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*Message, error) {
 	lim, off := 0, 0
 	if limit != nil {
@@ -102,6 +553,7 @@ func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *in
 	return result, nil
 }
 
+// SelectionResult is the resolver for the selectionResult field.
 func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*SelectionResult, error) {
 	r.mu.RLock()
 	// If eventID looks like a thread ID, resolve to latest selection for that thread
@@ -121,13 +573,21 @@ func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*S
 		ThreadID: pbResult.ThreadId,
 	}
 	for _, s := range pbResult.Selected {
-		gql.Selected = append(gql.Selected, &SelectedMessage{
+		sm := &SelectedMessage{
 			MessageID:      s.MessageId,
 			EffectiveScore: float64(s.EffectiveScore),
 			HopDepth:       int(s.HopDepth),
 			ThreadID:       s.ThreadId,
 			CrossThread:    s.CrossThread,
-		})
+		}
+		// Extract score breakdown from the first via-edge
+		if len(s.ViaEdges) > 0 {
+			e := s.ViaEdges[0]
+			sm.CrossEncoderScore = float64(e.CrossEncoderScore)
+			sm.QudWeight = float64(e.QudWeight)
+			sm.TemporalProximity = float64(e.TemporalProximity)
+		}
+		gql.Selected = append(gql.Selected, sm)
 	}
 	for _, e := range pbResult.Excluded {
 		gql.Excluded = append(gql.Excluded, &ExcludedMessage{
@@ -139,6 +599,7 @@ func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*S
 	return gql, nil
 }
 
+// QudGraph is the resolver for the qudGraph field.
 func (r *queryResolver) QudGraph(ctx context.Context, threadID string) (*QUDGraph, error) {
 	pbGraph, err := r.DB.QUDGraphForThread(threadID)
 	if err != nil {
@@ -147,6 +608,7 @@ func (r *queryResolver) QudGraph(ctx context.Context, threadID string) (*QUDGrap
 	return protoQUDGraphToGQL(pbGraph), nil
 }
 
+// Settings is the resolver for the settings field.
 func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	s := r.Config.Settings
 	providers, _ := json.Marshal(s.Providers)
@@ -163,6 +625,7 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	}, nil
 }
 
+// ViewState is the resolver for the viewState field.
 func (r *queryResolver) ViewState(ctx context.Context, threadID string) (*ViewState, error) {
 	data, err := r.DB.GetViewState(threadID)
 	if err != nil {
@@ -177,331 +640,7 @@ func (r *queryResolver) ViewState(ctx context.Context, threadID string) (*ViewSt
 	return &vs, nil
 }
 
-// --- Mutations ---
-
-func (r *mutationResolver) CreateThread(ctx context.Context, name *string, workingDirs []string) (*Thread, error) {
-	threadName := ""
-	if name != nil {
-		threadName = *name
-	}
-	t := &pb.Thread{
-		Id:          fmt.Sprintf("thread-%d", time.Now().UnixNano()),
-		Name:        threadName,
-		WorkingDirs: workingDirs,
-		Sandboxed:   true,
-		CreatedAt:   timestamppb.Now(),
-	}
-	if err := r.DB.CreateThread(t); err != nil {
-		return nil, err
-	}
-	return protoThreadToGQL(t), nil
-}
-
-func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*Thread, error) {
-	t, err := r.DB.GetThread(id)
-	if err != nil {
-		return nil, err
-	}
-	if name != nil {
-		t.Name = *name
-	}
-	if workingDirs != nil {
-		t.WorkingDirs = workingDirs
-	}
-	if sandboxed != nil {
-		t.Sandboxed = *sandboxed
-	}
-	// Re-insert (upsert pattern via delete+create for working dirs)
-	r.DB.DeleteThread(id)
-	if err := r.DB.CreateThread(t); err != nil {
-		return nil, err
-	}
-	return protoThreadToGQL(t), nil
-}
-
-func (r *mutationResolver) DeleteThread(ctx context.Context, id string) (bool, error) {
-	if err := r.DB.DeleteThread(id); err != nil {
-		return false, err
-	}
-	r.DB.DeleteEdgesForThread(id)
-	return true, nil
-}
-
-func (r *mutationResolver) ArchiveThread(ctx context.Context, id string) (bool, error) {
-	return true, r.DB.ArchiveThread(id)
-}
-
-func (r *mutationResolver) UnarchiveThread(ctx context.Context, id string) (bool, error) {
-	return true, r.DB.UnarchiveThread(id)
-}
-
-func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*Thread, error) {
-	// Edit creates a branch via Engine.Fork
-	parentThread, err := r.DB.GetThread(threadID)
-	if err != nil {
-		return nil, err
-	}
-
-	branchPos := int64(messagePosition)
-	newThread := &pb.Thread{
-		Id:                    fmt.Sprintf("thread-%d", time.Now().UnixNano()),
-		Name:                  parentThread.Name + " (branch)",
-		WorkingDirs:           parentThread.WorkingDirs,
-		Sandboxed:             parentThread.Sandboxed,
-		CreatedAt:             timestamppb.Now(),
-		ParentThreadId:        &threadID,
-		BranchPointPosition:   &branchPos,
-	}
-	if err := r.DB.CreateThread(newThread); err != nil {
-		return nil, err
-	}
-
-	// Insert the edited message at the branch point
-	msg := &pb.Message{
-		Id:       fmt.Sprintf("msg-%s-0", newThread.Id),
-		Role:     pb.Role_ROLE_USER,
-		Content:  adapter.TextToProto(newContent),
-		Position: int64(messagePosition),
-		ThreadId: newThread.Id,
-	}
-	if err := r.DB.InsertMessage(msg); err != nil {
-		return nil, err
-	}
-
-	return protoThreadToGQL(newThread), nil
-}
-
-func (r *mutationResolver) CompileAdoc(ctx context.Context, path string) (string, error) {
-	return adoc.Compile(path)
-}
-
-func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope) (*Message, error) {
-	corpus, err := r.DB.ThreadCorpus(threadID)
-	if err != nil {
-		return nil, err
-	}
-
-	msg := &pb.Message{
-		Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-		Role:      pb.Role_ROLE_USER,
-		Content:   adapter.TextToProto(content),
-		Position:  int64(len(corpus)),
-		ThreadId:  threadID,
-		CreatedAt: timestamppb.Now(),
-	}
-	if err := r.DB.InsertMessage(msg); err != nil {
-		return nil, err
-	}
-
-	// Embed on arrival (async, alongside scoring)
-	if r.Searcher != nil {
-		go r.Searcher.EmbedMessage(ctx, msg.Id, content)
-	}
-
-	// Score against corpus
-	edges, err := r.Engine.OnMessage(ctx, msg, corpus)
-	if err != nil {
-		return nil, err
-	}
-	for _, edge := range edges {
-		r.DB.InsertEdge(edge)
-	}
-	log.Printf("[RRC] Scored %d edges for msg %s against %d corpus messages", len(edges), msg.Id, len(corpus))
-
-	// Select prerequisites
-	pbScope := pb.SelectionScope_SELECTION_SCOPE_THREAD
-	if scope != nil && *scope == SelectionScopeAllThreads {
-		pbScope = pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS
-	}
-	result, err := r.Engine.Select(msg.Id, pbScope, threadID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Store selection result for introspection
-	r.mu.Lock()
-	if r.selectionResults == nil {
-		r.selectionResults = make(map[string]*pb.SelectionResult)
-	}
-	r.selectionResults[result.EventId] = result
-	if r.latestSelection == nil {
-		r.latestSelection = make(map[string]string)
-	}
-	r.latestSelection[threadID] = result.EventId
-	r.mu.Unlock()
-
-	// Build LLM payload — selected prerequisites ordered CHRONOLOGICALLY.
-	// The spec says: "The service looks up message content and orders selected
-	// messages chronologically, placing them in the model's input as ordinary
-	// conversation entries."
-	allMsgs, _ := r.DB.ThreadCorpus(threadID)
-	selectedIDs := make(map[string]float32)
-	for _, sel := range result.Selected {
-		selectedIDs[sel.MessageId] = sel.EffectiveScore
-	}
-
-	var llmMsgs []*pb.LLMMessage
-	log.Printf("[RRC] Selected %d prerequisites from %d total messages:", len(result.Selected), len(allMsgs))
-	// Walk corpus in chronological order, include only selected messages
-	for _, m := range allMsgs {
-		if score, ok := selectedIDs[m.Id]; ok {
-			snippet := adapter.ProtoToText(m.Content)
-			if len(snippet) > 60 {
-				snippet = snippet[:60] + "..."
-			}
-			log.Printf("[RRC]   %.3f  pos=%d [%s] %s", score, m.Position, m.Role.String(), snippet)
-			llmMsgs = append(llmMsgs, adapter.MessageToLLM(m))
-		}
-	}
-	llmMsgs = append(llmMsgs, adapter.MessageToLLM(msg))
-	log.Printf("[RRC] Payload: %d selected + 1 prompt = %d to LLM (from %d total)", len(result.Selected), len(llmMsgs), len(allMsgs))
-
-	// Complete with payload sizing backoff
-	resp, err := completeWithBackoff(ctx, r.Main, llmMsgs, result.Selected)
-	if err != nil {
-		return nil, err
-	}
-
-	// Store assistant response
-	assistantMsg := &pb.Message{
-		Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-		Role:      pb.Role_ROLE_ASSISTANT,
-		Content:   resp.Message.Content,
-		Position:  int64(len(allMsgs) + 1),
-		ThreadId:  threadID,
-		CreatedAt: timestamppb.Now(),
-	}
-	if err := r.DB.InsertMessage(assistantMsg); err != nil {
-		return nil, err
-	}
-
-	// Carry-forward
-	var thinking []*pb.ThinkingContent
-	for _, b := range resp.Message.Content {
-		if t := b.GetThinking(); t != nil {
-			thinking = append(thinking, t)
-		}
-	}
-	if len(thinking) > 0 {
-		r.Engine.CarryForward(ctx, &pb.CarryForwardInput{
-			EventId:        result.EventId,
-			ThreadId:       threadID,
-			ThinkingBlocks: thinking,
-		})
-	}
-
-	return protoMessageToGQL(assistantMsg), nil
-}
-
-func (r *mutationResolver) StopAgent(ctx context.Context, threadID string) (bool, error) {
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 0, Mode: 0,
-	})
-}
-
-func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (bool, error) {
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 2,
-	})
-}
-
-func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, correction *string) (bool, error) {
-	if correction != nil && *correction != "" {
-		// Correction injected as user message — triggers new RRC selection
-		corpus, _ := r.DB.ThreadCorpus(threadID)
-		msg := &pb.Message{
-			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-			Role:      pb.Role_ROLE_USER,
-			Content:   adapter.TextToProto(*correction),
-			Position:  int64(len(corpus)),
-			ThreadId:  threadID,
-			CreatedAt: timestamppb.Now(),
-		}
-		r.DB.InsertMessage(msg)
-	}
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 1,
-	})
-}
-
-func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string, prompt string, duration string) (bool, error) {
-	dur, err := time.ParseDuration(duration)
-	if err != nil {
-		return false, fmt.Errorf("invalid duration: %w", err)
-	}
-	maxDur := 14 * 24 * time.Hour
-	if dur > maxDur {
-		dur = maxDur
-	}
-	now := time.Now()
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 1, Mode: 1,
-		StartedAt: &now, DurationLimit: duration,
-	})
-}
-
-func (r *mutationResolver) ApproveToolCall(ctx context.Context, callID string) (bool, error) {
-	// Tool approval is handled via subscription channel — publish approval event
-	return true, nil
-}
-
-func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reason *string) (bool, error) {
-	return true, nil
-}
-
-func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInput) (*Settings, error) {
-	s := &r.Config.Settings
-	if input.Providers != nil {
-		json.Unmarshal([]byte(*input.Providers), &s.Providers)
-	}
-	if input.Permissions != nil {
-		json.Unmarshal([]byte(*input.Permissions), &s.Permissions)
-	}
-	if input.McpServers != nil {
-		json.Unmarshal([]byte(*input.McpServers), &s.MCPServers)
-	}
-	if input.Preferences != nil {
-		json.Unmarshal([]byte(*input.Preferences), &s.Preferences)
-	}
-	if err := r.Config.Save(); err != nil {
-		return nil, err
-	}
-	return r.Query().Settings(ctx)
-}
-
-func (r *mutationResolver) EnterPlanMode(ctx context.Context, threadID string) (bool, error) {
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 1, Mode: 2,
-	})
-}
-
-func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, executionMode ExecutionMode) (bool, error) {
-	// Restore normal mode, plan content enters thread corpus
-	mode := 0
-	if executionMode == ExecutionModeAutonomous {
-		mode = 1
-	}
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 1, Mode: mode,
-	})
-}
-
-func (r *mutationResolver) SaveViewState(ctx context.Context, threadID string, state ViewStateInput) (*ViewState, error) {
-	data, _ := json.Marshal(state)
-	if err := r.DB.SaveViewState(threadID, data); err != nil {
-		return nil, err
-	}
-	return &ViewState{
-		ThreadID:               threadID,
-		ScrollPosition:         state.ScrollPosition,
-		ExpandedMessageIds:     state.ExpandedMessageIds,
-		InputDraft:             state.InputDraft,
-		CitationExpansionState: state.CitationExpansionState,
-	}, nil
-}
-
-// --- SelectionResult field resolver ---
-
+// Scope is the resolver for the scope field.
 func (r *selectionResultResolver) Scope(ctx context.Context, obj *SelectionResult) (SelectionScope, error) {
 	switch obj.Scope {
 	case "ALL_THREADS":
@@ -511,8 +650,7 @@ func (r *selectionResultResolver) Scope(ctx context.Context, obj *SelectionResul
 	}
 }
 
-// --- Subscriptions ---
-
+// MessageStream is the resolver for the messageStream field.
 func (r *subscriptionResolver) MessageStream(ctx context.Context, threadID string) (<-chan *StreamEvent, error) {
 	ch := r.subscribeStream(threadID)
 	go func() {
@@ -531,6 +669,7 @@ func (r *subscriptionResolver) MessageStream(ctx context.Context, threadID strin
 	return ch, nil
 }
 
+// AgentState is the resolver for the agentState field.
 func (r *subscriptionResolver) AgentState(ctx context.Context, threadID string) (<-chan *AgentState, error) {
 	ch := r.subscribeAgentState(threadID)
 	go func() {
@@ -549,6 +688,7 @@ func (r *subscriptionResolver) AgentState(ctx context.Context, threadID string) 
 	return ch, nil
 }
 
+// ToolExecution is the resolver for the toolExecution field.
 func (r *subscriptionResolver) ToolExecution(ctx context.Context, threadID string) (<-chan *ToolExecution, error) {
 	ch := r.subscribeToolExec(threadID)
 	go func() {
@@ -567,6 +707,7 @@ func (r *subscriptionResolver) ToolExecution(ctx context.Context, threadID strin
 	return ch, nil
 }
 
+// SubagentProgress is the resolver for the subagentProgress field.
 func (r *subscriptionResolver) SubagentProgress(ctx context.Context, threadID string) (<-chan *SubagentProgress, error) {
 	ch := r.subscribeSubagent(threadID)
 	go func() {
@@ -585,6 +726,7 @@ func (r *subscriptionResolver) SubagentProgress(ctx context.Context, threadID st
 	return ch, nil
 }
 
+// ThreadStateChanges is the resolver for the threadStateChanges field.
 func (r *subscriptionResolver) ThreadStateChanges(ctx context.Context) (<-chan *ThreadStateEvent, error) {
 	ch := r.subscribeThreadState()
 	go func() {
@@ -619,89 +761,4 @@ type queryResolver struct{ *Resolver }
 type selectionResultResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
 
-// --- Payload sizing backoff ---
-
-// completeWithBackoff calls the LLM. If it returns a context-length error,
-// drops the lowest-scored selected message and retries. Repeat until the
-// payload fits. Error-driven — no tokenizer, no estimation.
-func completeWithBackoff(ctx context.Context, completer core.Completer, msgs []*pb.LLMMessage, selected []*pb.SelectedMessage) (*pb.CompletionResponse, error) {
-	for {
-		resp, err := completer.Complete(ctx, &pb.CompletionRequest{Messages: msgs})
-		if err == nil {
-			return resp, nil
-		}
-
-		// Check if it's a context-length error (provider returns this in error message)
-		errMsg := err.Error()
-		isContextLength := strings.Contains(errMsg, "context_length") ||
-			strings.Contains(errMsg, "maximum context") ||
-			strings.Contains(errMsg, "too many tokens") ||
-			strings.Contains(errMsg, "max_tokens")
-
-		if !isContextLength || len(msgs) <= 1 {
-			return nil, err
-		}
-
-		// Drop the lowest-scored message (last in selected, which is lowest score)
-		// The prompt (last message) is never dropped
-		msgs = msgs[1:] // drop first selected message (lowest after prompt)
-	}
-}
-
-// --- Conversion helpers ---
-
-func protoThreadToGQL(t *pb.Thread) *Thread {
-	gql := &Thread{
-		ID:          t.Id,
-		Name:        t.Name,
-		WorkingDirs: t.WorkingDirs,
-		Sandboxed:   t.Sandboxed,
-		CreatedAt:   t.CreatedAt.AsTime(),
-	}
-	if t.ParentThreadId != nil {
-		gql.ParentThreadID = t.ParentThreadId
-	}
-	if t.BranchPointPosition != nil {
-		pos := int(*t.BranchPointPosition)
-		gql.BranchPointPosition = &pos
-	}
-	if t.ArchivedAt != nil {
-		at := t.ArchivedAt.AsTime()
-		gql.ArchivedAt = &at
-	}
-	return gql
-}
-
-func protoMessageToGQL(m *pb.Message) *Message {
-	return &Message{
-		ID:        m.Id,
-		Role:      m.Role.String(),
-		Content:   adapter.ProtoToText(m.Content),
-		Position:  int(m.Position),
-		ThreadID:  m.ThreadId,
-		CreatedAt: m.CreatedAt.AsTime(),
-	}
-}
-
-func protoQUDGraphToGQL(g *pb.QUDGraph) *QUDGraph {
-	if g == nil {
-		return &QUDGraph{}
-	}
-	quds := make([]*QUD, len(g.Quds))
-	for i, q := range g.Quds {
-		quds[i] = &QUD{
-			ID:            q.Id,
-			Question:      q.Question,
-			EstablishedBy: q.EstablishedBy,
-			Status:        q.Status.String(),
-			AddressedBy:   q.AddressedBy,
-		}
-		if q.ParentQudId != "" {
-			quds[i].ParentQudID = &q.ParentQudId
-		}
-	}
-	return &QUDGraph{
-		Quds:        quds,
-		ActiveStack: g.ActiveStack,
-	}
-}
+// Helper functions moved to helpers.go

@@ -26,6 +26,12 @@ func Open(dataDir string) (*DB, error) {
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
 
+	// Enable foreign keys for CASCADE delete
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("pragma foreign_keys: %w", err)
+	}
+
 	d := &DB{db}
 	if err := d.migrate(); err != nil {
 		db.Close()

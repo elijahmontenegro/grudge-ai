@@ -32,6 +32,7 @@ type Runner struct {
 	adkRunner *runner.Runner
 	mu        sync.Mutex
 	mode      Mode
+	autoState *AutonomousState
 }
 
 // Mode represents the agent's current mode.

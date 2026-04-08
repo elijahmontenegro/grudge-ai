@@ -3,35 +3,53 @@
 @theme {
   --color-primary: #7c3aed;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #f3f4f6;
-  --color-secondary-foreground: #1f2937;
+  --color-secondary: #f4f4f5;
+  --color-secondary-foreground: #18181b;
   --color-destructive: #ef4444;
-  --color-border: #e5e7eb;
-  --color-muted: #9ca3af;
-  --color-background: #ffffff;
-  --color-foreground: #111827;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #e4e4e7;
+  --color-input: #e4e4e7;
+  --color-ring: #7c3aed;
+  --color-muted: #71717a;
+  --color-muted-foreground: #71717a;
+  --color-background: #fafafa;
+  --color-foreground: #09090b;
   --color-card: #ffffff;
-  --color-card-foreground: #111827;
-  --font-sans: system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, Consolas, monospace;
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: 0.5rem;
+  --color-card-foreground: #09090b;
+  --color-accent: #f4f4f5;
+  --color-accent-foreground: #18181b;
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
 }
 
 @media (prefers-color-scheme: dark) {
   @theme {
     --color-primary: #a78bfa;
-    --color-primary-foreground: #111827;
-    --color-secondary: #1f2937;
-    --color-secondary-foreground: #f3f4f6;
-    --color-border: #374151;
-    --color-muted: #6b7280;
-    --color-background: #0f172a;
-    --color-foreground: #f8fafc;
-    --color-card: #1e293b;
-    --color-card-foreground: #f8fafc;
+    --color-primary-foreground: #ffffff;
+    --color-secondary: #151518;
+    --color-secondary-foreground: #fafafa;
+    --color-destructive: #f87171;
+    --color-destructive-foreground: #09090b;
+    --color-border: #1e1e23;
+    --color-input: #1e1e23;
+    --color-ring: #a78bfa;
+    --color-muted: #52525b;
+    --color-muted-foreground: #a1a1aa;
+    --color-background: #0a0a0c;
+    --color-foreground: #ececec;
+    --color-card: #121215;
+    --color-card-foreground: #ececec;
+    --color-accent: #151518;
+    --color-accent-foreground: #fafafa;
   }
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.06) transparent;
 }
 
 body {
@@ -39,9 +57,186 @@ body {
   font-family: var(--font-sans);
   background: var(--color-background);
   color: var(--color-foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
   min-height: 100svh;
   display: flex;
+}
+
+/* --- Animations --- */
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.25s ease-out both;
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+/* Stagger children */
+.stagger-children > * {
+  animation: fade-in-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.stagger-children > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2) { animation-delay: 50ms; }
+.stagger-children > *:nth-child(3) { animation-delay: 100ms; }
+.stagger-children > *:nth-child(4) { animation-delay: 150ms; }
+.stagger-children > *:nth-child(5) { animation-delay: 200ms; }
+.stagger-children > *:nth-child(6) { animation-delay: 250ms; }
+.stagger-children > *:nth-child(7) { animation-delay: 300ms; }
+.stagger-children > *:nth-child(8) { animation-delay: 350ms; }
+
+/* --- Composer (textarea input) --- */
+
+.composer {
+  background: var(--color-card);
+  border-radius: 1.25rem;
+  box-shadow:
+    0 0 0 1px var(--color-border),
+    0 2px 8px rgba(0,0,0,0.08),
+    0 8px 32px rgba(0,0,0,0.04);
+  transition: box-shadow 0.2s ease;
+}
+
+.composer:focus-within {
+  box-shadow:
+    0 0 0 1px var(--color-primary),
+    0 0 20px -4px rgba(124,58,237,0.15),
+    0 8px 32px rgba(0,0,0,0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  .composer {
+    box-shadow:
+      0 0 0 1px rgba(255,255,255,0.04),
+      0 2px 8px rgba(0,0,0,0.3),
+      0 8px 32px rgba(0,0,0,0.2);
+  }
+  .composer:focus-within {
+    box-shadow:
+      0 0 0 1px var(--color-primary),
+      0 0 20px -4px rgba(167,139,250,0.25),
+      0 8px 32px rgba(0,0,0,0.2);
+  }
+}
+
+.composer textarea {
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  width: 100%;
+  padding: 0.875rem 1rem;
+  min-height: 52px;
+  max-height: 200px;
+}
+
+.composer textarea::placeholder {
+  color: var(--color-muted);
+}
+
+/* --- Prose --- */
+
+.prose p {
+  margin-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+.prose p:first-child { margin-top: 0; }
+.prose p:last-child { margin-bottom: 0; }
+.prose ul, .prose ol {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+.prose pre {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+}
+
+/* --- Sidebar --- */
+
+.sidebar {
+  background: linear-gradient(180deg, var(--color-card) 0%, var(--color-background) 100%);
+}
+
+.sidebar-item-active {
+  background: rgba(167,139,250,0.08);
+  box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+/* --- Citation highlight flash --- */
+
+@keyframes highlight-flash {
+  0% { background: rgba(167,139,250,0.15); }
+  100% { background: transparent; }
+}
+
+.highlight-flash {
+  animation: highlight-flash 1.5s ease-out;
+  border-radius: 0.75rem;
+}
+
+/* --- Score bar --- */
+
+.score-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-primary);
+  opacity: 0.6;
+  transition: width 0.3s ease-out;
+}
+
+/* --- Glass effect --- */
+
+.glass {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+}
+
+/* --- User message gradient --- */
+
+.user-bubble {
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 50%, #5b21b6 100%);
+  box-shadow: 0 2px 12px rgba(124,58,237,0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  .user-bubble {
+    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 50%, #6d28d9 100%);
+    box-shadow: 0 2px 16px rgba(139,92,246,0.15);
+  }
 }

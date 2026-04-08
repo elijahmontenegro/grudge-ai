@@ -84,6 +84,13 @@ func (d *DB) ThreadCorpus(threadID string) ([]*pb.Message, error) {
 	return d.ListMessages(threadID, 0, 0)
 }
 
+// MessageCount returns the number of messages in a thread.
+func (d *DB) MessageCount(threadID string) int {
+	var count int
+	d.QueryRow(`SELECT COUNT(*) FROM messages WHERE thread_id = ?`, threadID).Scan(&count)
+	return count
+}
+
 // marshalContentBlocks encodes repeated ContentBlock as a proto wrapper.
 func marshalContentBlocks(blocks []*pb.ContentBlock) ([]byte, error) {
 	// Use LLMMessage as a wrapper since it has repeated ContentBlock

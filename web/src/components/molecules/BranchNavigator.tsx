@@ -1,8 +1,7 @@
+import { useState, useRef, useEffect } from 'react'
 import { gql } from '@apollo/client'
 import { useQuery } from '@apollo/client/react'
 import { useNavigate } from 'react-router'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 
 const THREAD_BRANCHES = gql`
   query ThreadBranches($includeArchived: Boolean) {
@@ -21,66 +20,88 @@ interface Props {
 
 export function BranchNavigator({ currentThreadId }: Props) {
   const navigate = useNavigate()
-  const { data } = useQuery<{threads: any[]}>(THREAD_BRANCHES, {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const { data } = useQuery<{threads: {id: string; name: string; parentThreadId: string | null; branchPointPosition: number | null}[]}>(THREAD_BRANCHES, {
     variables: { includeArchived: false },
   })
 
   const threads = data?.threads ?? []
-  const current = threads.find((t: { id: string }) => t.id === currentThreadId)
+  const current = threads.find((t) => t.id === currentThreadId)
 
-  // Find parent and siblings
   const parent = current?.parentThreadId
-    ? threads.find((t: { id: string }) => t.id === current.parentThreadId)
+    ? threads.find((t) => t.id === current.parentThreadId)
     : null
   const siblings = threads.filter(
-    (t: { parentThreadId: string | null; id: string }) =>
-      t.parentThreadId === current?.parentThreadId && t.id !== currentThreadId,
+    (t) => t.parentThreadId === current?.parentThreadId && t.id !== currentThreadId,
   )
   const children = threads.filter(
-    (t: { parentThreadId: string | null }) => t.parentThreadId === currentThreadId,
+    (t) => t.parentThreadId === currentThreadId,
   )
 
-  if (!parent && siblings.length === 0 && children.length === 0) {
-    return null
-  }
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const total = (parent ? 1 : 0) + siblings.length + children.length
+  if (total === 0) return null
 
   return (
-    <div className="flex items-center gap-1 text-xs">
-      {parent && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-6 text-xs"
-          onClick={() => navigate(`/thread/${parent.id}`)}
-        >
-          ← {parent.name || 'Parent'}
-        </Button>
-      )}
-      {siblings.map((s: { id: string; name: string; branchPointPosition: number | null }) => (
-        <Button
-          key={s.id}
-          variant="outline"
-          size="sm"
-          className="h-6 text-xs"
-          onClick={() => navigate(`/thread/${s.id}`)}
-        >
-          {s.name || 'Branch'}
-          {s.branchPointPosition != null && (
-            <Badge variant="secondary" className="ml-1 text-[10px]">@{s.branchPointPosition}</Badge>
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(!open)}
+        className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded-md hover:bg-secondary transition-colors"
+      >
+        {children.length > 0
+          ? `${children.length} branch${children.length !== 1 ? 'es' : ''}`
+          : parent
+            ? 'branched'
+            : `${siblings.length} sibling${siblings.length !== 1 ? 's' : ''}`}
+      </button>
+
+      {open && (
+        <div className="absolute top-full right-0 mt-1 bg-card border border-border rounded-lg shadow-lg py-1 z-50 min-w-[180px] animate-fade-in">
+          {parent && (
+            <button
+              onClick={() => { navigate(`/thread/${parent.id}`); setOpen(false) }}
+              className="w-full text-left px-3 py-1.5 text-xs hover:bg-secondary transition-colors truncate"
+            >
+              <span className="text-muted-foreground mr-1">&larr;</span>
+              {parent.name || 'Parent thread'}
+            </button>
           )}
-        </Button>
-      ))}
-      {children.map((c: { id: string; name: string; branchPointPosition: number | null }) => (
-        <Button
-          key={c.id}
-          variant="ghost"
-          size="sm"
-          className="h-6 text-xs"
-          onClick={() => navigate(`/thread/${c.id}`)}
-        >
-          → {c.name || 'Fork'}
-        </Button>
-      ))}
+          {siblings.length > 0 && parent && <div className="h-px bg-border my-1" />}
+          {siblings.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => { navigate(`/thread/${s.id}`); setOpen(false) }}
+              className="w-full text-left px-3 py-1.5 text-xs hover:bg-secondary transition-colors truncate"
+            >
+              {s.name || 'Branch'}
+              {s.branchPointPosition != null && (
+                <span className="text-muted-foreground ml-1">@{s.branchPointPosition}</span>
+              )}
+            </button>
+          ))}
+          {children.length > 0 && (parent || siblings.length > 0) && <div className="h-px bg-border my-1" />}
+          {children.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => { navigate(`/thread/${c.id}`); setOpen(false) }}
+              className="w-full text-left px-3 py-1.5 text-xs hover:bg-secondary transition-colors truncate"
+            >
+              <span className="text-muted-foreground mr-1">&rarr;</span>
+              {c.name || 'Fork'}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

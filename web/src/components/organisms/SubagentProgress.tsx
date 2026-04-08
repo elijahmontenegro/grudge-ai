@@ -1,7 +1,7 @@
 import { gql } from '@apollo/client'
 import { useSubscription } from '@apollo/client/react'
-import { Badge } from '@/components/ui/badge'
 import { useNavigate } from 'react-router'
+import { cn } from '@/lib/utils'
 
 const SUBAGENT_SUBSCRIPTION = gql`
   subscription SubagentProgress($threadId: ID!) {
@@ -38,21 +38,24 @@ export function SubagentProgress({ threadId }: Props) {
   if (!sub) return null
 
   return (
-    <div className="border border-border rounded-lg p-3 bg-card text-sm">
-      <div className="flex items-center gap-2 mb-1">
-        <Badge variant={sub.status === 'running' ? 'default' : 'secondary'} className="text-xs">
-          Subagent
-        </Badge>
-        <Badge variant="outline" className="text-xs">{sub.status}</Badge>
-        <Badge variant="outline" className="text-xs">Round {sub.roundCount}</Badge>
+    <div className="py-2 animate-fade-in">
+      <div className="flex items-center gap-3 text-xs">
+        <div className="flex items-center gap-1.5">
+          <span className={cn(
+            'inline-block w-1.5 h-1.5 rounded-full',
+            sub.status === 'running' ? 'bg-primary animate-pulse-subtle' : 'bg-muted-foreground/30'
+          )} />
+          <span className="font-medium">Subagent</span>
+        </div>
+        <span className="text-muted-foreground">Round {sub.roundCount}</span>
+        <span className="text-muted-foreground truncate max-w-[200px]">{sub.task}</span>
+        <button
+          onClick={() => navigate(`/thread/${sub.forkThreadId}`)}
+          className="text-primary hover:underline ml-auto shrink-0"
+        >
+          View fork
+        </button>
       </div>
-      <p className="text-xs text-muted mb-2 line-clamp-2">{sub.task}</p>
-      <button
-        onClick={() => navigate(`/thread/${sub.forkThreadId}`)}
-        className="text-xs text-primary hover:underline"
-      >
-        View fork →
-      </button>
     </div>
   )
 }

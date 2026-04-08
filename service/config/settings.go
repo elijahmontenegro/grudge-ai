@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	net_http "net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Settings represents the service configuration from config.json.
@@ -13,6 +15,21 @@ type Settings struct {
 	MCPServers  []MCPServer               `json:"mcp_servers"`
 	Hooks       []HookConfig              `json:"hooks"`
 	Preferences map[string]string         `json:"preferences"`
+	UserName    string                    `json:"user_name,omitempty"`
+}
+
+// GetUserName returns the configured user name, falling back to OS user.
+func (s *Settings) GetUserName() string {
+	if s.UserName != "" {
+		return s.UserName
+	}
+	if name := os.Getenv("USER"); name != "" {
+		return name
+	}
+	if name := os.Getenv("USERNAME"); name != "" {
+		return name
+	}
+	return "User"
 }
 
 // ProviderConfig configures a model role (main, classifier, small_fast).
@@ -89,7 +106,7 @@ func (c *Config) Save() error {
 }
 
 func defaultSettings() Settings {
-	return Settings{
+	s := Settings{
 		Providers:   make(map[string]ProviderConfig),
 		Permissions: map[string]string{
 			"FileRead":  "allow",
@@ -103,6 +120,47 @@ func defaultSettings() Settings {
 		},
 		Preferences: make(map[string]string),
 	}
+	// Auto-detect local providers on first run
+	probeProviders(&s)
+	return s
+}
+
+// probeProviders checks localhost for common providers and pre-configures them.
+func probeProviders(s *Settings) {
+	// Ollama at default port
+	if probeHTTP("http://localhost:11434/api/tags") {
+		s.Providers["main"] = ProviderConfig{
+			Adapter: "ollama",
+			Model:   "",
+			BaseURL: "http://localhost:11434",
+		}
+	}
+	// TEI for NLI at default port
+	if probeHTTP("http://localhost:8080/info") {
+		s.Providers["classifier"] = ProviderConfig{
+			Adapter: "tei",
+			Model:   "cross-encoder/nli-deberta-v3-base",
+			BaseURL: "http://localhost:8080",
+		}
+	}
+	// TEI for embeddings at port 8081
+	if probeHTTP("http://localhost:8081/info") {
+		s.Providers["embedder"] = ProviderConfig{
+			Adapter: "tei",
+			Model:   "BAAI/bge-small-en-v1.5",
+			BaseURL: "http://localhost:8081",
+		}
+	}
+}
+
+func probeHTTP(url string) bool {
+	client := &net_http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode < 500
 }
 
 func resolvePaths() Paths {

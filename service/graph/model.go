@@ -12,6 +12,7 @@ type Thread struct {
 	ParentThreadID        *string    `json:"parentThreadId"`
 	BranchPointPosition   *int       `json:"branchPointPosition"`
 	ArchivedAt            *time.Time `json:"archivedAt"`
+	MessageCount          int        `json:"messageCount"`
 }
 
 // Message is the GraphQL model for Message.
@@ -37,11 +38,14 @@ type Edge struct {
 
 // SelectedMessage is the GraphQL model for SelectedMessage.
 type SelectedMessage struct {
-	MessageID      string  `json:"messageId"`
-	EffectiveScore float64 `json:"effectiveScore"`
-	HopDepth       int     `json:"hopDepth"`
-	ThreadID       string  `json:"threadId"`
-	CrossThread    bool    `json:"crossThread"`
+	MessageID         string  `json:"messageId"`
+	EffectiveScore    float64 `json:"effectiveScore"`
+	HopDepth          int     `json:"hopDepth"`
+	ThreadID          string  `json:"threadId"`
+	CrossThread       bool    `json:"crossThread"`
+	CrossEncoderScore float64 `json:"crossEncoderScore"`
+	QudWeight         float64 `json:"qudWeight"`
+	TemporalProximity float64 `json:"temporalProximity"`
 }
 
 // ExcludedMessage is the GraphQL model for ExcludedMessage.

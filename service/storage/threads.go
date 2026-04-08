@@ -122,6 +122,65 @@ func (d *DB) DeleteThread(id string) error {
 	return err
 }
 
+// UpdateThreadName sets the thread name.
+func (d *DB) UpdateThreadName(id, name string) error {
+	_, err := d.Exec(`UPDATE threads SET name = ? WHERE id = ?`, name, id)
+	return err
+}
+
+// BackfillThreadNames names any threads still called "New Thread" using their
+// first user message content. Called once at startup.
+func (d *DB) BackfillThreadNames() int {
+	rows, err := d.Query(`SELECT id FROM threads WHERE name = 'New Thread' OR name = '' OR name IS NULL`)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+
+	count := 0
+	for _, id := range ids {
+		msgs, err := d.ListMessages(id, 1, 0)
+		if err != nil || len(msgs) == 0 {
+			continue
+		}
+		// Extract text from first message's content blocks
+		var text string
+		for _, block := range msgs[0].Content {
+			if t := block.GetText(); t != nil {
+				text = t.Text
+				break
+			}
+		}
+		if text == "" {
+			continue
+		}
+		name := text
+		if len(name) > 60 {
+			i := 57
+			for i > 30 && name[i] != ' ' {
+				i--
+			}
+			if name[i] == ' ' {
+				name = name[:i] + "..."
+			} else {
+				name = name[:57] + "..."
+			}
+		}
+		if d.UpdateThreadName(id, name) == nil {
+			count++
+		}
+	}
+	return count
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1
