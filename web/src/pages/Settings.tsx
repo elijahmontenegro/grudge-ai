@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { cn } from '@/lib/utils'
+import { ThreadSidebar } from '@/components/organisms/ThreadSidebar'
 
 const SETTINGS_QUERY = gql`
   query Settings {
@@ -190,8 +191,10 @@ export function SettingsPage() {
   })
 
   return (
-    <ScrollArea className="h-screen">
-      <div className="max-w-2xl mx-auto p-8 space-y-6">
+    <div className="flex h-screen">
+      <ThreadSidebar />
+      <ScrollArea className="flex-1 min-w-0">
+        <div className="max-w-2xl mx-auto p-8 space-y-6">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -240,6 +243,7 @@ docker run -p 8080:80 ghcr.io/huggingface/text-embeddings-inference:latest \
           </div>
         </details>
       </div>
-    </ScrollArea>
+      </ScrollArea>
+    </div>
   )
 }

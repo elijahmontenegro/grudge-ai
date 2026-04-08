@@ -63,7 +63,6 @@ body {
 
 #root {
   min-height: 100svh;
-  display: flex;
 }
 
 /* --- Animations --- */
