@@ -47,6 +47,50 @@
   }
 }
 
+/* Class-based dark mode for JS toggle (mirrors media query above) */
+.dark {
+  --color-primary: #a78bfa;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #151518;
+  --color-secondary-foreground: #fafafa;
+  --color-destructive: #f87171;
+  --color-destructive-foreground: #09090b;
+  --color-border: #1e1e23;
+  --color-input: #1e1e23;
+  --color-ring: #a78bfa;
+  --color-muted: #52525b;
+  --color-muted-foreground: #a1a1aa;
+  --color-background: #0a0a0c;
+  --color-foreground: #ececec;
+  --color-card: #121215;
+  --color-card-foreground: #ececec;
+  --color-accent: #151518;
+  --color-accent-foreground: #fafafa;
+  color-scheme: dark;
+}
+
+/* Class-based light mode override */
+.light {
+  --color-primary: #7c3aed;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f4f4f5;
+  --color-secondary-foreground: #18181b;
+  --color-destructive: #ef4444;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #e4e4e7;
+  --color-input: #e4e4e7;
+  --color-ring: #7c3aed;
+  --color-muted: #71717a;
+  --color-muted-foreground: #71717a;
+  --color-background: #fafafa;
+  --color-foreground: #09090b;
+  --color-card: #ffffff;
+  --color-card-foreground: #09090b;
+  --color-accent: #f4f4f5;
+  --color-accent-foreground: #18181b;
+  color-scheme: light;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(0,0,0,0.15) transparent;

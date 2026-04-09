@@ -34,10 +34,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
     const apply = (mode: 'light' | 'dark') => {
       setResolved(mode)
-      root.style.colorScheme = mode
-      // Force the prefers-color-scheme by setting a class
       root.classList.remove('light', 'dark')
       root.classList.add(mode)
+      // Update body colors from CSS variables
+      document.body.style.background = `var(--color-background)`
+      document.body.style.color = `var(--color-foreground)`
     }
 
     if (theme === 'system') {
