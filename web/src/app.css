@@ -25,27 +25,8 @@
   --radius-lg: 0.75rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-primary: #a78bfa;
-    --color-primary-foreground: #ffffff;
-    --color-secondary: #151518;
-    --color-secondary-foreground: #fafafa;
-    --color-destructive: #f87171;
-    --color-destructive-foreground: #09090b;
-    --color-border: #1e1e23;
-    --color-input: #1e1e23;
-    --color-ring: #a78bfa;
-    --color-muted: #52525b;
-    --color-muted-foreground: #a1a1aa;
-    --color-background: #0a0a0c;
-    --color-foreground: #ececec;
-    --color-card: #121215;
-    --color-card-foreground: #ececec;
-    --color-accent: #151518;
-    --color-accent-foreground: #fafafa;
-  }
-}
+/* Dark mode handled by .dark class only — no @media @theme
+   to avoid specificity conflicts with class-based toggle. */
 
 /* Class-based dark mode for JS toggle (mirrors media query above) */
 .dark {
