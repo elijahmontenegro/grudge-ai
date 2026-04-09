@@ -1,25 +1,26 @@
 @import "tailwindcss";
 
-/* Class-based dark mode — makes dark: prefix use .dark class, not @media */
+/* Class-based dark mode for dark: prefix */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Register color tokens with Tailwind — these are the light defaults */
 @theme {
   --color-primary: #7c3aed;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #f4f4f5;
+  --color-secondary: #f0f0f3;
   --color-secondary-foreground: #18181b;
-  --color-destructive: #ef4444;
+  --color-destructive: #dc2626;
   --color-destructive-foreground: #ffffff;
-  --color-border: #e4e4e7;
-  --color-input: #e4e4e7;
+  --color-border: #e2e2e6;
+  --color-input: #e2e2e6;
   --color-ring: #7c3aed;
-  --color-muted: #71717a;
-  --color-muted-foreground: #71717a;
-  --color-background: #fafafa;
-  --color-foreground: #09090b;
-  --color-card: #ffffff;
-  --color-card-foreground: #09090b;
-  --color-accent: #f4f4f5;
+  --color-muted: #475569;
+  --color-muted-foreground: #475569;
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
+  --color-card: #f8f8fa;
+  --color-card-foreground: #0f172a;
+  --color-accent: #f0f0f3;
   --color-accent-foreground: #18181b;
   --font-sans: "Inter", system-ui, -apple-system, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
@@ -28,50 +29,47 @@
   --radius-lg: 0.75rem;
 }
 
-/* Dark mode handled by .dark class only — no @media @theme
-   to avoid specificity conflicts with class-based toggle. */
-
-/* Class-based dark mode for JS toggle (mirrors media query above) */
-.dark {
-  --color-primary: #a78bfa !important;
-  --color-primary-foreground: #ffffff !important;
-  --color-secondary: #151518 !important;
-  --color-secondary-foreground: #fafafa !important;
-  --color-destructive: #f87171 !important;
-  --color-destructive-foreground: #09090b !important;
-  --color-border: #1e1e23 !important;
-  --color-input: #1e1e23 !important;
-  --color-ring: #a78bfa !important;
-  --color-muted: #52525b !important;
-  --color-muted-foreground: #a1a1aa !important;
-  --color-background: #0a0a0c !important;
-  --color-foreground: #ececec !important;
-  --color-card: #121215 !important;
-  --color-card-foreground: #ececec !important;
-  --color-accent: #151518 !important;
-  --color-accent-foreground: #fafafa !important;
+/* Dark variables — :root.dark has higher specificity than :root in @layer theme */
+:root.dark {
+  --color-primary: #a78bfa;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #151518;
+  --color-secondary-foreground: #fafafa;
+  --color-destructive: #f87171;
+  --color-destructive-foreground: #09090b;
+  --color-border: #1e1e23;
+  --color-input: #1e1e23;
+  --color-ring: #a78bfa;
+  --color-muted: #52525b;
+  --color-muted-foreground: #a1a1aa;
+  --color-background: #0a0a0c;
+  --color-foreground: #ececec;
+  --color-card: #121215;
+  --color-card-foreground: #ececec;
+  --color-accent: #151518;
+  --color-accent-foreground: #fafafa;
   color-scheme: dark;
 }
 
-/* Class-based light mode override */
-.light {
-  --color-primary: #7c3aed !important;
-  --color-primary-foreground: #ffffff !important;
-  --color-secondary: #f0f0f3 !important;
-  --color-secondary-foreground: #18181b !important;
-  --color-destructive: #dc2626 !important;
-  --color-destructive-foreground: #ffffff !important;
-  --color-border: #e2e2e6 !important;
-  --color-input: #e2e2e6 !important;
-  --color-ring: #7c3aed !important;
-  --color-muted: #475569 !important;
-  --color-muted-foreground: #475569 !important;
-  --color-background: #ffffff !important;
-  --color-foreground: #0f172a !important;
-  --color-card: #f8f8fa !important;
-  --color-card-foreground: #0f172a !important;
-  --color-accent: #f0f0f3 !important;
-  --color-accent-foreground: #18181b !important;
+/* Light variables — explicit override when toggled from dark */
+:root.light {
+  --color-primary: #7c3aed;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f0f0f3;
+  --color-secondary-foreground: #18181b;
+  --color-destructive: #dc2626;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #e2e2e6;
+  --color-input: #e2e2e6;
+  --color-ring: #7c3aed;
+  --color-muted: #475569;
+  --color-muted-foreground: #475569;
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
+  --color-card: #f8f8fa;
+  --color-card-foreground: #0f172a;
+  --color-accent: #f0f0f3;
+  --color-accent-foreground: #18181b;
   color-scheme: light;
 }
 
@@ -92,7 +90,6 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-
 
 #root {
   min-height: 100svh;
