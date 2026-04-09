@@ -73,33 +73,31 @@
 .light {
   --color-primary: #7c3aed;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #f4f4f5;
+  --color-secondary: #f0f0f3;
   --color-secondary-foreground: #18181b;
-  --color-destructive: #ef4444;
+  --color-destructive: #dc2626;
   --color-destructive-foreground: #ffffff;
-  --color-border: #e4e4e7;
-  --color-input: #e4e4e7;
+  --color-border: #e2e2e6;
+  --color-input: #e2e2e6;
   --color-ring: #7c3aed;
-  --color-muted: #71717a;
-  --color-muted-foreground: #71717a;
-  --color-background: #fafafa;
-  --color-foreground: #09090b;
-  --color-card: #ffffff;
-  --color-card-foreground: #09090b;
-  --color-accent: #f4f4f5;
+  --color-muted: #64748b;
+  --color-muted-foreground: #64748b;
+  --color-background: #ffffff;
+  --color-foreground: #0f172a;
+  --color-card: #f8f8fa;
+  --color-card-foreground: #0f172a;
+  --color-accent: #f0f0f3;
   --color-accent-foreground: #18181b;
   color-scheme: light;
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(0,0,0,0.15) transparent;
+  scrollbar-color: rgba(0,0,0,0.12) transparent;
 }
 
-@media (prefers-color-scheme: dark) {
-  * {
-    scrollbar-color: rgba(255,255,255,0.06) transparent;
-  }
+.dark * {
+  scrollbar-color: rgba(255,255,255,0.06) transparent;
 }
 
 body {
@@ -173,31 +171,30 @@ body {
   border-radius: 1.25rem;
   box-shadow:
     0 0 0 1px var(--color-border),
-    0 2px 8px rgba(0,0,0,0.08),
-    0 8px 32px rgba(0,0,0,0.04);
+    0 2px 8px rgba(0,0,0,0.06),
+    0 8px 24px rgba(0,0,0,0.03);
   transition: box-shadow 0.2s ease;
 }
 
 .composer:focus-within {
   box-shadow:
     0 0 0 1px var(--color-primary),
-    0 0 20px -4px rgba(124,58,237,0.15),
-    0 8px 32px rgba(0,0,0,0.04);
+    0 0 16px -4px rgba(124,58,237,0.2),
+    0 8px 24px rgba(0,0,0,0.03);
 }
 
-@media (prefers-color-scheme: dark) {
-  .composer {
-    box-shadow:
-      0 0 0 1px rgba(255,255,255,0.04),
-      0 2px 8px rgba(0,0,0,0.3),
-      0 8px 32px rgba(0,0,0,0.2);
-  }
-  .composer:focus-within {
-    box-shadow:
-      0 0 0 1px var(--color-primary),
-      0 0 20px -4px rgba(167,139,250,0.25),
-      0 8px 32px rgba(0,0,0,0.2);
-  }
+.dark .composer {
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.04),
+    0 2px 8px rgba(0,0,0,0.3),
+    0 8px 32px rgba(0,0,0,0.2);
+}
+
+.dark .composer:focus-within {
+  box-shadow:
+    0 0 0 1px var(--color-primary),
+    0 0 20px -4px rgba(167,139,250,0.25),
+    0 8px 32px rgba(0,0,0,0.2);
 }
 
 .composer textarea {
@@ -239,12 +236,17 @@ body {
 /* --- Sidebar --- */
 
 .sidebar {
-  background: linear-gradient(180deg, var(--color-card) 0%, var(--color-background) 100%);
+  background: var(--color-card);
+  border-right: 1px solid var(--color-border);
 }
 
 .sidebar-item-active {
-  background: rgba(167,139,250,0.08);
+  background: rgba(124,58,237,0.06);
   box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+.dark .sidebar-item-active {
+  background: rgba(167,139,250,0.08);
 }
 
 /* --- Citation highlight flash --- */
@@ -280,12 +282,10 @@ body {
 
 .user-bubble {
   background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 50%, #5b21b6 100%);
-  box-shadow: 0 2px 12px rgba(124,58,237,0.2);
+  box-shadow: 0 1px 8px rgba(124,58,237,0.15);
 }
 
-@media (prefers-color-scheme: dark) {
-  .user-bubble {
-    background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 50%, #6d28d9 100%);
-    box-shadow: 0 2px 16px rgba(139,92,246,0.15);
-  }
+.dark .user-bubble {
+  background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 50%, #6d28d9 100%);
+  box-shadow: 0 2px 16px rgba(139,92,246,0.15);
 }
