@@ -14,7 +14,10 @@ import (
 
 // BuildProvider constructs a core.Provider from a ProviderConfig.
 func BuildProvider(cfg ProviderConfig) (core.Provider, error) {
-	apiKey, _ := GetAPIKey(cfg.Adapter)
+	apiKey := cfg.APIKey
+	if apiKey == "" {
+		apiKey, _ = GetAPIKey(cfg.Adapter)
+	}
 
 	switch cfg.Adapter {
 	case "ollama":

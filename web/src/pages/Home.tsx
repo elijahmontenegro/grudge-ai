@@ -43,7 +43,7 @@ export function HomePage() {
     <div className="flex h-screen">
       <ThreadSidebar />
       <main className="flex-1 min-w-0 overflow-auto">
-        <div className="grid grid-cols-[1fr_280px] gap-12 items-start px-12 pt-20">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-12 items-start px-8 lg:px-12 pt-16 lg:pt-20">
           {/* Left — hero + composer */}
           <div>
             <h1 className="text-5xl font-bold tracking-tight leading-[1.1] mb-4">

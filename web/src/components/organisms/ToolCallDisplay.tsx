@@ -67,14 +67,14 @@ export function ToolCallDisplay({
 
       {status === 'pending' && (
         <div className="flex gap-2 mt-3">
-          <Button size="sm" className="h-7 text-xs" onClick={() => approve({ variables: { callId } })}>
+          <Button size="sm" className="h-7 text-xs" onClick={() => approve({ variables: { callId } }).catch(() => {})}>
             Approve
           </Button>
           <Button
             size="sm"
             variant="ghost"
             className="h-7 text-xs text-destructive hover:text-destructive"
-            onClick={() => deny({ variables: { callId } })}
+            onClick={() => deny({ variables: { callId } }).catch(() => {})}
           >
             Deny
           </Button>

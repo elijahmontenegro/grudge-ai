@@ -271,6 +271,7 @@ export function ThreadPage() {
             >
               RRC
             </button>
+            {/* aria-labels on icon buttons handled via title attrs */}
           </div>
         </header>
 
@@ -427,6 +428,7 @@ export function ThreadPage() {
                       <button
                         onClick={handleSend}
                         disabled={sending || thinking || !input.trim()}
+                        aria-label="Send message"
                         className={cn(
                           'h-8 w-8 rounded-lg flex items-center justify-center transition-all',
                           input.trim()

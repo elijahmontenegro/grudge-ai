@@ -37,6 +37,7 @@ type ProviderConfig struct {
 	Adapter string `json:"adapter"`
 	Model   string `json:"model"`
 	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key,omitempty"`
 }
 
 // MCPServer configures an MCP endpoint.

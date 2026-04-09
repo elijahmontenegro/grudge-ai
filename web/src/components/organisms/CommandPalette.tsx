@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useNavigate } from 'react-router'
 import { gql } from '@apollo/client'
 import { useQuery, useMutation } from '@apollo/client/react'
@@ -42,12 +42,20 @@ const CREATE_THREAD = gql`
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const navigate = useNavigate()
   const { data: threadsData } = useQuery<{threads: {id: string; name: string}[]}>(THREADS_QUERY)
   const { data: searchData } = useQuery<{search: {messageId: string; threadId: string; threadName: string; snippet: string; score: number}[]}>(SEARCH_QUERY, {
-    variables: { query: search, limit: 5 },
-    skip: search.length < 2,
+    variables: { query: debouncedSearch, limit: 5 },
+    skip: debouncedSearch.length < 2,
   })
+
+  const handleSearch = (value: string) => {
+    setSearch(value)
+    clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => setDebouncedSearch(value), 300)
+  }
   const [createThread] = useMutation<{createThread: {id: string; name: string}}>(CREATE_THREAD)
 
   useEffect(() => {
@@ -81,7 +89,7 @@ export function CommandPalette() {
       <CommandInput
         placeholder="Search threads and messages..."
         value={search}
-        onValueChange={setSearch}
+        onValueChange={handleSearch}
       />
       <CommandList>
         <CommandEmpty>No results found.</CommandEmpty>

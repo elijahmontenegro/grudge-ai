@@ -31,6 +31,7 @@ interface ProviderConfig {
   adapter: string
   model: string
   base_url: string
+  api_key?: string
 }
 
 const ADAPTERS = [
@@ -143,6 +144,8 @@ function ProviderForm({
           </label>
           <Input
             type="password"
+            value={config.api_key ?? ''}
+            onChange={(e) => onChange({ ...config, api_key: e.target.value })}
             placeholder="sk-..."
             className="text-sm"
           />
