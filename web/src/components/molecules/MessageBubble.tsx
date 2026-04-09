@@ -71,7 +71,7 @@ export function MessageBubble({ message, selection, onEdit }: MessageBubbleProps
       <div className="group relative max-w-[85%]">
         <div className="text-[11px] text-muted-foreground/40 font-medium mb-2 pl-0.5 flex items-center gap-2">
           <span>Spidey</span>
-          {timestamp && <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-muted-foreground/20 tabular-nums">{timestamp}</span>}
+          {timestamp && <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-muted-foreground/40 tabular-nums">{timestamp}</span>}
         </div>
         <div className={cn(
           'pl-0.5',

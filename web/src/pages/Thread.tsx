@@ -433,7 +433,7 @@ export function ThreadPage() {
                           'h-8 w-8 rounded-lg flex items-center justify-center transition-all',
                           input.trim()
                             ? 'bg-primary text-primary-foreground shadow-[0_0_12px_-2px_rgba(167,139,250,0.4)] hover:shadow-[0_0_16px_-2px_rgba(167,139,250,0.5)]'
-                            : 'text-muted-foreground/30'
+                            : 'text-muted-foreground/50'
                         )}
                       >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

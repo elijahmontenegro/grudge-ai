@@ -36,7 +36,7 @@ export function HomePage() {
 
           <button onClick={handleNew} className="composer w-full text-left cursor-pointer group">
             <div className="px-5 py-4 flex items-center justify-between">
-              <span className="text-base text-muted-foreground/25 group-hover:text-muted-foreground/40 transition-colors">
+              <span className="text-base text-muted-foreground/50 group-hover:text-muted-foreground/40 transition-colors">
                 New thread...
               </span>
               <span className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-all">
@@ -45,7 +45,7 @@ export function HomePage() {
             </div>
           </button>
 
-          <p className="mt-6 text-[11px] text-muted-foreground/15">
+          <p className="mt-6 text-[11px] text-muted-foreground/40">
             <kbd className="px-1.5 py-0.5 bg-foreground/[0.03] rounded text-[10px] font-mono">Ctrl+K</kbd>
             {' '}search
             <span className="mx-2 text-muted-foreground/10">·</span>

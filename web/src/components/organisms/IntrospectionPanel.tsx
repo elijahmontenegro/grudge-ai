@@ -67,7 +67,7 @@ function truncate(text: string, len: number): string {
 function ScoreChip({ label, value }: { label: string; value: number }) {
   return (
     <span className="text-[9px] text-muted-foreground/40 font-mono tabular-nums">
-      <span className="text-muted-foreground/25">{label}</span>
+      <span className="text-muted-foreground/50">{label}</span>
       {' '}{(value * 100).toFixed(0)}
     </span>
   )
@@ -181,7 +181,7 @@ export function IntrospectionPanel({ threadId }: Props) {
               {/* Excluded */}
               {messages.filter((msg) => !selectedIds.has(msg.id)).length > 0 && (
                 <section className="space-y-1 pt-2">
-                  <h4 className="text-[10px] font-medium text-muted-foreground/30 uppercase tracking-widest mb-2">
+                  <h4 className="text-[10px] font-medium text-muted-foreground/50 uppercase tracking-widest mb-2">
                     Not sent
                   </h4>
                   {messages
@@ -192,14 +192,14 @@ export function IntrospectionPanel({ threadId }: Props) {
                       return (
                         <div key={msg.id} className="py-1.5 pl-3">
                           <div className="flex items-center gap-1.5 mb-0.5">
-                            <span className="text-[10px] text-muted-foreground/30">
+                            <span className="text-[10px] text-muted-foreground/50">
                               {msg.role === 'ROLE_USER' ? 'You' : 'Spidey'}
                             </span>
                             {reason && reason !== 'unspecified' && (
-                              <span className="text-[9px] text-muted-foreground/20">{reason}</span>
+                              <span className="text-[9px] text-muted-foreground/40">{reason}</span>
                             )}
                           </div>
-                          <p className="text-[11px] leading-relaxed text-muted-foreground/25">
+                          <p className="text-[11px] leading-relaxed text-muted-foreground/50">
                             {truncate(msg.content, 60)}
                           </p>
                         </div>
@@ -209,7 +209,7 @@ export function IntrospectionPanel({ threadId }: Props) {
               )}
             </>
           ) : (
-            <p className="text-xs text-muted-foreground/30 pt-4">
+            <p className="text-xs text-muted-foreground/50 pt-4">
               Send a message to see RRC selection
             </p>
           )}
@@ -217,7 +217,7 @@ export function IntrospectionPanel({ threadId }: Props) {
           {/* QUD Graph */}
           {qudData?.qudGraph?.quds && qudData.qudGraph.quds.length > 0 && (
             <section className="space-y-1 pt-2">
-              <h4 className="text-[10px] font-medium text-muted-foreground/30 uppercase tracking-widest mb-2">
+              <h4 className="text-[10px] font-medium text-muted-foreground/50 uppercase tracking-widest mb-2">
                 Questions
               </h4>
               {qudData.qudGraph.quds.map((q) => {
@@ -230,7 +230,7 @@ export function IntrospectionPanel({ threadId }: Props) {
                     )} />
                     <p className={cn(
                       'text-xs leading-relaxed',
-                      isOpen ? 'text-foreground/50' : 'text-muted-foreground/25'
+                      isOpen ? 'text-foreground/50' : 'text-muted-foreground/50'
                     )}>
                       {q.question}
                     </p>
