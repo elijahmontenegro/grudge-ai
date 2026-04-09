@@ -36,9 +36,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       setResolved(mode)
       root.classList.remove('light', 'dark')
       root.classList.add(mode)
-      // Update body colors from CSS variables
-      document.body.style.background = `var(--color-background)`
-      document.body.style.color = `var(--color-foreground)`
     }
 
     if (theme === 'system') {
