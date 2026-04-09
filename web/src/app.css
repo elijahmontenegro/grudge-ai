@@ -33,45 +33,45 @@
 
 /* Class-based dark mode for JS toggle (mirrors media query above) */
 .dark {
-  --color-primary: #a78bfa;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #151518;
-  --color-secondary-foreground: #fafafa;
-  --color-destructive: #f87171;
-  --color-destructive-foreground: #09090b;
-  --color-border: #1e1e23;
-  --color-input: #1e1e23;
-  --color-ring: #a78bfa;
-  --color-muted: #52525b;
-  --color-muted-foreground: #a1a1aa;
-  --color-background: #0a0a0c;
-  --color-foreground: #ececec;
-  --color-card: #121215;
-  --color-card-foreground: #ececec;
-  --color-accent: #151518;
-  --color-accent-foreground: #fafafa;
+  --color-primary: #a78bfa !important;
+  --color-primary-foreground: #ffffff !important;
+  --color-secondary: #151518 !important;
+  --color-secondary-foreground: #fafafa !important;
+  --color-destructive: #f87171 !important;
+  --color-destructive-foreground: #09090b !important;
+  --color-border: #1e1e23 !important;
+  --color-input: #1e1e23 !important;
+  --color-ring: #a78bfa !important;
+  --color-muted: #52525b !important;
+  --color-muted-foreground: #a1a1aa !important;
+  --color-background: #0a0a0c !important;
+  --color-foreground: #ececec !important;
+  --color-card: #121215 !important;
+  --color-card-foreground: #ececec !important;
+  --color-accent: #151518 !important;
+  --color-accent-foreground: #fafafa !important;
   color-scheme: dark;
 }
 
 /* Class-based light mode override */
 .light {
-  --color-primary: #7c3aed;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #f0f0f3;
-  --color-secondary-foreground: #18181b;
-  --color-destructive: #dc2626;
-  --color-destructive-foreground: #ffffff;
-  --color-border: #e2e2e6;
-  --color-input: #e2e2e6;
-  --color-ring: #7c3aed;
-  --color-muted: #64748b;
-  --color-muted-foreground: #64748b;
-  --color-background: #ffffff;
-  --color-foreground: #0f172a;
-  --color-card: #f8f8fa;
-  --color-card-foreground: #0f172a;
-  --color-accent: #f0f0f3;
-  --color-accent-foreground: #18181b;
+  --color-primary: #7c3aed !important;
+  --color-primary-foreground: #ffffff !important;
+  --color-secondary: #f0f0f3 !important;
+  --color-secondary-foreground: #18181b !important;
+  --color-destructive: #dc2626 !important;
+  --color-destructive-foreground: #ffffff !important;
+  --color-border: #e2e2e6 !important;
+  --color-input: #e2e2e6 !important;
+  --color-ring: #7c3aed !important;
+  --color-muted: #475569 !important;
+  --color-muted-foreground: #475569 !important;
+  --color-background: #ffffff !important;
+  --color-foreground: #0f172a !important;
+  --color-card: #f8f8fa !important;
+  --color-card-foreground: #0f172a !important;
+  --color-accent: #f0f0f3 !important;
+  --color-accent-foreground: #18181b !important;
   color-scheme: light;
 }
 
@@ -92,6 +92,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
 
 #root {
   min-height: 100svh;
