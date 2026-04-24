@@ -2,8 +2,6 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router'
 import { ApolloProvider } from '@apollo/client/react'
-import { TooltipProvider } from '@/components/ui/tooltip'
-import { ThemeProvider } from '@/lib/theme'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { client } from '@/lib/apollo'
 import App from '@/App'
@@ -13,13 +11,9 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
       <ApolloProvider client={client}>
-        <ThemeProvider>
-          <TooltipProvider>
-            <BrowserRouter>
-              <App />
-            </BrowserRouter>
-          </TooltipProvider>
-        </ThemeProvider>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
       </ApolloProvider>
     </ErrorBoundary>
   </StrictMode>,

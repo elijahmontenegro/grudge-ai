@@ -389,3 +389,118 @@ func TestCascadeDelete(t *testing.T) {
 		t.Fatal("message should be cascade-deleted with thread")
 	}
 }
+
+// TestAgentState_NarrowHelpersPreserveFields verifies that the narrow
+// update helpers (SetAgentStatus, SetAgentRoundCount, SetAgentStatusAndMode)
+// do NOT wipe the other columns. Regression guard against the rounds-93/97
+// partial-UPSERT bug where SaveAgentState{Status: x} would reset mode/
+// roundCount/startedAt/durationLimit to zero values.
+func TestAgentState_NarrowHelpersPreserveFields(t *testing.T) {
+	db := testDB(t)
+	db.CreateThread(&pb.Thread{Id: "t-agent", Name: "T", CreatedAt: timestamppb.Now()})
+
+	started := timestamppb.Now().AsTime()
+	full := &AgentState{
+		ThreadID:      "t-agent",
+		Status:        AgentStatusRunning,
+		Mode:          AgentModeAutonomous,
+		RoundCount:    5,
+		StartedAt:     &started,
+		DurationLimit: "1h",
+	}
+	if err := db.SaveAgentState(full); err != nil {
+		t.Fatalf("SaveAgentState full: %v", err)
+	}
+
+	// SetAgentStatus only touches Status.
+	if err := db.SetAgentStatus("t-agent", AgentStatusPaused); err != nil {
+		t.Fatalf("SetAgentStatus: %v", err)
+	}
+	got, err := db.GetAgentState("t-agent")
+	if err != nil {
+		t.Fatalf("GetAgentState after SetAgentStatus: %v", err)
+	}
+	if got.Status != AgentStatusPaused {
+		t.Errorf("Status = %v, want Paused", got.Status)
+	}
+	if got.Mode != AgentModeAutonomous {
+		t.Errorf("Mode wiped by SetAgentStatus: got %v, want Autonomous", got.Mode)
+	}
+	if got.RoundCount != 5 {
+		t.Errorf("RoundCount wiped by SetAgentStatus: got %d, want 5", got.RoundCount)
+	}
+	if got.DurationLimit != "1h" {
+		t.Errorf("DurationLimit wiped by SetAgentStatus: got %q, want 1h", got.DurationLimit)
+	}
+	if got.StartedAt == nil {
+		t.Errorf("StartedAt wiped by SetAgentStatus")
+	}
+
+	// SetAgentRoundCount only touches RoundCount.
+	if err := db.SetAgentRoundCount("t-agent", 42); err != nil {
+		t.Fatalf("SetAgentRoundCount: %v", err)
+	}
+	got, _ = db.GetAgentState("t-agent")
+	if got.RoundCount != 42 {
+		t.Errorf("RoundCount = %d, want 42", got.RoundCount)
+	}
+	if got.Status != AgentStatusPaused {
+		t.Errorf("Status wiped by SetAgentRoundCount: got %v, want Paused", got.Status)
+	}
+	if got.DurationLimit != "1h" {
+		t.Errorf("DurationLimit wiped by SetAgentRoundCount: got %q, want 1h", got.DurationLimit)
+	}
+
+	// SetAgentStatusAndMode touches both, nothing else.
+	if err := db.SetAgentStatusAndMode("t-agent", AgentStatusRunning, AgentModePlan); err != nil {
+		t.Fatalf("SetAgentStatusAndMode: %v", err)
+	}
+	got, _ = db.GetAgentState("t-agent")
+	if got.Status != AgentStatusRunning {
+		t.Errorf("Status = %v, want Running", got.Status)
+	}
+	if got.Mode != AgentModePlan {
+		t.Errorf("Mode = %v, want Plan", got.Mode)
+	}
+	if got.RoundCount != 42 {
+		t.Errorf("RoundCount wiped by SetAgentStatusAndMode: got %d, want 42", got.RoundCount)
+	}
+	if got.DurationLimit != "1h" {
+		t.Errorf("DurationLimit wiped by SetAgentStatusAndMode: got %q, want 1h", got.DurationLimit)
+	}
+}
+
+// TestAgentState_SaveAgentStateIsFullUPSERT documents that SaveAgentState
+// writes every field — it does NOT preserve unset ones. Callers that want
+// to change a single column must use the narrow helpers instead. This test
+// locks in the contract so future changes to SaveAgentState don't silently
+// drift into partial-write behavior that callers might rely on.
+func TestAgentState_SaveAgentStateIsFullUPSERT(t *testing.T) {
+	db := testDB(t)
+	db.CreateThread(&pb.Thread{Id: "t-full", Name: "T", CreatedAt: timestamppb.Now()})
+
+	started := timestamppb.Now().AsTime()
+	if err := db.SaveAgentState(&AgentState{
+		ThreadID: "t-full", Status: AgentStatusRunning, Mode: AgentModeAutonomous,
+		RoundCount: 5, StartedAt: &started, DurationLimit: "1h",
+	}); err != nil {
+		t.Fatalf("SaveAgentState: %v", err)
+	}
+
+	// Partial write — other fields SHOULD be zeroed by design.
+	if err := db.SaveAgentState(&AgentState{
+		ThreadID: "t-full", Status: AgentStatusPaused,
+	}); err != nil {
+		t.Fatalf("SaveAgentState partial: %v", err)
+	}
+	got, _ := db.GetAgentState("t-full")
+	if got.Mode != AgentModeNormal {
+		t.Errorf("Mode = %v after partial save, want Normal (zero) — if this changed, fix callers", got.Mode)
+	}
+	if got.RoundCount != 0 {
+		t.Errorf("RoundCount = %d after partial save, want 0", got.RoundCount)
+	}
+	if got.DurationLimit != "" {
+		t.Errorf("DurationLimit = %q after partial save, want empty", got.DurationLimit)
+	}
+}

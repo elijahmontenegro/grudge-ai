@@ -132,6 +132,7 @@ type ContentBlock struct {
 	//	*ContentBlock_ToolCall
 	//	*ContentBlock_ToolResult
 	//	*ContentBlock_Image
+	//	*ContentBlock_Attachment
 	Block         isContentBlock_Block `protobuf_oneof:"block"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -219,6 +220,15 @@ func (x *ContentBlock) GetImage() *ImageContent {
 	return nil
 }
 
+func (x *ContentBlock) GetAttachment() *AttachmentContent {
+	if x != nil {
+		if x, ok := x.Block.(*ContentBlock_Attachment); ok {
+			return x.Attachment
+		}
+	}
+	return nil
+}
+
 type isContentBlock_Block interface {
 	isContentBlock_Block()
 }
@@ -243,6 +253,10 @@ type ContentBlock_Image struct {
 	Image *ImageContent `protobuf:"bytes,5,opt,name=image,proto3,oneof"`
 }
 
+type ContentBlock_Attachment struct {
+	Attachment *AttachmentContent `protobuf:"bytes,6,opt,name=attachment,proto3,oneof"`
+}
+
 func (*ContentBlock_Text) isContentBlock_Block() {}
 
 func (*ContentBlock_Thinking) isContentBlock_Block() {}
@@ -252,6 +266,8 @@ func (*ContentBlock_ToolCall) isContentBlock_Block() {}
 func (*ContentBlock_ToolResult) isContentBlock_Block() {}
 
 func (*ContentBlock_Image) isContentBlock_Block() {}
+
+func (*ContentBlock_Attachment) isContentBlock_Block() {}
 
 type TextContent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -513,6 +529,96 @@ func (x *ImageContent) GetData() []byte {
 	return nil
 }
 
+// AttachmentContent: a file the user attached to the message, already
+// imported into the thread's workspace. `path` is the sandbox-relative
+// location the agent resolves via FileRead. `inlined_text` carries
+// extracted UTF-8 text for text-like MIME types so RRC can chunk and
+// score attachment content alongside prose; binary attachments leave
+// it empty and are referenced by path only.
+type AttachmentContent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`                             // UUID, also the subdirectory name under _attachments/
+	Filename      string                 `protobuf:"bytes,2,opt,name=filename,proto3" json:"filename,omitempty"`                 // sanitized display name, also the basename on disk
+	MimeType      string                 `protobuf:"bytes,3,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"` // sniffed from actual content at upload time
+	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Path          string                 `protobuf:"bytes,5,opt,name=path,proto3" json:"path,omitempty"`                                  // sandbox-relative, e.g. "/workspace/_attachments/{id}/{filename}"
+	InlinedText   string                 `protobuf:"bytes,6,opt,name=inlined_text,json=inlinedText,proto3" json:"inlined_text,omitempty"` // populated for text/* MIME; capped at a reasonable size
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AttachmentContent) Reset() {
+	*x = AttachmentContent{}
+	mi := &file_spidey_v1_thread_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AttachmentContent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AttachmentContent) ProtoMessage() {}
+
+func (x *AttachmentContent) ProtoReflect() protoreflect.Message {
+	mi := &file_spidey_v1_thread_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AttachmentContent.ProtoReflect.Descriptor instead.
+func (*AttachmentContent) Descriptor() ([]byte, []int) {
+	return file_spidey_v1_thread_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *AttachmentContent) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *AttachmentContent) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *AttachmentContent) GetMimeType() string {
+	if x != nil {
+		return x.MimeType
+	}
+	return ""
+}
+
+func (x *AttachmentContent) GetSizeBytes() int64 {
+	if x != nil {
+		return x.SizeBytes
+	}
+	return 0
+}
+
+func (x *AttachmentContent) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *AttachmentContent) GetInlinedText() string {
+	if x != nil {
+		return x.InlinedText
+	}
+	return ""
+}
+
 type Message struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -527,7 +633,7 @@ type Message struct {
 
 func (x *Message) Reset() {
 	*x = Message{}
-	mi := &file_spidey_v1_thread_proto_msgTypes[6]
+	mi := &file_spidey_v1_thread_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -539,7 +645,7 @@ func (x *Message) String() string {
 func (*Message) ProtoMessage() {}
 
 func (x *Message) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_thread_proto_msgTypes[6]
+	mi := &file_spidey_v1_thread_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -552,7 +658,7 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Message.ProtoReflect.Descriptor instead.
 func (*Message) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_thread_proto_rawDescGZIP(), []int{6}
+	return file_spidey_v1_thread_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Message) GetId() string {
@@ -613,7 +719,7 @@ type Thread struct {
 
 func (x *Thread) Reset() {
 	*x = Thread{}
-	mi := &file_spidey_v1_thread_proto_msgTypes[7]
+	mi := &file_spidey_v1_thread_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -625,7 +731,7 @@ func (x *Thread) String() string {
 func (*Thread) ProtoMessage() {}
 
 func (x *Thread) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_thread_proto_msgTypes[7]
+	mi := &file_spidey_v1_thread_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -638,7 +744,7 @@ func (x *Thread) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Thread.ProtoReflect.Descriptor instead.
 func (*Thread) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_thread_proto_rawDescGZIP(), []int{7}
+	return file_spidey_v1_thread_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Thread) GetId() string {
@@ -701,14 +807,17 @@ var File_spidey_v1_thread_proto protoreflect.FileDescriptor
 
 const file_spidey_v1_thread_proto_rawDesc = "" +
 	"\n" +
-	"\x16spidey/v1/thread.proto\x12\tspidey.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xac\x02\n" +
+	"\x16spidey/v1/thread.proto\x12\tspidey.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xec\x02\n" +
 	"\fContentBlock\x12,\n" +
 	"\x04text\x18\x01 \x01(\v2\x16.spidey.v1.TextContentH\x00R\x04text\x128\n" +
 	"\bthinking\x18\x02 \x01(\v2\x1a.spidey.v1.ThinkingContentH\x00R\bthinking\x129\n" +
 	"\ttool_call\x18\x03 \x01(\v2\x1a.spidey.v1.ToolCallContentH\x00R\btoolCall\x12?\n" +
 	"\vtool_result\x18\x04 \x01(\v2\x1c.spidey.v1.ToolResultContentH\x00R\n" +
 	"toolResult\x12/\n" +
-	"\x05image\x18\x05 \x01(\v2\x17.spidey.v1.ImageContentH\x00R\x05imageB\a\n" +
+	"\x05image\x18\x05 \x01(\v2\x17.spidey.v1.ImageContentH\x00R\x05image\x12>\n" +
+	"\n" +
+	"attachment\x18\x06 \x01(\v2\x1c.spidey.v1.AttachmentContentH\x00R\n" +
+	"attachmentB\a\n" +
 	"\x05block\"!\n" +
 	"\vTextContent\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\"%\n" +
@@ -726,7 +835,15 @@ const file_spidey_v1_thread_proto_rawDesc = "" +
 	"\fImageContent\x12\x1d\n" +
 	"\n" +
 	"media_type\x18\x01 \x01(\tR\tmediaType\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"\xe5\x01\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"\xb2\x01\n" +
+	"\x11AttachmentContent\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
+	"\bfilename\x18\x02 \x01(\tR\bfilename\x12\x1b\n" +
+	"\tmime_type\x18\x03 \x01(\tR\bmimeType\x12\x1d\n" +
+	"\n" +
+	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\x12\x12\n" +
+	"\x04path\x18\x05 \x01(\tR\x04path\x12!\n" +
+	"\finlined_text\x18\x06 \x01(\tR\vinlinedText\"\xe5\x01\n" +
 	"\aMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x04role\x18\x02 \x01(\x0e2\x0f.spidey.v1.RoleR\x04role\x121\n" +
@@ -774,7 +891,7 @@ func file_spidey_v1_thread_proto_rawDescGZIP() []byte {
 }
 
 var file_spidey_v1_thread_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_spidey_v1_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_spidey_v1_thread_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_spidey_v1_thread_proto_goTypes = []any{
 	(Role)(0),                     // 0: spidey.v1.Role
 	(SelectionScope)(0),           // 1: spidey.v1.SelectionScope
@@ -784,9 +901,10 @@ var file_spidey_v1_thread_proto_goTypes = []any{
 	(*ToolCallContent)(nil),       // 5: spidey.v1.ToolCallContent
 	(*ToolResultContent)(nil),     // 6: spidey.v1.ToolResultContent
 	(*ImageContent)(nil),          // 7: spidey.v1.ImageContent
-	(*Message)(nil),               // 8: spidey.v1.Message
-	(*Thread)(nil),                // 9: spidey.v1.Thread
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*AttachmentContent)(nil),     // 8: spidey.v1.AttachmentContent
+	(*Message)(nil),               // 9: spidey.v1.Message
+	(*Thread)(nil),                // 10: spidey.v1.Thread
+	(*timestamppb.Timestamp)(nil), // 11: google.protobuf.Timestamp
 }
 var file_spidey_v1_thread_proto_depIdxs = []int32{
 	3,  // 0: spidey.v1.ContentBlock.text:type_name -> spidey.v1.TextContent
@@ -794,16 +912,17 @@ var file_spidey_v1_thread_proto_depIdxs = []int32{
 	5,  // 2: spidey.v1.ContentBlock.tool_call:type_name -> spidey.v1.ToolCallContent
 	6,  // 3: spidey.v1.ContentBlock.tool_result:type_name -> spidey.v1.ToolResultContent
 	7,  // 4: spidey.v1.ContentBlock.image:type_name -> spidey.v1.ImageContent
-	0,  // 5: spidey.v1.Message.role:type_name -> spidey.v1.Role
-	2,  // 6: spidey.v1.Message.content:type_name -> spidey.v1.ContentBlock
-	10, // 7: spidey.v1.Message.created_at:type_name -> google.protobuf.Timestamp
-	10, // 8: spidey.v1.Thread.created_at:type_name -> google.protobuf.Timestamp
-	10, // 9: spidey.v1.Thread.archived_at:type_name -> google.protobuf.Timestamp
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	8,  // 5: spidey.v1.ContentBlock.attachment:type_name -> spidey.v1.AttachmentContent
+	0,  // 6: spidey.v1.Message.role:type_name -> spidey.v1.Role
+	2,  // 7: spidey.v1.Message.content:type_name -> spidey.v1.ContentBlock
+	11, // 8: spidey.v1.Message.created_at:type_name -> google.protobuf.Timestamp
+	11, // 9: spidey.v1.Thread.created_at:type_name -> google.protobuf.Timestamp
+	11, // 10: spidey.v1.Thread.archived_at:type_name -> google.protobuf.Timestamp
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_spidey_v1_thread_proto_init() }
@@ -817,15 +936,16 @@ func file_spidey_v1_thread_proto_init() {
 		(*ContentBlock_ToolCall)(nil),
 		(*ContentBlock_ToolResult)(nil),
 		(*ContentBlock_Image)(nil),
+		(*ContentBlock_Attachment)(nil),
 	}
-	file_spidey_v1_thread_proto_msgTypes[7].OneofWrappers = []any{}
+	file_spidey_v1_thread_proto_msgTypes[8].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_spidey_v1_thread_proto_rawDesc), len(file_spidey_v1_thread_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

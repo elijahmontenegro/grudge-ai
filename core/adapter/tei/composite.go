@@ -2,104 +2,63 @@ package tei
 
 import (
 	"context"
-	"math"
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/internal/httpc"
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 )
 
-// CompositeClassifier combines NLI classification with embedding cosine
-// similarity. Returns the stronger dependency signal for each pair.
-// The Classifier interface is satisfied — the engine doesn't know or care
-// that multiple models contribute to the score.
+// CompositeClassifier is the TEI-backed Classifier + companion embedder
+// wired to separate TEI endpoints (reranker on one port, embedder on
+// another). It exposes both the Classifier surface (Rerank) and the
+// underlying embedder so the engine can do cosine-based prefiltering
+// without a second adapter.
+//
+// The "composite" name is historical — under the old NLI+embedding
+// design, this struct fused two signals before returning. Now it's a
+// thin wrapper that just makes the two services addressable through
+// one handle. Max-merge of cosine and reranker scores happens in the
+// engine, which owns the chunk-level score cache and the aggregation.
 type CompositeClassifier struct {
-	nli      *classifier // TEI /predict (NLI model)
-	embedder *embedder   // TEI /embed (embedding model)
+	reranker *classifier // TEI /rerank
+	emb      *embedder   // TEI /embed
 }
 
-// NewCompositeClassifier creates a classifier that fuses NLI entailment
-// with embedding similarity. nliURL serves a cross-encoder NLI model,
-// embedURL serves an embedding model. Either can be empty to disable.
-func NewCompositeClassifier(nliURL, embedURL string) core.Classifier {
+// NewCompositeClassifier creates the composite. Either URL may be
+// empty to disable that signal. Missing reranker → engine falls back
+// to cosine-only (weaker but functional); missing embedder → engine
+// runs all pairs through the reranker without prefiltering.
+func NewCompositeClassifier(rerankURL, embedURL string) *CompositeClassifier {
 	cc := &CompositeClassifier{}
-	if nliURL != "" {
-		cc.nli = &classifier{
-			baseURL: nliURL,
-			client:  httpc.New(httpc.TimeoutDefault, nil),
+	if rerankURL != "" {
+		cc.reranker = &classifier{
+			baseURL: rerankURL,
+			client:  httpc.New(httpc.TimeoutTEI, nil),
 		}
 	}
 	if embedURL != "" {
-		cc.embedder = &embedder{
+		cc.emb = &embedder{
 			baseURL: embedURL,
-			client:  httpc.New(httpc.TimeoutDefault, nil),
+			client:  httpc.New(httpc.TimeoutTEI, nil),
 		}
 	}
 	return cc
 }
 
-func (c *CompositeClassifier) Classify(ctx context.Context, req *pb.ClassifyRequest) (*pb.ClassifyResponse, error) {
-	var nliScore, simScore float64
-
-	// NLI signal
-	if c.nli != nil {
-		resp, err := c.nli.Classify(ctx, req)
-		if err == nil {
-			for _, l := range resp.Labels {
-				if l.Name == "entailment" {
-					nliScore = float64(l.Probability)
-					break
-				}
-			}
-		}
+// Embedder returns the underlying embedder so engine / backfill code
+// can produce vectors. nil if no embed URL was configured.
+func (c *CompositeClassifier) Embedder() core.Embedder {
+	if c.emb == nil {
+		return nil
 	}
-
-	// Embedding similarity signal
-	if c.embedder != nil {
-		vecA, errA := c.embedder.Embed(ctx, req.TextA)
-		vecB, errB := c.embedder.Embed(ctx, req.TextB)
-		if errA == nil && errB == nil {
-			simScore = cosine(vecA, vecB)
-		}
-	}
-
-	// Take the max — whichever signal is stronger for this pair
-	score := math.Max(nliScore, simScore)
-
-	return &pb.ClassifyResponse{
-		Labels: []*pb.ClassLabel{
-			{Name: "entailment", Probability: float32(score)},
-			{Name: "neutral", Probability: float32(1 - score)},
-			{Name: "contradiction", Probability: 0},
-		},
-	}, nil
+	return c.emb
 }
 
-func (c *CompositeClassifier) ClassifyBatch(ctx context.Context, req *pb.BatchClassifyRequest) (*pb.BatchClassifyResponse, error) {
-	results := make([]*pb.ClassifyResponse, len(req.Pairs))
-	for i, pair := range req.Pairs {
-		resp, err := c.Classify(ctx, pair)
-		if err != nil {
-			return nil, err
-		}
-		results[i] = resp
+// Rerank delegates to the reranker. Without one wired, returns zeros
+// so callers don't need to conditionally skip — "no signal" is a
+// valid answer per protocol §I13 (zero-return valid).
+func (c *CompositeClassifier) Rerank(ctx context.Context, query string, candidates []string) ([]float64, error) {
+	if c.reranker == nil || len(candidates) == 0 {
+		return make([]float64, len(candidates)), nil
 	}
-	return &pb.BatchClassifyResponse{Results: results}, nil
-}
-
-func cosine(a, b []float32) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	denom := math.Sqrt(normA) * math.Sqrt(normB)
-	if denom == 0 {
-		return 0
-	}
-	return dot / denom
+	return c.reranker.Rerank(ctx, query, candidates)
 }

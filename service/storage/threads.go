@@ -122,6 +122,41 @@ func (d *DB) DeleteThread(id string) error {
 	return err
 }
 
+// UpdateThread updates a thread's mutable fields (name, working_dirs, sandboxed).
+// Working dirs live in their own table (thread_working_dirs) — not as a column
+// on threads — so we update the scalar fields in one statement and replace the
+// join rows in two more. Wrapped in a transaction so a partial failure can't
+// leave the dirs half-replaced.
+func (d *DB) UpdateThread(t *pb.Thread) error {
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		`UPDATE threads SET name = ?, sandboxed = ? WHERE id = ?`,
+		t.Name, boolToInt(t.Sandboxed), t.Id,
+	); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(
+		`DELETE FROM thread_working_dirs WHERE thread_id = ?`, t.Id,
+	); err != nil {
+		return err
+	}
+	for _, dir := range t.WorkingDirs {
+		if _, err := tx.Exec(
+			`INSERT INTO thread_working_dirs (thread_id, dir) VALUES (?, ?)`,
+			t.Id, dir,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // UpdateThreadName sets the thread name.
 func (d *DB) UpdateThreadName(id, name string) error {
 	_, err := d.Exec(`UPDATE threads SET name = ? WHERE id = ?`, name, id)
@@ -162,23 +197,27 @@ func (d *DB) BackfillThreadNames() int {
 		if text == "" {
 			continue
 		}
-		name := text
-		if len(name) > 60 {
-			i := 57
-			for i > 30 && name[i] != ' ' {
-				i--
-			}
-			if name[i] == ' ' {
-				name = name[:i] + "..."
-			} else {
-				name = name[:57] + "..."
-			}
-		}
+		name := TruncateThreadName(text)
 		if d.UpdateThreadName(id, name) == nil {
 			count++
 		}
 	}
 	return count
+}
+
+// TruncateThreadName truncates a thread name to ~60 chars at a word boundary.
+func TruncateThreadName(name string) string {
+	if len(name) <= 60 {
+		return name
+	}
+	i := 57
+	for i > 30 && name[i] != ' ' {
+		i--
+	}
+	if name[i] == ' ' {
+		return name[:i] + "..."
+	}
+	return name[:57] + "..."
 }
 
 func boolToInt(b bool) int {

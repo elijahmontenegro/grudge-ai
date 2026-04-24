@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"encoding/json"
 	"strings"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
@@ -13,6 +14,44 @@ func ProtoToText(blocks []*pb.ContentBlock) string {
 	for _, b := range blocks {
 		if t := b.GetText(); t != nil {
 			sb.WriteString(t.Text)
+		}
+	}
+	return sb.String()
+}
+
+// ProtoToAllText extracts every semantic-bearing text from a message's
+// content blocks — text, thinking, tool-call arguments, tool-result
+// content, attachment inlined text. This is the right primitive for
+// deriving the RRC Query from a message, because an autonomous turn's
+// meaningful content is almost never in a plain text block — it's in
+// the model's thinking, the FileWrite arguments (which carry chapter
+// prose), and tool results. Mirrors storage's textFromBlocks so the
+// Query text matches what the embedder was given at ingest time.
+func ProtoToAllText(blocks []*pb.ContentBlock) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		switch {
+		case b.GetText() != nil:
+			sb.WriteString(b.GetText().Text)
+			sb.WriteByte('\n')
+		case b.GetThinking() != nil:
+			sb.WriteString(b.GetThinking().Text)
+			sb.WriteByte('\n')
+		case b.GetToolCall() != nil:
+			tc := b.GetToolCall()
+			sb.WriteString(tc.Name)
+			sb.WriteString(": ")
+			sb.WriteString(tc.Arguments)
+			sb.WriteByte('\n')
+		case b.GetToolResult() != nil:
+			sb.WriteString(b.GetToolResult().Content)
+			sb.WriteByte('\n')
+		case b.GetAttachment() != nil:
+			a := b.GetAttachment()
+			if a.InlinedText != "" {
+				sb.WriteString(a.InlinedText)
+				sb.WriteByte('\n')
+			}
 		}
 	}
 	return sb.String()
@@ -33,25 +72,7 @@ func MessageToLLM(msg *pb.Message) *pb.LLMMessage {
 	}
 }
 
-// MessagesToLLM converts a slice of Messages to LLMMessages.
-func MessagesToLLM(msgs []*pb.Message) []*pb.LLMMessage {
-	result := make([]*pb.LLMMessage, len(msgs))
-	for i, m := range msgs {
-		result[i] = MessageToLLM(m)
-	}
-	return result
-}
-
 // --- genai <-> proto conversions ---
-
-// GenaiToProtoMessages converts genai.Content slices to proto LLMMessages.
-func GenaiToProtoMessages(contents []*genai.Content) []*pb.LLMMessage {
-	var msgs []*pb.LLMMessage
-	for _, c := range contents {
-		msgs = append(msgs, GenaiContentToProto(c))
-	}
-	return msgs
-}
 
 // GenaiContentToProto converts a single genai.Content to proto LLMMessage.
 func GenaiContentToProto(c *genai.Content) *pb.LLMMessage {
@@ -71,25 +92,11 @@ func GenaiContentToProto(c *genai.Content) *pb.LLMMessage {
 			}
 		}
 		if p.FunctionCall != nil {
-			argsJSON := ""
+			argsJSON := "{}"
 			if p.FunctionCall.Args != nil {
-				// Args is map[string]any — serialize to JSON string
-				var sb strings.Builder
-				sb.WriteString("{")
-				first := true
-				for k, v := range p.FunctionCall.Args {
-					if !first {
-						sb.WriteString(",")
-					}
-					sb.WriteString(`"` + k + `":"`)
-					if s, ok := v.(string); ok {
-						sb.WriteString(s)
-					}
-					sb.WriteString(`"`)
-					first = false
+				if b, err := json.Marshal(p.FunctionCall.Args); err == nil {
+					argsJSON = string(b)
 				}
-				sb.WriteString("}")
-				argsJSON = sb.String()
 			}
 			msg.Content = append(msg.Content, &pb.ContentBlock{
 				Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallContent{
@@ -100,10 +107,19 @@ func GenaiContentToProto(c *genai.Content) *pb.LLMMessage {
 			})
 		}
 		if p.FunctionResponse != nil {
+			// Store the FULL response map as JSON. Older code extracted
+			// only the `"result"` key, which worked for tools that
+			// wrapped their return as `{result: "..."}` but silently
+			// dropped anything else — AskUserQuestion returns
+			// `{answers: {...}}`, so the content landed in storage as
+			// an empty string and the model saw null on the next
+			// round (then re-asked the question as prose). Preserving
+			// the whole JSON object keeps every tool's schema intact
+			// regardless of key name.
 			respText := ""
-			if p.FunctionResponse.Response != nil {
-				if s, ok := p.FunctionResponse.Response["result"].(string); ok {
-					respText = s
+			if resp := p.FunctionResponse.Response; resp != nil {
+				if b, err := json.Marshal(resp); err == nil {
+					respText = string(b)
 				}
 			}
 			msg.Content = append(msg.Content, &pb.ContentBlock{
@@ -129,19 +145,36 @@ func ProtoToGenaiContent(msg *pb.LLMMessage) *genai.Content {
 		case *pb.ContentBlock_Thinking:
 			c.Parts = append(c.Parts, &genai.Part{Text: v.Thinking.Text, Thought: true})
 		case *pb.ContentBlock_ToolCall:
+			var args map[string]any
+			if v.ToolCall.Arguments != "" {
+				json.Unmarshal([]byte(v.ToolCall.Arguments), &args)
+			}
 			c.Parts = append(c.Parts, &genai.Part{
 				FunctionCall: &genai.FunctionCall{
 					ID:   v.ToolCall.Id,
 					Name: v.ToolCall.Name,
+					Args: args,
 				},
 			})
 		case *pb.ContentBlock_ToolResult:
+			// Re-hydrate the stored JSON back into a map so the model
+			// sees the original tool schema (e.g. `{answers: {...}}`
+			// for AskUserQuestion), not a synthetic `{result: ""}`.
+			// Falls back to `{result: <raw>}` when the content wasn't
+			// valid JSON (legacy rows or tools that returned a plain
+			// string), so old data keeps flowing.
+			var resp map[string]any
+			if v.ToolResult.Content != "" {
+				if err := json.Unmarshal([]byte(v.ToolResult.Content), &resp); err != nil || resp == nil {
+					resp = map[string]any{"result": v.ToolResult.Content}
+				}
+			} else {
+				resp = map[string]any{"result": ""}
+			}
 			c.Parts = append(c.Parts, &genai.Part{
 				FunctionResponse: &genai.FunctionResponse{
-					ID: v.ToolResult.ToolCallId,
-					Response: map[string]any{
-						"result": v.ToolResult.Content,
-					},
+					ID:       v.ToolResult.ToolCallId,
+					Response: resp,
 				},
 			})
 		}
@@ -181,6 +214,15 @@ func genaiRoleToProto(role string) pb.Role {
 	}
 }
 
+// MarshalFunctionArgs serializes function call args to JSON.
+func MarshalFunctionArgs(args map[string]any) (string, error) {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "{}", err
+	}
+	return string(b), nil
+}
+
 func protoRoleToGenai(role pb.Role) string {
 	switch role {
 	case pb.Role_ROLE_USER:
@@ -188,7 +230,10 @@ func protoRoleToGenai(role pb.Role) string {
 	case pb.Role_ROLE_ASSISTANT:
 		return "model"
 	case pb.Role_ROLE_SYSTEM:
-		return "user" // genai doesn't have system role — prepend to first user message
+		// genai has no "system" role. Map to "user" as a carrier —
+		// the actual system instruction is handled separately via
+		// req.Config.SystemInstruction, not through content roles.
+		return "user"
 	default:
 		return "user"
 	}

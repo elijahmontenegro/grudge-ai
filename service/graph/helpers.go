@@ -1,151 +1,130 @@
 package graph
 
 import (
-	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 
-	"github.com/emontenegr/spidey/core"
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/service/adapter"
 )
 
-func completeWithBackoff(ctx context.Context, completer core.Completer, msgs []*pb.LLMMessage, selected []*pb.SelectedMessage) (*pb.CompletionResponse, error) {
-	for {
-		resp, err := completer.Complete(ctx, &pb.CompletionRequest{Messages: msgs})
-		if err == nil {
-			return resp, nil
-		}
+// threadIDPattern enforces the server-generated thread ID format
+// (CreateThread emits `thread-{unixnano}`). Refusing anything else at the
+// plan-dir boundary prevents two classes of abuse from client-supplied IDs:
+//  1. Hard traversal (../etc/foo) that escapes plansRoot.
+//  2. Soft traversal (../../etc/foo) whose filepath.Clean result stays
+//     inside plansRoot but outside the plan-{id} convention — the agent's
+//     planGuard only checks HasPrefix(PlanDir, root), so a crafted threadID
+//     could pollute arbitrary subdirs under plans/.
+var threadIDPattern = regexp.MustCompile(`^thread-\d+$`)
 
-		// Check if it's a context-length error
-		errMsg := err.Error()
-		isContextLength := strings.Contains(errMsg, "context_length") ||
-			strings.Contains(errMsg, "maximum context") ||
-			strings.Contains(errMsg, "too many tokens") ||
-			strings.Contains(errMsg, "max_tokens")
+// planDirForThread returns the absolute plan directory for a thread. Rejects
+// any threadID that isn't the server-generated `thread-{unixnano}` format.
+// Retains the HasPrefix belt-and-suspenders check in case the format changes
+// in the future and someone forgets to re-tighten here.
+func planDirForThread(dataDir, threadID string) (string, error) {
+	if threadID == "" {
+		return "", fmt.Errorf("empty threadID")
+	}
+	if !threadIDPattern.MatchString(threadID) {
+		return "", fmt.Errorf("invalid threadID format: %q", threadID)
+	}
+	root, err := filepath.Abs(filepath.Join(dataDir, "plans"))
+	if err != nil {
+		return "", fmt.Errorf("resolve plans root: %w", err)
+	}
+	dir := filepath.Clean(filepath.Join(root, fmt.Sprintf("plan-%s", threadID)))
+	if dir != root && !strings.HasPrefix(dir, root+string(os.PathSeparator)) {
+		return "", fmt.Errorf("invalid threadID: path escapes plans directory")
+	}
+	return dir, nil
+}
 
-		if !isContextLength || len(msgs) <= 1 {
-			return nil, err
-		}
-
-		// Drop the lowest-scored message (first in payload, which is lowest after prompt)
-		msgs = msgs[1:]
+// protoRoleToDisplay maps proto roles to frontend-friendly names.
+// Decouples the frontend from proto enum string representations.
+func protoRoleToDisplay(r pb.Role) string {
+	switch r {
+	case pb.Role_ROLE_USER:
+		return "user"
+	case pb.Role_ROLE_ASSISTANT:
+		return "assistant"
+	case pb.Role_ROLE_SYSTEM:
+		return "system"
+	default:
+		return "unknown"
 	}
 }
 
-// streamCompletion streams a completion, publishing deltas to the subscription
-// channel. Returns the accumulated content blocks for storage.
-func streamCompletion(ctx context.Context, completer core.Completer, msgs []*pb.LLMMessage, msgID, threadID string, publish func(string, *StreamEvent)) ([]*pb.ContentBlock, error) {
-	ch, err := completer.Stream(ctx, &pb.CompletionRequest{Messages: msgs})
-	if err != nil {
-		return nil, err
-	}
-
-	var blocks []*pb.ContentBlock
-	var textBuf strings.Builder
-
-	for chunk := range ch {
-		if chunk.Error != nil {
-			publish(threadID, &StreamEvent{
-				MessageID: msgID,
-				Error:     chunk.Error,
-				Done:      true,
-			})
-			return nil, fmt.Errorf("%s", *chunk.Error)
-		}
-
-		if chunk.Done {
-			break
-		}
-
-		switch d := chunk.Delta.(type) {
-		case *pb.StreamChunk_Text:
-			text := d.Text.Text
-			textBuf.WriteString(text)
-			publish(threadID, &StreamEvent{
-				MessageID: msgID,
-				Delta:     &text,
-			})
-		case *pb.StreamChunk_Thinking:
-			text := d.Thinking.Text
-			publish(threadID, &StreamEvent{
-				MessageID: msgID,
-				Thinking:  &text,
-			})
-			blocks = append(blocks, &pb.ContentBlock{
-				Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: text}},
-			})
+// protoContentToDisplay extracts text-only content from proto blocks.
+// Tool calls and results are returned via separate structured resolvers.
+func protoContentToDisplay(blocks []*pb.ContentBlock) string {
+	var parts []string
+	for _, b := range blocks {
+		if t := b.GetText(); t != nil {
+			parts = append(parts, t.Text)
 		}
 	}
+	return strings.Join(parts, "\n\n")
+}
 
-	// Flush accumulated text as a content block
-	if textBuf.Len() > 0 {
-		blocks = append(blocks, &pb.ContentBlock{
-			Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: textBuf.String()}},
+// protoToolCalls extracts tool call blocks from proto content.
+func protoToolCalls(blocks []*pb.ContentBlock) []*pb.ToolCallContent {
+	var calls []*pb.ToolCallContent
+	for _, b := range blocks {
+		if tc := b.GetToolCall(); tc != nil {
+			calls = append(calls, tc)
+		}
+	}
+	return calls
+}
+
+// protoToolResults extracts tool result blocks from proto content.
+func protoToolResults(blocks []*pb.ContentBlock) []*pb.ToolResultContent {
+	var results []*pb.ToolResultContent
+	for _, b := range blocks {
+		if tr := b.GetToolResult(); tr != nil {
+			results = append(results, tr)
+		}
+	}
+	return results
+}
+
+// protoThinkingContent extracts thinking text from content blocks.
+func protoThinkingContent(blocks []*pb.ContentBlock) string {
+	var parts []string
+	for _, b := range blocks {
+		if t := b.GetThinking(); t != nil {
+			parts = append(parts, t.Text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// attachmentInputsToBlocks converts GraphQL AttachmentInput values into
+// proto AttachmentContent blocks. The client has already uploaded files
+// via POST /api/attachments/{threadId} and echoed back the metadata —
+// this is a pure shape transform, no re-validation.
+func attachmentInputsToBlocks(inputs []*AttachmentInput) []*pb.AttachmentContent {
+	out := make([]*pb.AttachmentContent, 0, len(inputs))
+	for _, a := range inputs {
+		if a == nil {
+			continue
+		}
+		inlined := ""
+		if a.InlinedText != nil {
+			inlined = *a.InlinedText
+		}
+		out = append(out, &pb.AttachmentContent{
+			Id:          a.ID,
+			Filename:    a.Filename,
+			MimeType:    a.MimeType,
+			SizeBytes:   int64(a.SizeBytes),
+			Path:        a.Path,
+			InlinedText: inlined,
 		})
 	}
-
-	// Signal done
-	publish(threadID, &StreamEvent{
-		MessageID: msgID,
-		Done:      true,
-	})
-
-	return blocks, nil
+	return out
 }
 
-func protoThreadToGQL(t *pb.Thread) *Thread {
-	gql := &Thread{
-		ID:          t.Id,
-		Name:        t.Name,
-		WorkingDirs: t.WorkingDirs,
-		Sandboxed:   t.Sandboxed,
-		CreatedAt:   t.CreatedAt.AsTime(),
-	}
-	if t.ParentThreadId != nil {
-		gql.ParentThreadID = t.ParentThreadId
-	}
-	if t.BranchPointPosition != nil {
-		pos := int(*t.BranchPointPosition)
-		gql.BranchPointPosition = &pos
-	}
-	if t.ArchivedAt != nil {
-		at := t.ArchivedAt.AsTime()
-		gql.ArchivedAt = &at
-	}
-	return gql
-}
-
-func protoMessageToGQL(m *pb.Message) *Message {
-	return &Message{
-		ID:        m.Id,
-		Role:      m.Role.String(),
-		Content:   adapter.ProtoToText(m.Content),
-		Position:  int(m.Position),
-		ThreadID:  m.ThreadId,
-		CreatedAt: m.CreatedAt.AsTime(),
-	}
-}
-
-func protoQUDGraphToGQL(g *pb.QUDGraph) *QUDGraph {
-	if g == nil {
-		return &QUDGraph{}
-	}
-	quds := make([]*QUD, len(g.Quds))
-	for i, q := range g.Quds {
-		quds[i] = &QUD{
-			ID:            q.Id,
-			Question:      q.Question,
-			EstablishedBy: q.EstablishedBy,
-			Status:        q.Status.String(),
-			AddressedBy:   q.AddressedBy,
-		}
-		if q.ParentQudId != "" {
-			quds[i].ParentQudID = &q.ParentQudId
-		}
-	}
-	return &QUDGraph{
-		Quds:        quds,
-		ActiveStack: g.ActiveStack,
-	}
-}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -68,24 +69,45 @@ func (a *AutonomousState) waitIfPaused(ctx context.Context) error {
 	}
 }
 
-// RunAutonomous starts the autonomous loop. The model continues receiving
-// RRC rounds with empty user messages until the timer expires, context
-// is cancelled, or pause/resume controls are used.
-func (r *Runner) RunAutonomous(ctx context.Context, prompt string, duration time.Duration) error {
-	r.SetMode(ModeAutonomous)
-	defer r.SetMode(ModeNormal)
-
+// RunAutonomous starts the autonomous loop. Each round is a real Event
+// in the Store — the loop prompts the agent with a continuation directive
+// ("continue"), which flows through SendMessage exactly like a user turn:
+// stored as a user message in the corpus, becomes the Query for RRC, drives
+// Selection. The autonomous intent lives at THIS layer; downstream
+// assembly and adapters stay pure (no prompt augmentation). Attachments
+// supplied here land on the initial kickoff message only.
+//
+// Per spec (spec/web/MANIFEST.adoc:187): "Autonomous run fails mid-execution
+// → agent pauses with error visible, user reviews, retries or stops."
+// A SendMessage error is NOT an exit condition — the loop pauses via
+// autoState, lets OnAutonomousError surface the error (published to the
+// UI + written into the thread as a system message), and waits. The
+// user decides: resume (with optional correction) or stop. This matches
+// how the same class of failure is handled in normal (non-autonomous)
+// sends — spec calls for symmetric error handling.
+func (r *Runner) RunAutonomous(ctx context.Context, prompt string, duration time.Duration, attachments ...*pb.AttachmentContent) error {
 	r.mu.Lock()
 	r.autoState = newAutonomousState()
 	r.mu.Unlock()
 
-	if _, err := r.SendMessage(ctx, prompt, pb.SelectionScope_SELECTION_SCOPE_THREAD); err != nil {
-		return err
+	if _, err := r.SendMessage(ctx, prompt, pb.SelectionScope_SELECTION_SCOPE_THREAD, attachments...); err != nil && !errors.Is(err, ErrNoResponse) {
+		// Kickoff error (genuine, not ErrNoResponse): if a handler is
+		// wired, pause and surface; otherwise the loop can't start so
+		// return as before. ErrNoResponse on kickoff (empty response
+		// to the kickoff prompt) isn't a failure — loop proceeds to
+		// ticking.
+		if r.OnAutonomousError != nil {
+			r.OnAutonomousError(err)
+		} else {
+			return err
+		}
 	}
 
+	started := time.Now()
+	round := 1
 	deadline := time.After(duration)
 	for {
-		// Check pause
+		// Check pause — blocks here if an error paused us last iteration.
 		if err := r.autoState.waitIfPaused(ctx); err != nil {
 			return err
 		}
@@ -96,11 +118,45 @@ func (r *Runner) RunAutonomous(ctx context.Context, prompt string, duration time
 		case <-deadline:
 			return nil
 		default:
-			if _, err := r.SendMessage(ctx, "", pb.SelectionScope_SELECTION_SCOPE_THREAD); err != nil {
+			// Autonomous tick is an empty Event: runner passes
+			// msg=nil to ADK which walks session history. If the
+			// model has nothing to add, ADK yields zero events and
+			// processEvents returns ErrNoResponse.
+			//
+			// Per spec (MANIFEST.adoc §142): the timer is the only
+			// natural exit. The model is NOT allowed to signal
+			// completion of an autonomous run — a silent tick is a
+			// no-op, not a pause-trigger. The loop ticks through
+			// until the deadline regardless of whether any
+			// individual round produced output.
+			//
+			// Real errors (provider unreachable, classifier offline,
+			// protocol validation failure) still pause via
+			// OnAutonomousError so the operator can intervene.
+			_, err := r.SendMessage(ctx, "", pb.SelectionScope_SELECTION_SCOPE_THREAD)
+			if err != nil && !errors.Is(err, ErrNoResponse) {
+				if r.OnAutonomousError != nil {
+					r.OnAutonomousError(err)
+					continue
+				}
 				return err
+			}
+			round++
+			if r.onRound != nil {
+				r.onRound(round, time.Since(started))
 			}
 		}
 	}
+}
+
+// IsAutonomousActive reports whether an autonomous loop goroutine is live
+// on this runner. Used by resumeAgent to distinguish "unpause the active
+// loop" from "restart a dead loop" — the UX of "resume" should not silently
+// no-op when the underlying goroutine has exited.
+func (r *Runner) IsAutonomousActive() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.autoState != nil
 }
 
 // PauseAutonomous pauses the autonomous loop.

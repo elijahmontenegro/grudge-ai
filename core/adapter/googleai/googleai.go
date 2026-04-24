@@ -41,7 +41,7 @@ func (p *provider) Completer(model string) (core.Completer, error) {
 		model:        model,
 		apiKey:       p.cfg.APIKey,
 		client:       p.client,
-		streamClient: httpc.New(httpc.TimeoutStreaming, nil),
+		streamClient: httpc.NewStreaming(nil),
 	}, nil
 }
 

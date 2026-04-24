@@ -110,7 +110,7 @@ func (h *Handler) handleAnthropic(w http.ResponseWriter, r *http.Request) {
 // runStatelessRRC creates an ephemeral engine, scores all messages, selects for
 // the last message (the prompt), and returns the selected messages.
 func (h *Handler) runStatelessRRC(ctx context.Context, messages []*pb.Message) ([]*pb.Message, error) {
-	engine := rrc.NewEngine(h.rrcCfg, h.classifier, h.completer)
+	engine := rrc.NewEngine(h.rrcCfg, h.classifier)
 
 	// Score each message against its predecessors
 	for i, msg := range messages {

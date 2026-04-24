@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"github.com/emontenegr/spidey/service/sandbox"
 	"google.golang.org/adk/tool"
@@ -43,7 +44,7 @@ func DefaultPermission(toolName string) string {
 // --- Tool argument/result types ---
 
 type BashArgs struct {
-	Command string `json:"command" jsonschema:"description=Shell command to execute"`
+	Command string `json:"command"`
 }
 type BashResult struct {
 	Output   string `json:"output"`
@@ -51,126 +52,152 @@ type BashResult struct {
 }
 
 type FileReadArgs struct {
-	Path   string `json:"path" jsonschema:"description=Absolute file path to read"`
-	Offset int    `json:"offset,omitempty" jsonschema:"description=Line number to start reading from"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"description=Number of lines to read"`
+	Path   string `json:"path"`
+	Offset int    `json:"offset,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
 }
 type FileReadResult struct {
-	Content string `json:"content"`
+	Output string `json:"output"`
 }
 
 type FileEditArgs struct {
-	Path      string `json:"path" jsonschema:"description=Absolute file path"`
-	OldString string `json:"old_string" jsonschema:"description=Text to find and replace"`
-	NewString string `json:"new_string" jsonschema:"description=Replacement text"`
+	Path      string `json:"path"`
+	OldString string `json:"old_string"`
+	NewString string `json:"new_string"`
 }
 type FileEditResult struct {
 	Success bool `json:"success"`
 }
 
 type FileWriteArgs struct {
-	Path    string `json:"path" jsonschema:"description=Absolute file path"`
-	Content string `json:"content" jsonschema:"description=File content to write"`
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 type FileWriteResult struct {
-	Success bool `json:"success"`
+	Success bool   `json:"success"`
+	Path    string `json:"path,omitempty"`
 }
 
 type GlobArgs struct {
-	Pattern string `json:"pattern" jsonschema:"description=Glob pattern (e.g. **/*.go)"`
-	Path    string `json:"path,omitempty" jsonschema:"description=Directory to search in"`
+	Pattern string `json:"pattern"`
+	Path    string `json:"path,omitempty"`
 }
 type GlobResult struct {
 	Files []string `json:"files"`
 }
 
 type GrepArgs struct {
-	Pattern string `json:"pattern" jsonschema:"description=Regex pattern to search for"`
-	Path    string `json:"path,omitempty" jsonschema:"description=File or directory to search"`
+	Pattern string `json:"pattern"`
+	Path    string `json:"path,omitempty"`
 }
 type GrepResult struct {
 	Matches []string `json:"matches"`
 }
 
 type NotebookEditArgs struct {
-	Path    string `json:"path" jsonschema:"description=Path to Jupyter notebook"`
-	CellIdx int    `json:"cell_index" jsonschema:"description=Cell index to edit"`
-	Content string `json:"content" jsonschema:"description=New cell content"`
+	Path    string `json:"path"`
+	CellIdx int    `json:"cell_index"`
+	Content string `json:"content"`
 }
 type NotebookEditResult struct {
 	Success bool `json:"success"`
 }
 
 type WebSearchArgs struct {
-	Query string `json:"query" jsonschema:"description=Search query"`
+	Query string `json:"query"`
 }
 type WebSearchResult struct {
 	Results []string `json:"results"`
 }
 
 type WebFetchArgs struct {
-	URL string `json:"url" jsonschema:"description=URL to fetch"`
+	URL string `json:"url"`
 }
 type WebFetchResult struct {
-	Content    string `json:"content"`
+	Output     string `json:"output"`
 	StatusCode int    `json:"status_code"`
 }
 
-type AskUserArgs struct {
-	Question string `json:"question" jsonschema:"description=Question to ask the user"`
+// AskUserOption is one choice offered for a single question. Label is
+// what's shown; Description is an optional clarifier beneath the label.
+type AskUserOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
 }
+
+// AskUserQuestion carries one prompt. Structure mirrors Claude Code's
+// AskUserQuestion tool so the same prompting conventions carry over:
+// a short `header` (like a setting name), the question itself, optional
+// `options` (2–4 concise choices), and `multiSelect` when multiple
+// answers are allowed at once.
+type AskUserQuestion struct {
+	Question    string          `json:"question"`
+	Header      string          `json:"header,omitempty"`
+	Options     []AskUserOption `json:"options,omitempty"`
+	MultiSelect bool            `json:"multiSelect,omitempty"`
+}
+
+// AskUserArgs accepts 1–4 questions in a single tool call. The UI walks
+// through them sequentially and batches answers back as one map.
+type AskUserArgs struct {
+	Questions []AskUserQuestion `json:"questions"`
+}
+
+// AskUserResult returns the user's answers keyed by question text so the
+// model can correlate each answer with the question it corresponds to
+// without positional matching.
 type AskUserResult struct {
-	Response string `json:"response"`
+	Answers map[string]string `json:"answers"`
 }
 
 type SkillArgs struct {
-	Name string `json:"name" jsonschema:"description=Skill name to invoke"`
-	Args string `json:"args,omitempty" jsonschema:"description=Arguments for the skill"`
+	Name string `json:"name"`
+	Args string `json:"args,omitempty"`
 }
 type SkillResult struct {
 	Output string `json:"output"`
 }
 
 type TodoWriteArgs struct {
-	Tasks []string `json:"tasks" jsonschema:"description=List of task descriptions"`
+	Tasks []string `json:"tasks"`
 }
 type TodoWriteResult struct {
 	Success bool `json:"success"`
 }
 
 type PlanModeArgs struct {
-	ThreadID string `json:"thread_id" jsonschema:"description=Thread ID"`
+	ThreadID string `json:"thread_id"`
 }
 type PlanModeResult struct {
 	Success bool `json:"success"`
 }
 
 type AgentToolArgs struct {
-	Task        string `json:"task" jsonschema:"description=Task for the subagent"`
-	Description string `json:"description,omitempty" jsonschema:"description=Brief description of what the agent will do"`
+	Task        string `json:"task"`
+	Description string `json:"description,omitempty"`
 }
 type AgentToolResult struct {
 	Result string `json:"result"`
 }
 
 type SendMessageArgs struct {
-	To      string `json:"to" jsonschema:"description=Agent name or ID to send message to"`
-	Message string `json:"message" jsonschema:"description=Message content"`
+	To      string `json:"to"`
+	Message string `json:"message"`
 }
 type SendMessageResult struct {
 	Response string `json:"response"`
 }
 
 type TaskCreateArgs struct {
-	Subject     string `json:"subject" jsonschema:"description=Task title"`
-	Description string `json:"description" jsonschema:"description=Task description"`
+	Subject     string `json:"subject"`
+	Description string `json:"description"`
 }
 type TaskCreateResult struct {
 	TaskID string `json:"task_id"`
 }
 
 type TaskGetArgs struct {
-	TaskID string `json:"task_id" jsonschema:"description=Task ID to retrieve"`
+	TaskID string `json:"task_id"`
 }
 type TaskGetResult struct {
 	Subject string `json:"subject"`
@@ -178,8 +205,8 @@ type TaskGetResult struct {
 }
 
 type TaskUpdateArgs struct {
-	TaskID string `json:"task_id" jsonschema:"description=Task ID to update"`
-	Status string `json:"status" jsonschema:"description=New status (pending, in_progress, completed)"`
+	TaskID string `json:"task_id"`
+	Status string `json:"status"`
 }
 type TaskUpdateResult struct {
 	Success bool `json:"success"`
@@ -191,14 +218,14 @@ type TaskListResult struct {
 }
 
 type TaskStopArgs struct {
-	TaskID string `json:"task_id" jsonschema:"description=Task ID to stop"`
+	TaskID string `json:"task_id"`
 }
 type TaskStopResult struct {
 	Success bool `json:"success"`
 }
 
 type TaskOutputArgs struct {
-	TaskID string `json:"task_id" jsonschema:"description=Task ID to get output for"`
+	TaskID string `json:"task_id"`
 }
 type TaskOutputResult struct {
 	Output string `json:"output"`
@@ -206,22 +233,42 @@ type TaskOutputResult struct {
 
 // ToolDeps holds dependencies injected into tools that need service access.
 type ToolDeps struct {
-	Sandboxed   bool
+	// Sandboxed routes Bash through the Docker sandbox AND confines
+	// every file tool to Workspace. Prompt-injected paths cannot reach
+	// the host when this is true. When false, tools run on the host
+	// with the user's shell ambient permissions — same as before.
+	Sandboxed bool
+	// Workspace is the absolute host path bind-mounted into the
+	// container at sandbox.ContainerWorkspace. Required when Sandboxed
+	// is true. Obtained from sandbox.WorkspaceDir.
+	Workspace string
+	// WorkingDirs are host directories the non-sandboxed Bash uses for
+	// cwd / glob / grep. Ignored on sandboxed threads — those only see
+	// the Workspace.
 	WorkingDirs []string
 	Tasks       *TaskStore
 	Skills      []SkillDef
 	AskCh       chan<- AskRequest
+	// Search provider (SearXNG or compatible)
+	SearchURL   string // e.g. "http://localhost:8888" — empty if not configured
 	// Agent/plan mode dependencies
 	ThreadID    string
-	DB          interface{ InsertMessage(interface{}) error } // storage.DB
 	AgentState  func(mode string) error                      // transition agent mode
 	IsPlanMode  func() bool                                  // check if plan mode active
 	CompileAdoc func(path string) (string, error)            // adoc.Compile
 	PlanDir     string                                       // $XDG_DATA_HOME/spidey/plans/
 	// Subagent spawner — service wires this to create forked runners
-	SpawnAgent  func(ctx context.Context, task, forkID string) (string, error)
+	SpawnAgent func(ctx context.Context, task, forkID string) (string, error)
 	// Send message to a running subagent thread
 	SendToAgent func(ctx context.Context, agentID, message string) (string, error)
+	// Tool approval — blocks until user approves/denies. Returns true if approved.
+	ApprovalFn func(ctx context.Context, callID, toolName, args string) (bool, error)
+	// Hook firing — called before/after tool execution
+	HookFn func(ctx context.Context, event, toolName string) error
+	// Configured permissions — overrides DefaultPermission when set
+	Permissions map[string]string
+	// Plan content callback — called by ExitPlanMode to surface plan to frontend
+	OnPlanContent func(content string)
 }
 
 // SkillDef is a minimal skill reference for the tool.
@@ -230,10 +277,77 @@ type SkillDef struct {
 	Content string
 }
 
-// AskRequest is sent to the UI when AskUserQuestion is called.
+// AskRequest is sent to the UI when AskUserQuestion is called. The full
+// structured args carry through so the UI can render headers, options,
+// and multi-select controls. The UI replies with a map of
+// question→answer (one key per question in Args.Questions); for a
+// single question the map has one entry.
 type AskRequest struct {
-	Question string
-	RespCh   chan string
+	Args   AskUserArgs
+	RespCh chan map[string]string
+}
+
+// askUserExample is an inline valid payload the validator pastes into
+// error messages. Smaller Ollama models frequently emit
+// `{"questions": null}` or skip required sub-fields on the first try;
+// seeing a fully-formed example on the error path lets them copy-adapt
+// the structure on retry instead of looping on the same malformed call.
+const askUserExample = `Valid example:
+{"questions":[
+  {"header":"Coffee","question":"How do you take your coffee?","multiSelect":false,"options":[
+    {"label":"Black","description":"No milk, no sugar."},
+    {"label":"With milk","description":"Splash of milk, no sugar."},
+    {"label":"Sweetened","description":"Sugar or syrup added."}
+  ]}
+]}`
+
+// validateAskUserArgs enforces the Claude Code AskUserQuestion schema
+// at runtime. ADK's FunctionTool doesn't carry Zod-style constraints
+// through the JSON schema — validation happens here. Every error
+// includes the full valid example so the model can self-correct on
+// the very next call instead of re-emitting the same malformed args.
+func validateAskUserArgs(args AskUserArgs) error {
+	n := len(args.Questions)
+	if n == 0 {
+		return fmt.Errorf(
+			"AskUserQuestion: `questions` is required and must contain 1–4 items. "+
+				"Do NOT pass `null` or omit the field — always include a fully-populated array.\n\n%s",
+			askUserExample)
+	}
+	if n > 4 {
+		return fmt.Errorf("AskUserQuestion: too many questions (%d) — cap is 4.\n\n%s", n, askUserExample)
+	}
+	seenQ := make(map[string]struct{}, n)
+	for i, q := range args.Questions {
+		if q.Question == "" {
+			return fmt.Errorf("AskUserQuestion: questions[%d].question is required.\n\n%s", i, askUserExample)
+		}
+		if _, dup := seenQ[q.Question]; dup {
+			return fmt.Errorf("AskUserQuestion: questions[%d] duplicates a previous question text.\n\n%s", i, askUserExample)
+		}
+		seenQ[q.Question] = struct{}{}
+		if q.Header == "" {
+			return fmt.Errorf(
+				"AskUserQuestion: questions[%d].header is required (short chip label ≤20 chars, like \"Coffee\" or \"Library\").\n\n%s",
+				i, askUserExample)
+		}
+		if len(q.Options) < 2 || len(q.Options) > 4 {
+			return fmt.Errorf(
+				"AskUserQuestion: questions[%d] must have 2–4 options (got %d). Each option needs a `label` and a `description`.\n\n%s",
+				i, len(q.Options), askUserExample)
+		}
+		seenLabel := make(map[string]struct{}, len(q.Options))
+		for j, opt := range q.Options {
+			if opt.Label == "" {
+				return fmt.Errorf("AskUserQuestion: questions[%d].options[%d].label is required.\n\n%s", i, j, askUserExample)
+			}
+			if _, dup := seenLabel[opt.Label]; dup {
+				return fmt.Errorf("AskUserQuestion: questions[%d].options[%d] duplicates a previous label.\n\n%s", i, j, askUserExample)
+			}
+			seenLabel[opt.Label] = struct{}{}
+		}
+	}
+	return nil
 }
 
 // BuildTools creates all ADK FunctionTools for the agent.
@@ -241,22 +355,77 @@ type AskRequest struct {
 var ErrPlanModeWriteDisabled = fmt.Errorf("write tools are disabled in plan mode — use read tools to explore, then exit plan mode to execute")
 
 func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
+	// baseDir is the "current working directory" for tools that need one
+	// (Glob/Grep when the caller passes no path, Bash on non-sandboxed
+	// threads). Sandboxed threads pin this to the workspace; non-
+	// sandboxed threads use the user's configured WorkingDirs[0].
 	baseDir := ""
-	if len(deps.WorkingDirs) > 0 {
+	if deps.Sandboxed {
+		baseDir = deps.Workspace
+	} else if len(deps.WorkingDirs) > 0 {
 		baseDir = deps.WorkingDirs[0]
 	}
 
+	// resolvePath is the single gate for every file tool on sandboxed
+	// threads — it either returns the absolute host path inside the
+	// workspace or an error the tool surfaces to the model. On non-
+	// sandboxed threads it passes the raw path through unchanged so
+	// existing host-side behavior is preserved.
+	resolvePath := func(p string) (string, error) {
+		if !deps.Sandboxed {
+			return p, nil
+		}
+		return sandbox.ResolveWorkspacePath(deps.Workspace, p)
+	}
+
 	// planGuard returns an error if plan mode is active. Called by all write tools.
-	planGuard := func() error {
-		if deps.IsPlanMode != nil && deps.IsPlanMode() {
-			return ErrPlanModeWriteDisabled
+	// Writes to the plan directory are exempt — the agent needs to write plan artifacts.
+	planGuard := func(path string) error {
+		if deps.IsPlanMode == nil || !deps.IsPlanMode() {
+			return nil
+		}
+		if deps.PlanDir != "" && path != "" && strings.HasPrefix(filepath.Clean(path), filepath.Clean(deps.PlanDir)) {
+			return nil // plan directory write is allowed
+		}
+		return ErrPlanModeWriteDisabled
+	}
+
+	callSeq := &atomic.Int64{}
+
+	// requireApproval checks the tool's permission (configured, then default) and blocks for approval if needed.
+	requireApproval := func(ctx context.Context, toolName string, argsJSON string) error {
+		perm := DefaultPermission(toolName)
+		if p, ok := deps.Permissions[toolName]; ok {
+			perm = p
+		}
+		if perm == PermDeny {
+			return fmt.Errorf("tool %s is denied by permission policy", toolName)
+		}
+		if perm != PermAsk || deps.ApprovalFn == nil {
+			return nil
+		}
+		callID := fmt.Sprintf("call-%s-%d", toolName, callSeq.Add(1))
+		approved, err := deps.ApprovalFn(ctx, callID, toolName, argsJSON)
+		if err != nil {
+			return fmt.Errorf("approval: %w", err)
+		}
+		if !approved {
+			return fmt.Errorf("tool %s denied by user", toolName)
 		}
 		return nil
 	}
 
+	// fireHook calls the hook function if available. Errors are fail-closed.
+	fireHook := func(ctx context.Context, event, toolName string) error {
+		if deps.HookFn == nil {
+			return nil
+		}
+		return deps.HookFn(ctx, event, toolName)
+	}
+
 	execCmd := func(ctx context.Context, command, dir string) (string, int) {
 		if deps.Sandboxed {
-			sb := sandbox.New(deps.WorkingDirs)
+			sb := sandbox.New(deps.Workspace)
 			out, err := sb.Exec(ctx, command)
 			if err != nil {
 				return out, 1
@@ -280,28 +449,55 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 	}
 
 	var tools []tool.Tool
+	addTool := func(name string, t tool.Tool, err error) error {
+		if err != nil {
+			return fmt.Errorf("tool %s: %w", name, err)
+		}
+		tools = append(tools, t)
+		return nil
+	}
 
 	// --- Read tools (Allow) ---
 
-	bash, _ := functiontool.New(
+	bash, bashErr := functiontool.New(
 		functiontool.Config{Name: "Bash", Description: "Execute a shell command. Returns stdout/stderr and exit code."},
 		func(ctx tool.Context, args BashArgs) (BashResult, error) {
-			if err := planGuard(); err != nil {
+			if err := planGuard(""); err != nil {
 				return BashResult{Output: err.Error(), ExitCode: 1}, nil
 			}
-			if sandbox.DetectDestructive(args.Command) {
-				return BashResult{Output: "destructive command detected — requires explicit approval", ExitCode: 1}, nil
+			if err := fireHook(ctx, "PreToolUse", "Bash"); err != nil {
+				return BashResult{Output: err.Error(), ExitCode: 1}, nil
+			}
+			argsJSON, _ := json.Marshal(args)
+			if err := requireApproval(ctx, "Bash", string(argsJSON)); err != nil {
+				return BashResult{Output: err.Error(), ExitCode: 1}, nil
+			}
+			// Destructive-command safety net applies only to non-sandboxed
+			// threads — when Bash runs on the host, a stray `rm -rf /path`
+			// can nuke real user files. Inside the sandbox the container
+			// boundary already scopes destruction to /workspace, and the
+			// detector has nothing to add there (it would only reject
+			// legitimate sandbox-internal cleanups like `rm -rf build/`).
+			if !deps.Sandboxed && sandbox.DetectDestructive(args.Command) {
+				return BashResult{Output: "destructive command blocked by safety net (rm / git push / git reset --hard / git checkout --). This is not recoverable from approval — reshape the command (e.g. use a more surgical git operation, or remove files via a safer tool).", ExitCode: 1}, nil
 			}
 			out, code := execCmd(ctx, args.Command, baseDir)
+			fireHook(ctx, "PostToolUse", "Bash")
 			return BashResult{Output: out, ExitCode: code}, nil
 		},
 	)
-	tools = append(tools, bash)
+	if err := addTool("Bash", bash, bashErr); err != nil {
+		return nil, err
+	}
 
-	fileRead, _ := functiontool.New(
-		functiontool.Config{Name: "FileRead", Description: "Read file contents. Supports offset and limit for large files."},
+	fileRead, fileReadErr := functiontool.New(
+		functiontool.Config{Name: "FileRead", Description: "Read file contents. Supports offset and limit for large files. On sandboxed threads paths are scoped to the workspace (/workspace)."},
 		func(ctx tool.Context, args FileReadArgs) (FileReadResult, error) {
-			data, err := os.ReadFile(args.Path)
+			hostPath, err := resolvePath(args.Path)
+			if err != nil {
+				return FileReadResult{}, err
+			}
+			data, err := os.ReadFile(hostPath)
 			if err != nil {
 				return FileReadResult{}, err
 			}
@@ -310,7 +506,7 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 				lines := strings.Split(content, "\n")
 				start := args.Offset
 				if start >= len(lines) {
-					return FileReadResult{Content: ""}, nil
+					return FileReadResult{Output: ""}, nil
 				}
 				end := len(lines)
 				if args.Limit > 0 && start+args.Limit < end {
@@ -318,15 +514,20 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 				}
 				content = strings.Join(lines[start:end], "\n")
 			}
-			return FileReadResult{Content: content}, nil
+			return FileReadResult{Output: content}, nil
 		},
 	)
-	tools = append(tools, fileRead)
+	if err := addTool("FileRead", fileRead, fileReadErr); err != nil {
+		return nil, err
+	}
 
-	glob, _ := functiontool.New(
-		functiontool.Config{Name: "Glob", Description: "Find files matching a glob pattern."},
+	glob, globErr := functiontool.New(
+		functiontool.Config{Name: "Glob", Description: "Find files matching a glob pattern. On sandboxed threads paths are scoped to the workspace."},
 		func(ctx tool.Context, args GlobArgs) (GlobResult, error) {
-			dir := args.Path
+			dir, err := resolvePath(args.Path)
+			if err != nil {
+				return GlobResult{}, err
+			}
 			if dir == "" {
 				dir = baseDir
 			}
@@ -334,14 +535,36 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return GlobResult{Files: matches}, nil
 		},
 	)
-	tools = append(tools, glob)
+	if err := addTool("Glob", glob, globErr); err != nil { return nil, err }
 
-	grep, _ := functiontool.New(
-		functiontool.Config{Name: "Grep", Description: "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers."},
+	grep, grepErr := functiontool.New(
+		functiontool.Config{Name: "Grep", Description: "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers. On sandboxed threads paths are scoped to the workspace."},
 		func(ctx tool.Context, args GrepArgs) (GrepResult, error) {
-			dir := args.Path
-			if dir == "" {
-				dir = baseDir
+			// grep runs through execCmd, which on sandboxed threads
+			// invokes the container. Inside the container the only
+			// visible tree is /workspace — so we map any model-supplied
+			// path into container-relative form. On host-mode the raw
+			// or base path is used directly.
+			var dir string
+			if deps.Sandboxed {
+				rel := strings.TrimPrefix(args.Path, sandbox.ContainerWorkspace)
+				rel = strings.TrimPrefix(rel, "/")
+				// Any absolute host path the model tries to pass gets
+				// rejected — if we silently remapped it to /workspace
+				// the model would think the scan was wider than it was.
+				if filepath.IsAbs(args.Path) && !strings.HasPrefix(args.Path, sandbox.ContainerWorkspace) {
+					return GrepResult{}, fmt.Errorf("path %q outside workspace", args.Path)
+				}
+				if rel == "" {
+					dir = sandbox.ContainerWorkspace
+				} else {
+					dir = sandbox.ContainerWorkspace + "/" + rel
+				}
+			} else {
+				dir = args.Path
+				if dir == "" {
+					dir = baseDir
+				}
 			}
 			out, _ := execCmd(ctx, fmt.Sprintf("grep -rn %q %s", args.Pattern, dir), "")
 			lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -351,18 +574,58 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return GrepResult{Matches: lines}, nil
 		},
 	)
-	tools = append(tools, grep)
+	if err := addTool("Grep", grep, grepErr); err != nil { return nil, err }
 
-	webSearch, _ := functiontool.New(
-		functiontool.Config{Name: "WebSearch", Description: "Search the web for information. Returns relevant results."},
+	webSearch, webSearchErr := functiontool.New(
+		functiontool.Config{Name: "WebSearch", Description: "Search the web for current information. Returns titles, URLs, and snippets."},
 		func(ctx tool.Context, args WebSearchArgs) (WebSearchResult, error) {
-			// Web search delegates to an external search API or service
-			return WebSearchResult{Results: []string{"Web search not yet connected to a search provider."}}, nil
+			if deps.SearchURL == "" {
+				return WebSearchResult{}, fmt.Errorf("web search not configured — set a search provider (e.g. SearXNG) in Settings")
+			}
+			// SearXNG JSON API: GET /search?q=query&format=json
+			searchURL := deps.SearchURL + "/search?format=json&q=" + args.Query
+			req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+			if err != nil {
+				return WebSearchResult{}, err
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return WebSearchResult{}, fmt.Errorf("search request: %w", err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				return WebSearchResult{}, fmt.Errorf("search returned %d", resp.StatusCode)
+			}
+			var searchResp struct {
+				Results []struct {
+					Title   string `json:"title"`
+					URL     string `json:"url"`
+					Content string `json:"content"`
+				} `json:"results"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+				return WebSearchResult{}, fmt.Errorf("parse search results: %w", err)
+			}
+			var results []string
+			for _, r := range searchResp.Results {
+				if len(results) >= 8 {
+					break
+				}
+				entry := r.Title + " — " + r.URL
+				if r.Content != "" {
+					entry += "\n" + r.Content
+				}
+				results = append(results, entry)
+			}
+			if len(results) == 0 {
+				results = []string{"No results found for: " + args.Query}
+			}
+			return WebSearchResult{Results: results}, nil
 		},
 	)
-	tools = append(tools, webSearch)
+	if err := addTool("WebSearch", webSearch, webSearchErr); err != nil { return nil, err }
 
-	webFetch, _ := functiontool.New(
+	webFetch, webFetchErr := functiontool.New(
 		functiontool.Config{Name: "WebFetch", Description: "Fetch content from a URL."},
 		func(ctx tool.Context, args WebFetchArgs) (WebFetchResult, error) {
 			req, err := http.NewRequestWithContext(ctx, "GET", args.URL, nil)
@@ -375,38 +638,65 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			}
 			defer resp.Body.Close()
 			body, _ := io.ReadAll(resp.Body)
-			return WebFetchResult{Content: string(body), StatusCode: resp.StatusCode}, nil
+			return WebFetchResult{Output: string(body), StatusCode: resp.StatusCode}, nil
 		},
 	)
-	tools = append(tools, webFetch)
+	if err := addTool("WebFetch", webFetch, webFetchErr); err != nil { return nil, err }
 
-	askUser, _ := functiontool.New(
-		functiontool.Config{Name: "AskUserQuestion", Description: "Ask the user a question and wait for their response. The question is surfaced in the UI; execution pauses until the user responds."},
+	askUser, askUserErr := functiontool.New(
+		functiontool.Config{
+			Name: "AskUserQuestion",
+			Description: "Prompt the user with one or more multiple-choice questions and wait for their answers. " +
+				"Use this when you genuinely need a decision from the user that can't be inferred from context.\n\n" +
+				"Input: `questions` — a non-null array of 1–4 question objects. Each question MUST have ALL FOUR fields populated:\n" +
+				"  • `question` (string): the complete question, ending with a question mark.\n" +
+				"  • `header` (string): a short chip label ≤20 chars (e.g. \"Coffee\", \"Library\").\n" +
+				"  • `options` (array of 2–4 {label, description}): distinct choices. Do NOT include an \"Other\" option — the UI adds a free-text escape automatically.\n" +
+				"  • `multiSelect` (boolean): true when the user may pick multiple options; usually false.\n\n" +
+				"Exact shape you must emit:\n" +
+				"{\"questions\":[{\"header\":\"Coffee\",\"question\":\"How do you take your coffee?\",\"multiSelect\":false,\"options\":[{\"label\":\"Black\",\"description\":\"No milk, no sugar.\"},{\"label\":\"With milk\",\"description\":\"Splash of milk.\"},{\"label\":\"Sweetened\",\"description\":\"Sugar or syrup added.\"}]}]}\n\n" +
+				"DO NOT pass `questions: null` or omit the `options`/`header` fields — the call will error and you must retry with the full structure.\n\n" +
+				"Result: `answers` — a map from each question's text to the user's chosen label(s). Multi-select answers are comma-joined. \"Other\" returns the user's typed text.",
+		},
 		func(ctx tool.Context, args AskUserArgs) (AskUserResult, error) {
 			if deps.AskCh == nil {
-				return AskUserResult{Response: "[no user interaction channel]"}, nil
+				return AskUserResult{Answers: map[string]string{}}, nil
 			}
-			respCh := make(chan string, 1)
-			deps.AskCh <- AskRequest{Question: args.Question, RespCh: respCh}
+			if err := validateAskUserArgs(args); err != nil {
+				return AskUserResult{Answers: map[string]string{}}, err
+			}
+			respCh := make(chan map[string]string, 1)
+			deps.AskCh <- AskRequest{Args: args, RespCh: respCh}
 			select {
 			case <-ctx.Done():
 				return AskUserResult{}, ctx.Err()
-			case resp := <-respCh:
-				return AskUserResult{Response: resp}, nil
+			case answers := <-respCh:
+				return AskUserResult{Answers: answers}, nil
 			}
 		},
 	)
-	tools = append(tools, askUser)
+	if err := addTool("AskUser", askUser, askUserErr); err != nil { return nil, err }
 
 	// --- Write tools (Ask) — disabled in plan mode ---
 
-	fileEdit, _ := functiontool.New(
-		functiontool.Config{Name: "FileEdit", Description: "Replace old_string with new_string in the file at path. The old_string must be unique in the file."},
+	fileEdit, fileEditErr := functiontool.New(
+		functiontool.Config{Name: "FileEdit", Description: "Replace old_string with new_string in the file at path. The old_string must be unique in the file. On sandboxed threads paths are scoped to the workspace."},
 		func(ctx tool.Context, args FileEditArgs) (FileEditResult, error) {
-			if err := planGuard(); err != nil {
+			hostPath, err := resolvePath(args.Path)
+			if err != nil {
 				return FileEditResult{}, err
 			}
-			data, err := os.ReadFile(args.Path)
+			if err := planGuard(hostPath); err != nil {
+				return FileEditResult{}, err
+			}
+			if err := fireHook(ctx, "PreToolUse", "FileEdit"); err != nil {
+				return FileEditResult{}, err
+			}
+			argsJSON, _ := json.Marshal(args)
+			if err := requireApproval(ctx, "FileEdit", string(argsJSON)); err != nil {
+				return FileEditResult{}, err
+			}
+			data, err := os.ReadFile(hostPath)
 			if err != nil {
 				return FileEditResult{}, err
 			}
@@ -415,35 +705,57 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 				return FileEditResult{}, fmt.Errorf("old_string not found in file")
 			}
 			newContent := strings.Replace(content, args.OldString, args.NewString, 1)
-			if err := os.WriteFile(args.Path, []byte(newContent), 0o644); err != nil {
+			if err := os.WriteFile(hostPath, []byte(newContent), 0o644); err != nil {
 				return FileEditResult{}, err
 			}
 			return FileEditResult{Success: true}, nil
 		},
 	)
-	tools = append(tools, fileEdit)
+	if err := addTool("FileEdit", fileEdit, fileEditErr); err != nil { return nil, err }
 
-	fileWrite, _ := functiontool.New(
-		functiontool.Config{Name: "FileWrite", Description: "Write content to file, creating directories as needed."},
+	fileWrite, fileWriteErr := functiontool.New(
+		functiontool.Config{Name: "FileWrite", Description: "Write text content to a file, creating parent directories as needed. BOTH `path` AND `content` are required — a call with only `path` will be rejected. On sandboxed threads paths are scoped to the workspace (/workspace); use relative paths like 'novel/ch1.md' or absolute paths like '/workspace/novel/ch1.md'. For large files, emit the full content in a single call; do not split across multiple calls (truncation corrupts the file)."},
 		func(ctx tool.Context, args FileWriteArgs) (FileWriteResult, error) {
-			if err := planGuard(); err != nil {
+			hostPath, err := resolvePath(args.Path)
+			if err != nil {
 				return FileWriteResult{}, err
 			}
-			if err := os.MkdirAll(filepath.Dir(args.Path), 0o755); err != nil {
+			if err := planGuard(hostPath); err != nil {
 				return FileWriteResult{}, err
 			}
-			if err := os.WriteFile(args.Path, []byte(args.Content), 0o644); err != nil {
+			if err := fireHook(ctx, "PreToolUse", "FileWrite"); err != nil {
 				return FileWriteResult{}, err
 			}
-			return FileWriteResult{Success: true}, nil
+			argsJSON, _ := json.Marshal(args)
+			if err := requireApproval(ctx, "FileWrite", string(argsJSON)); err != nil {
+				return FileWriteResult{}, err
+			}
+			if err := os.MkdirAll(filepath.Dir(hostPath), 0o755); err != nil {
+				return FileWriteResult{}, err
+			}
+			if err := os.WriteFile(hostPath, []byte(args.Content), 0o644); err != nil {
+				return FileWriteResult{}, err
+			}
+			return FileWriteResult{Success: true, Path: hostPath}, nil
 		},
 	)
-	tools = append(tools, fileWrite)
+	if err := addTool("FileWrite", fileWrite, fileWriteErr); err != nil { return nil, err }
 
-	notebookEdit, _ := functiontool.New(
-		functiontool.Config{Name: "NotebookEdit", Description: "Edit a cell in a Jupyter notebook (.ipynb). Replaces the source content of the specified cell."},
+	notebookEdit, notebookEditErr := functiontool.New(
+		functiontool.Config{Name: "NotebookEdit", Description: "Edit a cell in a Jupyter notebook (.ipynb). Replaces the source content of the specified cell. On sandboxed threads paths are scoped to the workspace."},
 		func(ctx tool.Context, args NotebookEditArgs) (NotebookEditResult, error) {
-			data, err := os.ReadFile(args.Path)
+			hostPath, err := resolvePath(args.Path)
+			if err != nil {
+				return NotebookEditResult{}, err
+			}
+			if err := planGuard(hostPath); err != nil {
+				return NotebookEditResult{}, err
+			}
+			argsJSON, _ := json.Marshal(args)
+			if err := requireApproval(ctx, "NotebookEdit", string(argsJSON)); err != nil {
+				return NotebookEditResult{}, err
+			}
+			data, err := os.ReadFile(hostPath)
 			if err != nil {
 				return NotebookEditResult{}, err
 			}
@@ -479,19 +791,23 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			if err != nil {
 				return NotebookEditResult{}, err
 			}
-			if err := os.WriteFile(args.Path, out, 0o644); err != nil {
+			if err := os.WriteFile(hostPath, out, 0o644); err != nil {
 				return NotebookEditResult{}, err
 			}
 			return NotebookEditResult{Success: true}, nil
 		},
 	)
-	tools = append(tools, notebookEdit)
+	if err := addTool("NotebookEdit", notebookEdit, notebookEditErr); err != nil { return nil, err }
 
 	// --- Skill tools (Ask) ---
 
-	skill, _ := functiontool.New(
+	skill, skillErr := functiontool.New(
 		functiontool.Config{Name: "Skill", Description: "Invoke a skill by name with optional arguments. Skill content is injected as context."},
 		func(ctx tool.Context, args SkillArgs) (SkillResult, error) {
+			argsJSON, _ := json.Marshal(args)
+			if err := requireApproval(ctx, "Skill", string(argsJSON)); err != nil {
+				return SkillResult{}, err
+			}
 			for _, s := range deps.Skills {
 				if s.Name == args.Name {
 					content := s.Content
@@ -504,9 +820,9 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return SkillResult{}, fmt.Errorf("skill '%s' not found", args.Name)
 		},
 	)
-	tools = append(tools, skill)
+	if err := addTool("Skill", skill, skillErr); err != nil { return nil, err }
 
-	todoWrite, _ := functiontool.New(
+	todoWrite, todoWriteErr := functiontool.New(
 		functiontool.Config{Name: "TodoWrite", Description: "Create a structured task list for tracking work."},
 		func(ctx tool.Context, args TodoWriteArgs) (TodoWriteResult, error) {
 			if deps.Tasks == nil {
@@ -518,13 +834,17 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return TodoWriteResult{Success: true}, nil
 		},
 	)
-	tools = append(tools, todoWrite)
+	if err := addTool("TodoWrite", todoWrite, todoWriteErr); err != nil { return nil, err }
 
 	// --- Plan tools (Ask) ---
 
-	enterPlan, _ := functiontool.New(
+	enterPlan, enterPlanErr := functiontool.New(
 		functiontool.Config{Name: "EnterPlanMode", Description: "Enter plan mode. Write tools disabled, read tools available. Explore codebase and design implementation approach."},
 		func(ctx tool.Context, args PlanModeArgs) (PlanModeResult, error) {
+			argsJSON, _ := json.Marshal(args)
+			if err := requireApproval(ctx, "EnterPlanMode", string(argsJSON)); err != nil {
+				return PlanModeResult{}, err
+			}
 			if deps.AgentState == nil {
 				return PlanModeResult{}, fmt.Errorf("agent state not available")
 			}
@@ -540,35 +860,47 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return PlanModeResult{Success: true}, nil
 		},
 	)
-	tools = append(tools, enterPlan)
+	if err := addTool("EnterPlan", enterPlan, enterPlanErr); err != nil { return nil, err }
 
-	exitPlan, _ := functiontool.New(
-		functiontool.Config{Name: "ExitPlanMode", Description: "Exit plan mode. Plan is compiled and surfaced for user review."},
+	exitPlan, exitPlanErr := functiontool.New(
+		functiontool.Config{Name: "ExitPlanMode", Description: "Signal that the plan is ready for user review. Do NOT paraphrase or re-summarize the plan — the user sees it surfaced in the artifacts panel. A brief one-line acknowledgment is enough."},
 		func(ctx tool.Context, args PlanModeArgs) (PlanModeResult, error) {
-			if deps.AgentState == nil {
-				return PlanModeResult{}, fmt.Errorf("agent state not available")
+			argsJSON, _ := json.Marshal(args)
+			if err := requireApproval(ctx, "ExitPlanMode", string(argsJSON)); err != nil {
+				return PlanModeResult{}, err
 			}
-			// Compile plan if it exists
+			// Compile plan from adoc artifact if it exists
+			var planContent string
 			if deps.CompileAdoc != nil && deps.PlanDir != "" {
 				slug := fmt.Sprintf("plan-%s", deps.ThreadID)
 				planEntry := filepath.Join(deps.PlanDir, slug, "plan.adoc")
-				if _, err := os.Stat(planEntry); err == nil {
-					deps.CompileAdoc(planEntry)
+				if compiled, err := deps.CompileAdoc(planEntry); err == nil && compiled != "" {
+					planContent = compiled
 				}
 			}
-			if err := deps.AgentState("normal"); err != nil {
-				return PlanModeResult{}, err
+			// Surface plan content to frontend.
+			// Note: mode stays Plan. The user explicitly approves/rejects via
+			// approvePlan/rejectPlan mutations — that's when mode flips (or
+			// stays Plan and iterates, if the user just sends more feedback).
+			// Previously this tool flipped to Normal immediately, which meant
+			// "no action = keep iterating" was impossible (mode was gone).
+			if deps.OnPlanContent != nil && planContent != "" {
+				deps.OnPlanContent(planContent)
 			}
 			return PlanModeResult{Success: true}, nil
 		},
 	)
-	tools = append(tools, exitPlan)
+	if err := addTool("ExitPlan", exitPlan, exitPlanErr); err != nil { return nil, err }
 
 	// --- Agent tools (Ask) ---
 
-	agentTool, _ := functiontool.New(
+	agentTool, agentToolErr := functiontool.New(
 		functiontool.Config{Name: "Agent", Description: "Spawn a subagent to handle a complex task autonomously. The subagent runs in an ephemeral thread fork with its own RRC state."},
 		func(ctx tool.Context, args AgentToolArgs) (AgentToolResult, error) {
+			argsJSON, _ := json.Marshal(args)
+			if err := requireApproval(ctx, "Agent", string(argsJSON)); err != nil {
+				return AgentToolResult{}, err
+			}
 			if deps.SpawnAgent == nil {
 				return AgentToolResult{}, fmt.Errorf("subagent spawning not available")
 			}
@@ -580,11 +912,15 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return AgentToolResult{Result: result}, nil
 		},
 	)
-	tools = append(tools, agentTool)
+	if err := addTool("Agent", agentTool, agentToolErr); err != nil { return nil, err }
 
-	sendMsg, _ := functiontool.New(
+	sendMsg, sendMsgErr := functiontool.New(
 		functiontool.Config{Name: "SendMessage", Description: "Send a message to a running subagent. The subagent receives it as a new user message in its forked thread."},
 		func(ctx tool.Context, args SendMessageArgs) (SendMessageResult, error) {
+			argsJSON, _ := json.Marshal(args)
+			if err := requireApproval(ctx, "SendMessage", string(argsJSON)); err != nil {
+				return SendMessageResult{}, err
+			}
 			if deps.SendToAgent == nil {
 				return SendMessageResult{}, fmt.Errorf("agent messaging not available")
 			}
@@ -595,9 +931,9 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return SendMessageResult{Response: resp}, nil
 		},
 	)
-	tools = append(tools, sendMsg)
+	if err := addTool("SendMessage", sendMsg, sendMsgErr); err != nil { return nil, err }
 
-	taskCreate, _ := functiontool.New(
+	taskCreate, taskCreateErr := functiontool.New(
 		functiontool.Config{Name: "TaskCreate", Description: "Create a task to track work progress. Returns the task ID."},
 		func(ctx tool.Context, args TaskCreateArgs) (TaskCreateResult, error) {
 			if deps.Tasks == nil {
@@ -607,9 +943,9 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return TaskCreateResult{TaskID: t.ID}, nil
 		},
 	)
-	tools = append(tools, taskCreate)
+	if err := addTool("TaskCreate", taskCreate, taskCreateErr); err != nil { return nil, err }
 
-	taskGet, _ := functiontool.New(
+	taskGet, taskGetErr := functiontool.New(
 		functiontool.Config{Name: "TaskGet", Description: "Get details of a specific task by ID."},
 		func(ctx tool.Context, args TaskGetArgs) (TaskGetResult, error) {
 			if deps.Tasks == nil {
@@ -622,9 +958,9 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return TaskGetResult{Subject: t.Subject, Status: t.Status}, nil
 		},
 	)
-	tools = append(tools, taskGet)
+	if err := addTool("TaskGet", taskGet, taskGetErr); err != nil { return nil, err }
 
-	taskUpdate, _ := functiontool.New(
+	taskUpdate, taskUpdateErr := functiontool.New(
 		functiontool.Config{Name: "TaskUpdate", Description: "Update a task's status (pending, in_progress, completed) or delete it (status=deleted)."},
 		func(ctx tool.Context, args TaskUpdateArgs) (TaskUpdateResult, error) {
 			if deps.Tasks == nil {
@@ -641,9 +977,9 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return TaskUpdateResult{Success: true}, nil
 		},
 	)
-	tools = append(tools, taskUpdate)
+	if err := addTool("TaskUpdate", taskUpdate, taskUpdateErr); err != nil { return nil, err }
 
-	taskList, _ := functiontool.New(
+	taskList, taskListErr := functiontool.New(
 		functiontool.Config{Name: "TaskList", Description: "List all tasks with their status."},
 		func(ctx tool.Context, args TaskListArgs) (TaskListResult, error) {
 			if deps.Tasks == nil {
@@ -657,9 +993,9 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return TaskListResult{Tasks: lines}, nil
 		},
 	)
-	tools = append(tools, taskList)
+	if err := addTool("TaskList", taskList, taskListErr); err != nil { return nil, err }
 
-	taskStop, _ := functiontool.New(
+	taskStop, taskStopErr := functiontool.New(
 		functiontool.Config{Name: "TaskStop", Description: "Stop a running task by marking it completed."},
 		func(ctx tool.Context, args TaskStopArgs) (TaskStopResult, error) {
 			if deps.Tasks == nil {
@@ -669,9 +1005,9 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return TaskStopResult{Success: ok}, nil
 		},
 	)
-	tools = append(tools, taskStop)
+	if err := addTool("TaskStop", taskStop, taskStopErr); err != nil { return nil, err }
 
-	taskOutput, _ := functiontool.New(
+	taskOutput, taskOutputErr := functiontool.New(
 		functiontool.Config{Name: "TaskOutput", Description: "Get the description and status of a task."},
 		func(ctx tool.Context, args TaskOutputArgs) (TaskOutputResult, error) {
 			if deps.Tasks == nil {
@@ -684,14 +1020,8 @@ func BuildTools(deps ToolDeps) ([]tool.Tool, error) {
 			return TaskOutputResult{Output: fmt.Sprintf("[%s] %s: %s", t.Status, t.Subject, t.Description)}, nil
 		},
 	)
-	tools = append(tools, taskOutput)
+	if err := addTool("TaskOutput", taskOutput, taskOutputErr); err != nil { return nil, err }
 
-	// Filter out nil tools (functiontool.New can return nil on error)
-	var validTools []tool.Tool
-	for _, t := range tools {
-		if t != nil {
-			validTools = append(validTools, t)
-		}
-	}
-	return validTools, nil
+	return tools, nil
 }
+

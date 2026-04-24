@@ -3,6 +3,7 @@ package prompt
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,16 +34,19 @@ func NewAssembler(templateDir string) *Assembler {
 
 // TemplateData provides values for template rendering.
 type TemplateData struct {
-	UserName      string
-	ThreadName    string
-	WorkingDirs   []string
-	SpideyMD      []string // contents of SPIDEY.md files from mounted dirs
-	PlanContent   string   // compiled plan content (per-turn)
-	CurrentTime   string
-	Mode          string // "normal", "plan", "autonomous"
+	UserName    string
+	ThreadName  string
+	Sandboxed   bool     // true when Bash + file tools run inside the Docker workspace
+	WorkingDirs []string
+	SpideyMD    []string // contents of SPIDEY.md files from mounted dirs
+	PlanContent string   // compiled plan content (per-turn)
+	PlanDir     string   // writable plan directory path
+	CurrentTime string
+	Mode        string // "normal", "plan", "autonomous"
 }
 
 // Assemble renders the full system prompt from system.tmpl.
+// Section rendering errors are collected and returned after execution.
 func (a *Assembler) Assemble(data TemplateData) (string, error) {
 	entryPath := filepath.Join(a.templateDir, "system.tmpl")
 	tmplContent, err := os.ReadFile(entryPath)
@@ -50,9 +54,20 @@ func (a *Assembler) Assemble(data TemplateData) (string, error) {
 		return "", err
 	}
 
+	// Collect section errors during template execution.
+	var sectionErrors []string
+	var sectionMu sync.Mutex
+
 	funcMap := template.FuncMap{
 		"section": func(name string) string {
-			return a.renderSection(name, data)
+			result, err := a.renderSection(name, data)
+			if err != nil {
+				sectionMu.Lock()
+				sectionErrors = append(sectionErrors, fmt.Sprintf("section %q: %v", name, err))
+				sectionMu.Unlock()
+				return ""
+			}
+			return result
 		},
 		"join": strings.Join,
 	}
@@ -66,14 +81,23 @@ func (a *Assembler) Assemble(data TemplateData) (string, error) {
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", err
 	}
+
+	if len(sectionErrors) > 0 {
+		return "", fmt.Errorf("template section errors: %s", strings.Join(sectionErrors, "; "))
+	}
+
 	return buf.String(), nil
 }
 
-func (a *Assembler) renderSection(name string, data TemplateData) string {
+func (a *Assembler) renderSection(name string, data TemplateData) (string, error) {
 	path := filepath.Join(a.templateDir, name+".tmpl")
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			// Optional section — not every mode uses every section
+			return "", nil
+		}
+		return "", fmt.Errorf("read %s: %w", path, err)
 	}
 
 	hash := sha256.Sum256(content)
@@ -81,18 +105,18 @@ func (a *Assembler) renderSection(name string, data TemplateData) string {
 	a.mu.RLock()
 	if cached, ok := a.cache[name]; ok && cached.hash == hash {
 		a.mu.RUnlock()
-		return cached.output
+		return cached.output, nil
 	}
 	a.mu.RUnlock()
 
 	tmpl, err := template.New(name).Parse(string(content))
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("parse %s: %w", name, err)
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return ""
+		return "", fmt.Errorf("execute %s: %w", name, err)
 	}
 
 	output := buf.String()
@@ -100,5 +124,5 @@ func (a *Assembler) renderSection(name string, data TemplateData) string {
 	a.cache[name] = cachedSection{hash: hash, output: output}
 	a.mu.Unlock()
 
-	return output
+	return output, nil
 }

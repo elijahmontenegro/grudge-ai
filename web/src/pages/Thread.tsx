@@ -1,461 +1,326 @@
-import { useParams, useNavigate } from 'react-router'
-import { gql } from '@apollo/client'
-import { useQuery, useMutation } from '@apollo/client/react'
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
-import { MessageBubble } from '@/components/molecules/MessageBubble'
-import { BranchNavigator } from '@/components/molecules/BranchNavigator'
-import { AutonomousControls } from '@/components/organisms/AutonomousControls'
-import { PlanMode } from '@/components/organisms/PlanMode'
-import { IntrospectionPanel } from '@/components/organisms/IntrospectionPanel'
-import { SubagentProgress } from '@/components/organisms/SubagentProgress'
-import { ToolCallDisplay } from '@/components/organisms/ToolCallDisplay'
-import { ThreadSidebar } from '@/components/organisms/ThreadSidebar'
-import { useMessageStream } from '@/hooks/useMessageStream'
+import { useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router'
+import { ThreadView } from '@/components/organisms/ThreadView'
+import type {
+  AutonomousDuration,
+  ComposerMode,
+  ComposerScope,
+} from '@/components/organisms/Composer'
+import { useThreadMessages } from '@/hooks/useThreadMessages'
+import { useThreads } from '@/hooks/useThreads'
+import { useSendAndStream } from '@/hooks/useSendAndStream'
 import { useAgentState } from '@/hooks/useAgentState'
-import { useToolExecution } from '@/hooks/useToolExecution'
-import { useViewState } from '@/hooks/useViewState'
-import type { Message, SelectedMessage } from '@/graphql/generated/types'
-
-const MESSAGES_QUERY = gql`
-  query ThreadMessages($threadId: ID!) {
-    messages(threadId: $threadId) {
-      id
-      role
-      content
-      position
-      createdAt
-    }
-    thread(id: $threadId) {
-      id
-      name
-    }
-  }
-`
-
-const SEND_MESSAGE = gql`
-  mutation SendMessage($threadId: ID!, $content: String!, $scope: SelectionScope) {
-    sendMessage(threadId: $threadId, content: $content, scope: $scope) {
-      id
-      role
-      content
-      position
-    }
-  }
-`
-
-const EDIT_MESSAGE = gql`
-  mutation EditMessage($threadId: ID!, $messagePosition: Int!, $newContent: String!) {
-    editMessage(threadId: $threadId, messagePosition: $messagePosition, newContent: $newContent) {
-      id
-      name
-    }
-  }
-`
-
-const SELECTION_QUERY = gql`
-  query LatestSelection($eventId: ID!) {
-    selectionResult(eventId: $eventId) {
-      selected {
-        messageId
-        effectiveScore
-        hopDepth
-        crossThread
-        threadId
-      }
-    }
-  }
-`
-
-const RENAME_THREAD = gql`
-  mutation RenameThread($id: ID!, $name: String!) {
-    updateThread(id: $id, name: $name) { id name }
-  }
-`
-
-type MessagesQueryData = {
-  messages: Message[]
-  thread: { id: string; name: string } | null
+import { useSubagentProgress } from '@/hooks/useSubagentProgress'
+import { usePlanMode } from '@/hooks/usePlanMode'
+import { useStartAutonomous } from '@/hooks/useStartAutonomous'
+import { useToolExecutions } from '@/hooks/useToolExecutions'
+import { useEditMessage } from '@/hooks/useEditMessage'
+import { useAgentControls } from '@/hooks/useAgentControls'
+import { useCreateThread } from '@/hooks/useCreateThread'
+import { ToolApprovalPrompt } from '@/components/organisms/ToolApprovalPrompt'
+import { AgentMode, AgentStatus } from '@/graphql/generated/types'
+interface ThreadPageProps {
+  mode: ComposerMode
+  setMode: (m: ComposerMode) => void
+  scope: ComposerScope
+  setScope: (s: ComposerScope) => void
+  duration: AutonomousDuration
+  setDuration: (d: AutonomousDuration) => void
+  artifactsCollapsed: boolean
+  onToggleArtifacts: () => void
 }
 
-function autoResize(el: HTMLTextAreaElement) {
-  el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, 200) + 'px'
-}
-
-export function ThreadPage() {
-  const { threadId } = useParams<{ threadId: string }>()
+export function ThreadPage({
+  mode,
+  setMode,
+  scope,
+  setScope,
+  duration,
+  setDuration,
+  artifactsCollapsed,
+  onToggleArtifacts,
+}: ThreadPageProps) {
+  const { id: rawId = '' } = useParams<{ id: string }>()
+  // "/thread/new" is a DRAFT — no DB row yet. The thread is materialised
+  // on first send so clicking New doesn't litter the DB with empty rows
+  // the user never actually used. All id-keyed hooks get an empty id
+  // while drafting so their subscriptions/queries skip.
+  const isDraft = rawId === 'new'
+  const id = isDraft ? '' : rawId
   const navigate = useNavigate()
-  const [input, setInput] = useState('')
-  const [scope, setScope] = useState<'THREAD' | 'ALL_THREADS'>('THREAD')
-  const [showIntrospection, setShowIntrospection] = useState(false)
-  const [thinking, setThinking] = useState(false)
-  const [editingMsg, setEditingMsg] = useState<Message | null>(null)
-  const [editContent, setEditContent] = useState('')
-  const [streamText, setStreamText] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [editingName, setEditingName] = useState(false)
-  const [nameInput, setNameInput] = useState('')
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  const { data, loading, refetch } = useQuery<MessagesQueryData>(MESSAGES_QUERY, {
-    variables: { threadId },
-    skip: !threadId,
-    pollInterval: thinking ? 1000 : 0,
+  const location = useLocation() as {
+    state?: {
+      initialMessage?: string
+      focusMessageId?: string
+      startAutonomous?: { text: string; duration: AutonomousDuration }
+    }
+  }
+  const initialMessage = location.state?.initialMessage
+  const focusMessageId = location.state?.focusMessageId
+  const startAutonomousOnMount = location.state?.startAutonomous
+  const { thread, messages, loading, error } = useThreadMessages(id)
+  const { threads: allThreads } = useThreads()
+  const agent = useAgentState(id)
+  // When the agent is running server-side (autonomous, another tab's send,
+  // subagent work) we want the messageStream subscription open even though
+  // this tab didn't initiate. `externalStreaming` signals that.
+  const agentRunning = agent.status === AgentStatus.Running
+  const { send, streaming, stream } = useSendAndStream(id, scope, {
+    externalStreaming: agentRunning,
   })
-  const [sendMessage, { loading: sending }] = useMutation<{ sendMessage: Message }>(SEND_MESSAGE)
-  const [editMessage] = useMutation<{ editMessage: { id: string; name: string } }>(EDIT_MESSAGE)
-  const [renameThread] = useMutation<{ updateThread: { id: string; name: string } }>(RENAME_THREAD)
+  const { create: createThread } = useCreateThread()
 
-  type SelectionData = { selectionResult: { selected: SelectedMessage[] } | null }
-  const { data: selData } = useQuery<SelectionData>(SELECTION_QUERY, {
-    variables: { eventId: threadId },
-    skip: !threadId,
-    pollInterval: 3000,
-  })
-
-  const { event: streamEvent } = useMessageStream(threadId ?? '')
-  const { state: agentState } = useAgentState(threadId ?? '')
-  const { execution: toolExec } = useToolExecution(threadId ?? '')
-  const { viewState, saveViewState } = useViewState(threadId ?? '')
-
-  const selectionMap = new Map<string, SelectedMessage>(
-    selData?.selectionResult?.selected?.map((s: SelectedMessage) => [s.messageId, s]) ?? []
-  )
-
+  // Reset key bumped each time streaming transitions false→true so live
+  // tool-call and subagent-progress lists start fresh for the new turn
+  // rather than stacking on top of the prior one.
+  const [turnSeq, setTurnSeq] = useState(0)
+  const prevStreamingRef = useRef(false)
   useEffect(() => {
-    if (streamEvent) {
-      if (streamEvent.done) {
-        setStreamText('')
-        refetch()
-      } else if (streamEvent.delta) {
-        setStreamText(prev => prev + streamEvent.delta)
-      }
-    }
-  }, [streamEvent, refetch])
+    if (streaming && !prevStreamingRef.current) setTurnSeq((n) => n + 1)
+    prevStreamingRef.current = streaming
+  }, [streaming])
 
-  useEffect(() => {
-    if (viewState?.inputDraft && !input) {
-      setInput(viewState.inputDraft)
-    }
-  }, [viewState]) // eslint-disable-line react-hooks/exhaustive-deps
+  const subagents = useSubagentProgress(id, turnSeq)
+  const plan = usePlanMode()
+  const autonomous = useStartAutonomous()
+  // Single TOOL_EXECUTION subscription for this thread — exposes pending
+  // approvals, AskUserQuestion prompts, and a live-call list all from one
+  // stream (previously two separate subscriptions for the same events).
+  const tools = useToolExecutions(id, turnSeq)
+  const liveTools = tools.live
+  const approvals = tools
+  const editMsg = useEditMessage()
+  const agentControls = useAgentControls()
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [data?.messages?.length, streamText])
-
-  // Auto-focus composer on thread navigation
-  useEffect(() => {
-    if (threadId && textareaRef.current) {
-      textareaRef.current.focus()
-    }
-  }, [threadId])
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (showIntrospection) setShowIntrospection(false)
-        if (editingName) setEditingName(false)
-        if (editingMsg) setEditingMsg(null)
-      }
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [showIntrospection, editingName, editingMsg])
-
-  const handleSend = useCallback(async () => {
-    if (!input.trim() || !threadId || sending) return
-    const content = input
-    setInput('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-    setThinking(true)
-    saveViewState({ scrollPosition: scrollRef.current?.scrollTop ?? 0, expandedMessageIds: [], inputDraft: '', citationExpansionState: '{}' })
-    try {
-      setError(null)
-      await sendMessage({ variables: { threadId, content, scope } })
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to send message'
-      setError(msg)
-      setInput(content)
-    } finally {
-      setThinking(false)
-      refetch()
-    }
-  }, [input, threadId, sending, scope, sendMessage, refetch, saveViewState])
-
-  const handleEdit = useCallback(async (msg: Message) => {
-    if (!editContent.trim() || !threadId) return
-    const result = await editMessage({
-      variables: { threadId, messagePosition: msg.position, newContent: editContent },
-    })
-    setEditingMsg(null)
-    setEditContent('')
-    if (result.data?.editMessage?.id) {
-      navigate(`/thread/${result.data.editMessage.id}`)
-    }
-  }, [editContent, threadId, editMessage, navigate])
-
-  const handleInputChange = (value: string) => {
-    setInput(value)
-    saveViewState({ scrollPosition: 0, expandedMessageIds: [], inputDraft: value, citationExpansionState: '{}' })
+  // Shared edit handler for every Turn in the thread. Navigates to the new
+  // branched thread the backend returns.
+  const onEditTurn = async (position: number, newContent: string) => {
+    const newId = await editMsg.edit(id, position, newContent)
+    if (newId && newId !== id) navigate(`/thread/${newId}`)
+    return newId
   }
 
-  const threadName = data?.thread?.name
-  const displayName = threadName && threadName !== 'New Thread' ? threadName : 'New conversation'
+  // Auto-send an initial message when navigated here with router state
+  // (e.g. Home quickstart or a draft → real-thread transition). Guard
+  // so it only fires once per mount, and replace history immediately so
+  // a page refresh doesn't resend the same message on remount (browser
+  // persists navigation state across reloads).
+  const autoSentRef = useRef(false)
+  useEffect(() => {
+    if (autoSentRef.current || !id) return
+    if (initialMessage) {
+      autoSentRef.current = true
+      navigate(`/thread/${id}`, { replace: true, state: null })
+      // Respect the caller's active mode: if they picked plan, enter
+      // plan before the send so the runner sees the plan-mode prompt.
+      // Autonomous is handled by its own branch below.
+      ;(async () => {
+        if (mode === 'plan' && agent.mode !== AgentMode.Plan) {
+          await plan.enterPlan(id)
+        }
+        void send(initialMessage)
+      })()
+      return
+    }
+    if (startAutonomousOnMount) {
+      autoSentRef.current = true
+      navigate(`/thread/${id}`, { replace: true, state: null })
+      void autonomous.start(id, startAutonomousOnMount.text, startAutonomousOnMount.duration)
+      return
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialMessage, startAutonomousOnMount, id])
+
+  // Plan mode is committed only at send time — flipping the pill is pure
+  // UI intent, not a backend state change. This mirrors claude-code's
+  // model where plan mode is a permission flag the user triggers via
+  // /plan (a deliberate action), not a passive toggle. Calling
+  // enterPlanMode on pill flip previously made the agent look "running"
+  // (see round 90) and left no symmetric exit if the user flipped back.
+
+  // Keep composer mode in sync with the backend's agent mode on server-
+  // initiated transitions. We only act on real transitions OUT of Plan or
+  // Autonomous, not on every observation of Normal — otherwise the moment
+  // the user flips the pill to 'plan' (before enterPlan's mutation lands),
+  // this effect fires with agent.mode still Normal and snaps mode back,
+  // silently reverting the user's selection.
+  const prevAgentModeRef = useRef(agent.mode)
+  useEffect(() => {
+    const prev = prevAgentModeRef.current
+    prevAgentModeRef.current = agent.mode
+    if (prev === agent.mode) return
+    if (agent.mode === AgentMode.Normal) {
+      if (prev === AgentMode.Plan && mode === 'plan') setMode('normal')
+      else if (prev === AgentMode.Autonomous && mode === 'autonomous') setMode('normal')
+    } else if (agent.mode === AgentMode.Autonomous) {
+      if (mode !== 'autonomous') setMode('autonomous')
+    }
+  }, [agent.mode, mode, setMode])
+
+  // Draft thread: no DB row, render a minimal shell with the composer
+  // active. Hitting send / start-autonomous actually creates the row
+  // and navigates to the real thread URL — until then, closing the tab
+  // leaves nothing behind.
+  if (isDraft) {
+    const placeholderThread = {
+      id: 'new',
+      name: 'New thread',
+      state: 'idle' as const,
+      lastActive: '—',
+      msgCount: 0,
+      workingDirs: [] as string[],
+      sandboxed: true,
+      corpus: [] as typeof messages,
+    }
+    return (
+      <ThreadView
+        thread={placeholderThread}
+        parentName={null}
+        streaming={false}
+        stream={stream}
+        subagents={[]}
+        liveTools={[]}
+        onSend={async (text) => {
+          const newId = await createThread()
+          if (!newId) return
+          navigate(`/thread/${newId}`, { state: { initialMessage: text } })
+        }}
+        onStartAutonomous={async (text, duration) => {
+          const newId = await createThread()
+          if (!newId) return
+          navigate(`/thread/${newId}`, {
+            state: { startAutonomous: { text, duration } },
+          })
+        }}
+        scope={scope}
+        setScope={setScope}
+        mode={mode}
+        setMode={setMode}
+        duration={duration}
+        setDuration={setDuration}
+        focusMessageId={undefined}
+        onEditTurn={undefined}
+        editInFlight={false}
+        artifactsCollapsed={artifactsCollapsed}
+        onToggleArtifacts={onToggleArtifacts}
+        livePlanContent={null}
+        agentMode={AgentMode.Normal}
+        planApproving={false}
+        planRejecting={false}
+        planEditing={false}
+        onApprovePlan={() => {}}
+        onRejectPlan={() => {}}
+        onEditPlan={() => {}}
+        agentStatus={AgentStatus.Idle}
+        agentIsAutonomous={false}
+        agentElapsed={null}
+        onPauseAgent={() => {}}
+        onResumeAgent={() => {}}
+        onStopAgent={() => {}}
+        agentControlsPending={false}
+      />
+    )
+  }
+
+  if (loading && !thread) {
+    return (
+      <div className="empty-thread">
+        <p className="empty-thread-hint">loading thread…</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="empty-thread">
+        <div className="empty-thread-rule">
+          <span>backend unreachable</span>
+        </div>
+        <p className="empty-thread-lede" style={{ color: 'var(--danger)' }}>
+          {error}
+        </p>
+        <p className="empty-thread-hint">
+          Start the Spidey service — it exposes /graphql at the same host that serves this app.
+        </p>
+      </div>
+    )
+  }
+
+  if (!thread) {
+    return (
+      <div className="empty-thread">
+        <div className="empty-thread-rule">
+          <span>thread not found</span>
+        </div>
+        <p className="empty-thread-lede">
+          No thread with id <code>{id}</code>. It may have been deleted.
+        </p>
+      </div>
+    )
+  }
+
+  const parent = thread.parentId ? allThreads.find((t) => t.id === thread.parentId) : null
+  const fullThread = { ...thread, corpus: messages }
 
   return (
-    <div className="flex h-screen">
-      <ThreadSidebar />
-
-      <main className="flex-1 flex flex-col min-w-0">
-        {/* Header — glass, floating */}
-        <header className="glass h-12 px-5 flex items-center gap-3 shrink-0 bg-background/70 z-10">
-          {editingName ? (
-            <input
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              onKeyDown={async (e) => {
-                if (e.key === 'Enter' && nameInput.trim() && threadId) {
-                  await renameThread({ variables: { id: threadId, name: nameInput.trim() } })
-                  setEditingName(false)
-                  refetch()
-                }
-                if (e.key === 'Escape') setEditingName(false)
-              }}
-              onBlur={() => setEditingName(false)}
-              className="text-[15px] font-medium flex-1 bg-transparent border-none outline-none text-foreground/90 truncate"
-              autoFocus
-            />
-          ) : (
-            <h1
-              className="text-[15px] font-medium flex-1 truncate text-foreground/90 cursor-pointer hover:text-foreground transition-colors"
-              onClick={() => { setNameInput(displayName); setEditingName(true) }}
-              title="Click to rename"
-            >
-              {displayName}
-            </h1>
-          )}
-
-          <div className="flex items-center gap-2">
-            {threadId && <BranchNavigator currentThreadId={threadId} />}
-
-            {(sending || thinking) && (
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse-subtle" />
-                <span>Generating</span>
-              </div>
-            )}
-
-            {agentState && !sending && agentState.mode !== 'NORMAL' && (
-              <span className="text-xs text-primary/80 font-medium">
-                {agentState.mode === 'AUTONOMOUS' ? 'Autonomous' : 'Planning'}
-              </span>
-            )}
-
-            <button
-              onClick={() => setShowIntrospection(!showIntrospection)}
-              className={cn(
-                'h-7 px-2.5 rounded-lg text-xs transition-all',
-                showIntrospection
-                  ? 'bg-primary/15 text-primary font-medium shadow-[0_0_12px_-2px_rgba(167,139,250,0.3)]'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04]'
-              )}
-            >
-              RRC
-            </button>
-            {/* aria-labels on icon buttons handled via title attrs */}
-          </div>
-        </header>
-
-        <div className="flex flex-1 min-h-0">
-          {/* Message area */}
-          <div className="flex-1 flex flex-col min-w-0">
-            <div ref={scrollRef} className="flex-1 overflow-y-auto">
-              <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
-                {loading && (
-                  <p className="text-sm text-muted-foreground text-center py-12">Loading...</p>
-                )}
-
-                {!loading && data?.messages?.length === 0 && (
-                  <div className="text-center py-24 space-y-3 animate-fade-in">
-                    <p className="text-xl font-medium text-foreground/30">Start a conversation</p>
-                    <p className="text-sm text-muted-foreground/40">
-                      RRC selects only the messages that matter
-                    </p>
-                  </div>
-                )}
-
-                {data?.messages?.map((msg) => (
-                  editingMsg?.id === msg.id ? (
-                    <div key={msg.id} id={`msg-${msg.id}`} className="p-5 rounded-2xl space-y-3 bg-card shadow-lg animate-fade-in">
-                      <label className="text-xs text-muted-foreground">Edit message to create a branch</label>
-                      <Input
-                        value={editContent}
-                        onChange={(e) => setEditContent(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleEdit(msg)
-                          if (e.key === 'Escape') setEditingMsg(null)
-                        }}
-                        autoFocus
-                      />
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={() => handleEdit(msg)}>Create branch</Button>
-                        <Button size="sm" variant="ghost" onClick={() => setEditingMsg(null)}>Cancel</Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div key={msg.id} id={`msg-${msg.id}`}>
-                      <MessageBubble
-                        message={msg}
-                        selection={selectionMap.get(msg.id) ?? undefined}
-                        onEdit={msg.role === 'ROLE_USER' ? () => {
-                          setEditingMsg(msg)
-                          setEditContent(msg.content)
-                        } : undefined}
-                      />
-                    </div>
-                  )
-                ))}
-
-                {toolExec && toolExec.status !== 'completed' && (
-                  <div className="animate-fade-in-up">
-                    <ToolCallDisplay
-                      callId={toolExec.callId}
-                      toolName={toolExec.toolName}
-                      arguments={toolExec.arguments}
-                      status={toolExec.status}
-                      result={toolExec.result ?? null}
-                      isError={toolExec.isError ?? null}
-                    />
-                  </div>
-                )}
-
-                {/* Error display */}
-                {error && (
-                  <div className="animate-fade-in-up max-w-[85%]">
-                    <div className="rounded-2xl px-4 py-3 bg-destructive/10 text-destructive text-sm">
-                      <div className="flex items-start gap-2">
-                        <span className="shrink-0 mt-0.5">&#9888;</span>
-                        <div>
-                          <p className="font-medium text-xs mb-1">Failed to get response</p>
-                          <p className="text-xs text-destructive/70">{error}</p>
-                        </div>
-                        <button
-                          onClick={() => setError(null)}
-                          className="ml-auto shrink-0 text-destructive/40 hover:text-destructive text-xs"
-                        >
-                          &#10005;
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* Streaming / thinking */}
-                {(streamText || thinking) && (
-                  <div className="max-w-[85%] animate-fade-in-up">
-                    <div className="text-[11px] text-muted-foreground/60 font-medium mb-2 pl-1">Spidey</div>
-                    <div className="pl-1">
-                      {streamText ? (
-                        <p className="text-[15px] leading-relaxed whitespace-pre-wrap">{streamText}</p>
-                      ) : (
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground/50">
-                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse-subtle" />
-                          Thinking...
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Footer — composer */}
-            {threadId && (
-              <div className="pb-5 px-6">
-                {/* Mode controls + active status */}
-                <div className="max-w-3xl mx-auto">
-                  <SubagentProgress threadId={threadId} />
-                  <div className="flex items-start gap-1 mb-2">
-                    <AutonomousControls threadId={threadId} />
-                    <PlanMode threadId={threadId} />
-                  </div>
-                </div>
-
-                {/* Composer */}
-                <div className="max-w-3xl mx-auto">
-                  <div className="composer">
-                    <textarea
-                      ref={textareaRef}
-                      value={input}
-                      onChange={(e) => {
-                        handleInputChange(e.target.value)
-                        autoResize(e.target)
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                          e.preventDefault()
-                          handleSend()
-                        }
-                      }}
-                      placeholder="Message Spidey..."
-                      disabled={sending || thinking}
-                      rows={1}
-                    />
-                    <div className="flex items-center justify-between px-3 pb-2.5">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => setScope(s => s === 'THREAD' ? 'ALL_THREADS' : 'THREAD')}
-                          className={cn(
-                            'text-[11px] px-2 py-1 rounded-md transition-all',
-                            scope === 'ALL_THREADS'
-                              ? 'text-primary bg-primary/10'
-                              : 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-foreground/[0.04]'
-                          )}
-                          title={scope === 'THREAD' ? 'Searching this thread' : 'Searching all threads'}
-                        >
-                          {scope === 'THREAD' ? 'This thread' : 'All threads'}
-                        </button>
-                      </div>
-                      <button
-                        onClick={handleSend}
-                        disabled={sending || thinking || !input.trim()}
-                        aria-label="Send message"
-                        className={cn(
-                          'h-8 w-8 rounded-lg flex items-center justify-center transition-all',
-                          input.trim()
-                            ? 'bg-primary text-primary-foreground shadow-[0_0_12px_-2px_rgba(167,139,250,0.4)] hover:shadow-[0_0_16px_-2px_rgba(167,139,250,0.5)]'
-                            : 'text-muted-foreground/50'
-                        )}
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <line x1="22" y1="2" x2="11" y2="13" />
-                          <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Introspection panel */}
-          {showIntrospection && threadId && (
-            <div className="animate-slide-in-right">
-              <IntrospectionPanel threadId={threadId} />
-            </div>
-          )}
-        </div>
-      </main>
-    </div>
+    <>
+      <ToolApprovalPrompt
+        pending={approvals.pending}
+        busy={approvals.busy}
+        onApprove={(cid) => void approvals.approve(cid)}
+        onDeny={(cid, r) => void approvals.deny(cid, r)}
+      />
+      <ThreadView
+        thread={fullThread}
+        parentName={parent?.name}
+        streaming={streaming}
+        stream={stream}
+        subagents={subagents}
+        liveTools={liveTools}
+        onSend={async (text, attachments) => {
+          // Commit plan mode at send time if the user selected it. Runner
+          // restart inside enterPlanMode rebuilds the system prompt before
+          // the next SendMessage sees it.
+          if (mode === 'plan' && agent.mode !== AgentMode.Plan) {
+            await plan.enterPlan(id)
+          }
+          void send(text, attachments)
+        }}
+        onStartAutonomous={(text, d, attachments) => {
+          void autonomous.start(id, text, d, attachments)
+        }}
+        scope={scope}
+        setScope={setScope}
+        mode={mode}
+        setMode={setMode}
+        duration={duration}
+        setDuration={setDuration}
+        focusMessageId={focusMessageId}
+        onEditTurn={onEditTurn}
+        editInFlight={editMsg.loading}
+        artifactsCollapsed={artifactsCollapsed}
+        onToggleArtifacts={onToggleArtifacts}
+        livePlanContent={agent.planContent}
+        agentMode={agent.mode}
+        planApproving={plan.approving}
+        planRejecting={plan.rejecting}
+        planEditing={plan.editing}
+        onApprovePlan={(auto) => void plan.approvePlan(id, auto)}
+        onRejectPlan={(feedback) => void plan.rejectPlan(id, feedback)}
+        onEditPlan={(content) => plan.editPlan(id, content)}
+        agentStatus={agent.status}
+        agentIsAutonomous={agent.isAutonomous}
+        agentElapsed={agent.elapsedTime}
+        agentRetry={agent.retry}
+        onPauseAgent={() => void agentControls.pause(id)}
+        onResumeAgent={(correction) => void agentControls.resume(id, correction)}
+        onStopAgent={() => void agentControls.stop(id)}
+        agentControlsPending={agentControls.pending}
+        pendingQuestions={approvals.questions}
+        onAnswerQuestion={(cid, a) => approvals.answer(cid, a)}
+        onDismissQuestion={(cid) => approvals.dismissQuestion(cid)}
+        questionsBusy={approvals.busy}
+      />
+    </>
   )
 }

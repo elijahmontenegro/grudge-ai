@@ -6,9 +6,9 @@ import (
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 )
 
-// SelectionEntry is the internal working type used during best-first traversal.
+// selectionEntry is the internal working type used during best-first traversal.
 // Mapped to pb.SelectedMessage in the returned SelectionResult.
-type SelectionEntry struct {
+type selectionEntry struct {
 	MessageID      string
 	EffectiveScore float64
 	HopDepth       int
@@ -17,9 +17,27 @@ type SelectionEntry struct {
 	CrossThread    bool
 }
 
+// edgeScoreUnderConfig computes an edge's fused score from its stored
+// raw components (CrossEncoderScore, TemporalProximity) using the
+// CURRENT engine config. Stored edges' Score field was set to whatever
+// config was in effect at creation time — using it directly would
+// freeze walks against historical config. By recomputing from raw
+// components on every walk, the DAG becomes a derived view of
+// (stored_edges, current_config): change config and the graph
+// reprojects immediately, no rebuild or invalidation step needed.
+func edgeScoreUnderConfig(edge *pb.Edge, cfg EngineConfig) float64 {
+	return FuseScore(cfg, float64(edge.CrossEncoderScore), float64(edge.TemporalProximity))
+}
+
 // extractSubgraph performs best-first backward traversal from promptID through
 // the DAG. Returns selected entries and a map of messages excluded due to score floor.
-func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.SelectionScope, cfg EngineConfig) ([]SelectionEntry, map[string]float64) {
+//
+// Edges are re-projected under current config at walk time — stored
+// edges that no longer clear EdgeThreshold are skipped, stored edges
+// whose raw components still pass the current weights contribute
+// their new fused score. This is how config change takes effect
+// retroactively without a separate rebuild path.
+func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.SelectionScope, cfg EngineConfig) ([]selectionEntry, map[string]float64) {
 	visited := make(map[string]bool)
 	visited[promptID] = true
 	belowFloor := make(map[string]float64) // messageID -> score (excluded by floor)
@@ -32,10 +50,13 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 		if !scopeAllows(edge, promptThreadID, scope) {
 			continue
 		}
-		score := float64(edge.Score)
+		score := edgeScoreUnderConfig(edge, cfg)
+		if score < cfg.EdgeThreshold {
+			continue // edge doesn't qualify under current config
+		}
 		crossThread := edge.FromThreadId != promptThreadID
 		heap.Push(pq, &pqItem{
-			entry: SelectionEntry{
+			entry: selectionEntry{
 				MessageID:      edge.FromMessageId,
 				EffectiveScore: score,
 				HopDepth:       1,
@@ -47,7 +68,7 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 		})
 	}
 
-	var selected []SelectionEntry
+	var selected []selectionEntry
 	for pq.Len() > 0 {
 		item := heap.Pop(pq).(*pqItem)
 		entry := item.entry
@@ -72,10 +93,14 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 			if !scopeAllows(edge, promptThreadID, scope) {
 				continue
 			}
-			effectiveScore := float64(edge.Score) * entry.EffectiveScore
+			edgeScore := edgeScoreUnderConfig(edge, cfg)
+			if edgeScore < cfg.EdgeThreshold {
+				continue
+			}
+			effectiveScore := edgeScore * entry.EffectiveScore
 			crossThread := edge.FromThreadId != promptThreadID
 			heap.Push(pq, &pqItem{
-				entry: SelectionEntry{
+				entry: selectionEntry{
 					MessageID:      edge.FromMessageId,
 					EffectiveScore: effectiveScore,
 					HopDepth:       entry.HopDepth + 1,
@@ -93,7 +118,7 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 
 // transitiveReduction removes redundant edges from the selected subgraph.
 // If A→B→C and A→C both exist, removes A→C. Operates on selection entries.
-func transitiveReduction(selected []SelectionEntry) []SelectionEntry {
+func transitiveReduction(selected []selectionEntry) []selectionEntry {
 	if len(selected) <= 1 {
 		return selected
 	}
@@ -170,7 +195,7 @@ func scopeAllows(edge *pb.Edge, promptThreadID string, scope pb.SelectionScope) 
 // --- Priority queue for best-first traversal ---
 
 type pqItem struct {
-	entry    SelectionEntry
+	entry    selectionEntry
 	priority float64
 	index    int
 }

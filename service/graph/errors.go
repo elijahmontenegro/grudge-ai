@@ -33,8 +33,8 @@ func ErrorPresenter(ctx context.Context, err error) *gqlerror.Error {
 		errType = ErrTypeProviderUnavailable
 	case errors.Is(err, rrc.ErrClassifierFailed):
 		errType = ErrTypeClassifierUnavailable
-	case errors.Is(err, rrc.ErrCompleterFailed):
-		errType = ErrTypeAgentError
+	case errors.Is(err, rrc.ErrClassifierUnavailable):
+		errType = ErrTypeClassifierUnavailable
 	case errors.Is(err, rrc.ErrMessageNotFound), errors.Is(err, rrc.ErrThreadNotFound):
 		errType = ErrTypeAgentError
 	case isContextLengthError(err):

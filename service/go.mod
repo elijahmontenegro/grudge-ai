@@ -8,6 +8,9 @@ require (
 	github.com/emontenegr/spidey/core v0.0.0-00010101000000-000000000000
 	github.com/emontenegr/spidey/gen/go v0.0.0
 	github.com/emontenegr/spidey/rrc v0.0.0-00010101000000-000000000000
+	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
+	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/vektah/gqlparser/v2 v2.5.32
 	github.com/zalando/go-keyring v0.2.8
 	google.golang.org/adk v1.0.0
@@ -23,6 +26,7 @@ require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
+	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -33,14 +37,12 @@ require (
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/safehtml v0.1.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.5.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/pkoukk/tiktoken-go v0.1.8 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect

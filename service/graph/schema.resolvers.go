@@ -11,36 +11,162 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/service/adapter"
 	"github.com/emontenegr/spidey/service/adoc"
+	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// Score is the resolver for the score field.
+func (r *edgeResolver) Score(ctx context.Context, obj *pb.Edge) (float64, error) {
+	return float64(obj.Score), nil
+}
+
+// Source is the resolver for the source field.
+func (r *edgeResolver) Source(ctx context.Context, obj *pb.Edge) (string, error) {
+	return obj.Source.String(), nil
+}
+
+// CrossEncoderScore is the resolver for the crossEncoderScore field.
+func (r *edgeResolver) CrossEncoderScore(ctx context.Context, obj *pb.Edge) (float64, error) {
+	return float64(obj.CrossEncoderScore), nil
+}
+
+// TemporalProximity is the resolver for the temporalProximity field.
+func (r *edgeResolver) TemporalProximity(ctx context.Context, obj *pb.Edge) (float64, error) {
+	return float64(obj.TemporalProximity), nil
+}
+
+// Reason is the resolver for the reason field.
+func (r *excludedMessageResolver) Reason(ctx context.Context, obj *pb.ExcludedMessage) (string, error) {
+	return obj.Reason.String(), nil
+}
+
+// Score is the resolver for the score field.
+func (r *excludedMessageResolver) Score(ctx context.Context, obj *pb.ExcludedMessage) (float64, error) {
+	return float64(obj.Score), nil
+}
+
+// Role is the resolver for the role field.
+func (r *messageResolver) Role(ctx context.Context, obj *pb.Message) (string, error) {
+	return protoRoleToDisplay(obj.Role), nil
+}
+
+// Content is the resolver for the content field.
+func (r *messageResolver) Content(ctx context.Context, obj *pb.Message) (string, error) {
+	return protoContentToDisplay(obj.Content), nil
+}
+
+// Thinking is the resolver for the thinking field.
+func (r *messageResolver) Thinking(ctx context.Context, obj *pb.Message) (*string, error) {
+	thinking := protoThinkingContent(obj.Content)
+	if thinking == "" {
+		return nil, nil
+	}
+	return &thinking, nil
+}
+
+// ToolCalls is the resolver for the toolCalls field.
+func (r *messageResolver) ToolCalls(ctx context.Context, obj *pb.Message) ([]*ToolCallBlock, error) {
+	calls := protoToolCalls(obj.Content)
+	result := make([]*ToolCallBlock, len(calls))
+	for i, tc := range calls {
+		result[i] = &ToolCallBlock{ID: tc.Id, Name: tc.Name, Arguments: tc.Arguments}
+	}
+	return result, nil
+}
+
+// ToolResults is the resolver for the toolResults field.
+func (r *messageResolver) ToolResults(ctx context.Context, obj *pb.Message) ([]*ToolResultBlock, error) {
+	results := protoToolResults(obj.Content)
+	out := make([]*ToolResultBlock, len(results))
+	for i, tr := range results {
+		out[i] = &ToolResultBlock{ToolCallID: tr.ToolCallId, Content: tr.Content}
+	}
+	return out, nil
+}
+
+// Attachments is the resolver for the attachments field. Walks the
+// message's content blocks and surfaces any AttachmentContent as
+// metadata-only blocks (the actual file bytes stay in the workspace;
+// GraphQL returns references, clients fetch via the HTTP endpoint).
+func (r *messageResolver) Attachments(ctx context.Context, obj *pb.Message) ([]*AttachmentBlock, error) {
+	var out []*AttachmentBlock
+	for _, b := range obj.Content {
+		if a := b.GetAttachment(); a != nil {
+			out = append(out, &AttachmentBlock{
+				ID:        a.Id,
+				Filename:  a.Filename,
+				MimeType:  a.MimeType,
+				SizeBytes: int(a.SizeBytes),
+				Path:      a.Path,
+			})
+		}
+	}
+	return out, nil
+}
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *messageResolver) CreatedAt(ctx context.Context, obj *pb.Message) (*time.Time, error) {
+	if obj.CreatedAt != nil {
+		t := obj.CreatedAt.AsTime()
+		return &t, nil
+	}
+	return nil, nil
+}
+
+// CitedByCount is the resolver for the citedByCount field.
+func (r *messageResolver) CitedByCount(ctx context.Context, obj *pb.Message) (int, error) {
+	r.mu.RLock()
+	count := r.citationCount[obj.Id]
+	r.mu.RUnlock()
+	return count, nil
+}
+
 // CreateThread is the resolver for the createThread field.
-func (r *mutationResolver) CreateThread(ctx context.Context, name *string, workingDirs []string) (*Thread, error) {
+func (r *mutationResolver) CreateThread(ctx context.Context, name *string, workingDirs []string, sandboxed *bool) (*pb.Thread, error) {
 	threadName := ""
 	if name != nil {
 		threadName = *name
+	}
+	// Auto-set working directory to CWD if none provided
+	if len(workingDirs) == 0 {
+		if cwd, err := os.Getwd(); err == nil {
+			workingDirs = []string{cwd}
+		}
+	}
+	// Default to sandboxed=true when unset: Bash + file tools are
+	// confined to a per-thread workspace via sandbox.WorkspaceDir.
+	// Protects the host from prompt-injected commands that would
+	// otherwise read keys / overwrite arbitrary files. Callers can
+	// pass sandboxed=false at creation for threads that genuinely
+	// need host access.
+	sbx := true
+	if sandboxed != nil {
+		sbx = *sandboxed
 	}
 	t := &pb.Thread{
 		Id:          fmt.Sprintf("thread-%d", time.Now().UnixNano()),
 		Name:        threadName,
 		WorkingDirs: workingDirs,
-		Sandboxed:   true,
+		Sandboxed:   sbx,
 		CreatedAt:   timestamppb.Now(),
 	}
 	if err := r.DB.CreateThread(t); err != nil {
 		return nil, err
 	}
-	return protoThreadToGQL(t), nil
+	r.publishThreadState(&ThreadStateEvent{ThreadID: t.Id, Name: t.Name, Status: AgentStatusIdle, Mode: AgentModeNormal})
+	return t, nil
 }
 
 // UpdateThread is the resolver for the updateThread field.
-func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*Thread, error) {
+func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*pb.Thread, error) {
 	t, err := r.DB.GetThread(id)
 	if err != nil {
 		return nil, err
@@ -54,12 +180,10 @@ func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *st
 	if sandboxed != nil {
 		t.Sandboxed = *sandboxed
 	}
-	// Re-insert (upsert pattern via delete+create for working dirs)
-	r.DB.DeleteThread(id)
-	if err := r.DB.CreateThread(t); err != nil {
+	if err := r.DB.UpdateThread(t); err != nil {
 		return nil, err
 	}
-	return protoThreadToGQL(t), nil
+	return t, nil
 }
 
 // DeleteThread is the resolver for the deleteThread field.
@@ -68,22 +192,30 @@ func (r *mutationResolver) DeleteThread(ctx context.Context, id string) (bool, e
 		return false, err
 	}
 	r.DB.DeleteEdgesForThread(id)
+	r.publishThreadState(&ThreadStateEvent{ThreadID: id})
 	return true, nil
 }
 
 // ArchiveThread is the resolver for the archiveThread field.
 func (r *mutationResolver) ArchiveThread(ctx context.Context, id string) (bool, error) {
-	return true, r.DB.ArchiveThread(id)
+	if err := r.DB.ArchiveThread(id); err != nil {
+		return false, err
+	}
+	r.publishThreadState(&ThreadStateEvent{ThreadID: id})
+	return true, nil
 }
 
 // UnarchiveThread is the resolver for the unarchiveThread field.
 func (r *mutationResolver) UnarchiveThread(ctx context.Context, id string) (bool, error) {
-	return true, r.DB.UnarchiveThread(id)
+	if err := r.DB.UnarchiveThread(id); err != nil {
+		return false, err
+	}
+	r.publishThreadState(&ThreadStateEvent{ThreadID: id})
+	return true, nil
 }
 
 // EditMessage is the resolver for the editMessage field.
-func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*Thread, error) {
-	// Edit creates a branch via Engine.Fork
+func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*pb.Thread, error) {
 	parentThread, err := r.DB.GetThread(threadID)
 	if err != nil {
 		return nil, err
@@ -103,6 +235,11 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 		return nil, err
 	}
 
+	// No Engine.Fork needed — the global engine has the parent's edges and scores.
+	// ThreadCorpus for the branch includes the parent's messages up to the branch point
+	// (referenced, not copied). OnMessage will score the new message against the full
+	// inherited corpus. Edges for the parent's messages are already in the DAG.
+
 	// Insert the edited message at the branch point
 	msg := &pb.Message{
 		Id:       fmt.Sprintf("msg-%s-0", newThread.Id),
@@ -111,11 +248,11 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 		Position: int64(messagePosition),
 		ThreadId: newThread.Id,
 	}
-	if err := r.DB.InsertMessage(msg); err != nil {
+	if err := r.storeMessage(msg, newContent); err != nil {
 		return nil, err
 	}
 
-	return protoThreadToGQL(newThread), nil
+	return newThread, nil
 }
 
 // CompileAdoc is the resolver for the compileAdoc field.
@@ -124,139 +261,82 @@ func (r *mutationResolver) CompileAdoc(ctx context.Context, path string) (string
 }
 
 // SendMessage is the resolver for the sendMessage field.
-func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope) (*Message, error) {
+func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope, attachments []*AttachmentInput) (*pb.Message, error) {
 	// Auto-name thread from first user message
-	corpus, _ := r.DB.ThreadCorpus(threadID)
-	if len(corpus) == 0 {
-		name := content
-		if len(name) > 60 {
-			i := 57
-			for i > 30 && name[i] != ' ' {
-				i--
-			}
-			if name[i] == ' ' {
-				name = name[:i] + "..."
-			} else {
-				name = name[:57] + "..."
-			}
-		}
-		r.DB.UpdateThreadName(threadID, name)
-	}
-
-	// Try ADK runner path first (handles message storage internally)
-	if runner, err := r.getOrCreateRunner(threadID); err == nil {
-		pbScope := pb.SelectionScope_SELECTION_SCOPE_THREAD
-		if scope != nil && *scope == SelectionScopeAllThreads {
-			pbScope = pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS
-		}
-		if resp, err := runner.SendMessage(ctx, content, pbScope); err == nil && resp != nil {
-			return protoMessageToGQL(resp), nil
-		} else if err != nil {
-			log.Printf("[SendMessage] Runner failed, using direct path: %v", err)
-		}
-	}
-
-	// Direct path fallback — store user message here (runner handles its own)
-	msg := &pb.Message{
-		Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-		Role:      pb.Role_ROLE_USER,
-		Content:   adapter.TextToProto(content),
-		Position:  int64(len(corpus)),
-		ThreadId:  threadID,
-		CreatedAt: timestamppb.Now(),
-	}
-	if err := r.DB.InsertMessage(msg); err != nil {
-		return nil, err
-	}
-	if r.Searcher != nil {
-		go r.Searcher.EmbedMessage(ctx, msg.Id, content)
-	}
-	r.engineMu.Lock()
-	edges, err := r.Engine.OnMessage(ctx, msg, corpus)
-	r.engineMu.Unlock()
+	corpus, err := r.DB.ThreadCorpus(threadID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load corpus: %w", err)
 	}
-	for _, edge := range edges {
-		r.DB.InsertEdge(edge)
+	if len(corpus) == 0 && content != "" {
+		if err := r.DB.UpdateThreadName(threadID, storage.TruncateThreadName(content)); err != nil {
+			return nil, fmt.Errorf("update thread name: %w", err)
+		}
 	}
 
-	pbScope := pb.SelectionScope_SELECTION_SCOPE_THREAD
-	if scope != nil && *scope == SelectionScopeAllThreads {
-		pbScope = pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS
-	}
-	r.engineMu.RLock()
-	result, err := r.Engine.Select(msg.Id, pbScope, threadID)
-	r.engineMu.RUnlock()
+	runner, err := r.getOrCreateRunner(threadID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get runner: %w", err)
+	}
+	// Default scope is all-threads. The whole point of RRC is that
+	// the user's prior conversations (any thread) can be pulled in when
+	// relevant. Thread-only is the opt-out, not the default — the old
+	// default made the agent look amnesiac ("I don't retain info across
+	// chats") because it literally had no cross-thread context to pull.
+	pbScope := pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS
+	if scope != nil && *scope == SelectionScopeThread {
+		pbScope = pb.SelectionScope_SELECTION_SCOPE_THREAD
 	}
 
-	r.mu.Lock()
-	if r.selectionResults == nil {
-		r.selectionResults = make(map[string]*pb.SelectionResult)
-	}
-	r.selectionResults[result.EventId] = result
-	if r.latestSelection == nil {
-		r.latestSelection = make(map[string]string)
-	}
-	r.latestSelection[threadID] = result.EventId
-	r.mu.Unlock()
-
-	allMsgs, _ := r.DB.ThreadCorpus(threadID)
-	selectedIDs := make(map[string]float32)
-	for _, sel := range result.Selected {
-		selectedIDs[sel.MessageId] = sel.EffectiveScore
-	}
-
-	var llmMsgs []*pb.LLMMessage
-	for _, m := range allMsgs {
-		if _, ok := selectedIDs[m.Id]; ok {
-			llmMsgs = append(llmMsgs, adapter.MessageToLLM(m))
+	// Defer a publish of Status=Idle so the UI doesn't get stuck showing
+	// "running" after the turn ends. ExitPlan's AgentState("normal")
+	// callback flips Status=Running mid-turn; without this defer, that
+	// state would persist until the user takes an explicit action like
+	// stop or approve. Read current mode from DB so we don't clobber it.
+	defer func() {
+		st, err := r.DB.GetAgentState(threadID)
+		if err != nil {
+			return
 		}
-	}
-	llmMsgs = append(llmMsgs, adapter.MessageToLLM(msg))
+		gqlMode := AgentModeNormal
+		switch st.Mode {
+		case storage.AgentModePlan:
+			gqlMode = AgentModePlan
+		case storage.AgentModeAutonomous:
+			gqlMode = AgentModeAutonomous
+		}
+		// Don't clobber autonomous-in-progress — that loop publishes its
+		// own Idle on exit via defer in StartAutonomous.
+		if st.Mode == storage.AgentModeAutonomous && st.Status == storage.AgentStatusRunning {
+			return
+		}
+		r.planContentMu.RLock()
+		var planPtr *string
+		if pc, ok := r.planContent[threadID]; ok && pc != "" {
+			copied := pc
+			planPtr = &copied
+		}
+		r.planContentMu.RUnlock()
+		// Narrow UPDATE (round 93 helper) so we don't wipe StartedAt /
+		// DurationLimit that an autonomous run may have set. Mode is
+		// already whatever it was — SetAgentStatus leaves it alone.
+		if err := r.DB.SetAgentStatus(threadID, storage.AgentStatusIdle); err == nil {
+			r.publishAgentState(threadID, &AgentState{
+				ThreadID: threadID, Status: AgentStatusIdle, Mode: gqlMode,
+				PlanContent: planPtr,
+			})
+		}
+	}()
 
-	assistantID := fmt.Sprintf("msg-%d", time.Now().UnixNano())
-	contentBlocks, err := streamCompletion(ctx, r.Main, llmMsgs, assistantID, threadID, r.publishStream)
+	// Filenames / sizes / paths are server-generated during upload
+	// and echoed back, so no re-validation is needed at this boundary
+	// (the files already exist on disk in the workspace).
+	attachBlocks := attachmentInputsToBlocks(attachments)
+
+	resp, err := runner.SendMessage(ctx, content, pbScope, attachBlocks...)
 	if err != nil {
-		resp, fallbackErr := completeWithBackoff(ctx, r.Main, llmMsgs, result.Selected)
-		if fallbackErr != nil {
-			return nil, err
-		}
-		contentBlocks = resp.Message.Content
-		r.publishStream(threadID, &StreamEvent{MessageID: assistantID, Done: true})
+		return nil, fmt.Errorf("send message: %w", err)
 	}
-
-	assistantMsg := &pb.Message{
-		Id:        assistantID,
-		Role:      pb.Role_ROLE_ASSISTANT,
-		Content:   contentBlocks,
-		Position:  int64(len(allMsgs) + 1),
-		ThreadId:  threadID,
-		CreatedAt: timestamppb.Now(),
-	}
-	if err := r.DB.InsertMessage(assistantMsg); err != nil {
-		return nil, err
-	}
-
-	var thinking []*pb.ThinkingContent
-	for _, b := range contentBlocks {
-		if t := b.GetThinking(); t != nil {
-			thinking = append(thinking, t)
-		}
-	}
-	if len(thinking) > 0 {
-		r.engineMu.Lock()
-		r.Engine.CarryForward(ctx, &pb.CarryForwardInput{
-			EventId:        result.EventId,
-			ThreadId:       threadID,
-			ThinkingBlocks: thinking,
-		})
-		r.engineMu.Unlock()
-	}
-
-	return protoMessageToGQL(assistantMsg), nil
+	return resp, nil
 }
 
 // StopAgent is the resolver for the stopAgent field.
@@ -266,7 +346,7 @@ func (r *mutationResolver) StopAgent(ctx context.Context, threadID string) (bool
 		ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
 	})
 	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 0, Mode: 0,
+		ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModeNormal,
 	})
 }
 
@@ -277,18 +357,34 @@ func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (boo
 		entry.runner.PauseAutonomous()
 	}
 	r.runnersMu.Unlock()
+	// SaveAgentState is a full-row UPSERT — writing only Status would zero
+	// out Mode/RoundCount/StartedAt/DurationLimit. Read the current state
+	// and preserve everything except the Status transition.
+	st, err := r.DB.GetAgentState(threadID)
+	if err != nil {
+		return false, fmt.Errorf("load state: %w", err)
+	}
+	st.Status = storage.AgentStatusPaused
+	gqlMode := AgentModeNormal
+	switch st.Mode {
+	case storage.AgentModePlan:
+		gqlMode = AgentModePlan
+	case storage.AgentModeAutonomous:
+		gqlMode = AgentModeAutonomous
+	}
 	r.publishAgentState(threadID, &AgentState{
-		ThreadID: threadID, Status: AgentStatusPaused, Mode: AgentModeAutonomous,
+		ThreadID: threadID, Status: AgentStatusPaused, Mode: gqlMode,
 	})
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 2,
-	})
+	return true, r.DB.SaveAgentState(st)
 }
 
 // ResumeAgent is the resolver for the resumeAgent field.
 func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, correction *string) (bool, error) {
 	if correction != nil && *correction != "" {
-		corpus, _ := r.DB.ThreadCorpus(threadID)
+		corpus, err := r.DB.ThreadCorpus(threadID)
+		if err != nil {
+			return false, fmt.Errorf("load corpus: %w", err)
+		}
 		msg := &pb.Message{
 			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 			Role:      pb.Role_ROLE_USER,
@@ -297,23 +393,79 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 			ThreadId:  threadID,
 			CreatedAt: timestamppb.Now(),
 		}
-		r.DB.InsertMessage(msg)
+		if err := r.storeMessage(msg, *correction); err != nil {
+			return false, fmt.Errorf("insert correction: %w", err)
+		}
 	}
+	// Same full-row UPSERT concern as PauseAgent — preserve Mode/RoundCount
+	// rather than zeroing them via a partial state save.
+	st, err := r.DB.GetAgentState(threadID)
+	if err != nil {
+		return false, fmt.Errorf("load state: %w", err)
+	}
+	// Two resume paths:
+	//   (a) Active autonomous loop, just paused → flip the pause gate.
+	//   (b) Dead autonomous loop (runner exited, e.g. ctx cancel or a
+	//       pre-fix exit-on-error) but DB still has Mode=Autonomous →
+	//       kick a fresh RunAutonomous goroutine so the UX doesn't lie.
+	//       Previously this case silently no-op'd, leaving the UI
+	//       showing "running" forever while no goroutine was alive.
 	r.runnersMu.Lock()
-	if entry, ok := r.runners[threadID]; ok {
-		entry.runner.ResumeAutonomous()
-	}
+	entry, haveEntry := r.runners[threadID]
 	r.runnersMu.Unlock()
+	restartedAutonomous := false
+	if haveEntry && entry.runner.IsAutonomousActive() {
+		entry.runner.ResumeAutonomous()
+	} else if st.Mode == storage.AgentModeAutonomous {
+		remaining, perr := remainingAutonomousDuration(st)
+		if perr == nil && remaining > 0 {
+			runner, rerr := r.getOrCreateRunner(threadID)
+			if rerr != nil {
+				return false, fmt.Errorf("restart runner: %w", rerr)
+			}
+			autoCtx, autoCancel := context.WithCancel(context.Background())
+			r.runnersMu.Lock()
+			if e, ok := r.runners[threadID]; ok {
+				e.cancel = autoCancel
+			}
+			r.runnersMu.Unlock()
+			// Continuation prompt — non-empty so the model gets a
+			// clear directive rather than inferring from RRC alone.
+			// If the caller supplied a correction it's already been
+			// stored above; the "continue" kickoff still picks it up
+			// via Selection on the first round.
+			kickoff := "continue"
+			if correction != nil && *correction != "" {
+				kickoff = *correction
+			}
+			go func() {
+				defer r.stopRunner(threadID)
+				defer r.DB.SaveAgentState(&storage.AgentState{ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModeNormal})
+				defer r.publishAgentState(threadID, &AgentState{ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal})
+				if err := runner.RunAutonomous(autoCtx, kickoff, remaining); err != nil {
+					log.Printf("[Autonomous resumed] Error: %v", err)
+				}
+			}()
+			restartedAutonomous = true
+		}
+	}
+	st.Status = storage.AgentStatusRunning
+	gqlMode := AgentModeNormal
+	switch st.Mode {
+	case storage.AgentModePlan:
+		gqlMode = AgentModePlan
+	case storage.AgentModeAutonomous:
+		gqlMode = AgentModeAutonomous
+	}
 	r.publishAgentState(threadID, &AgentState{
-		ThreadID: threadID, Status: AgentStatusRunning, Mode: AgentModeAutonomous,
+		ThreadID: threadID, Status: AgentStatusRunning, Mode: gqlMode,
 	})
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 1,
-	})
+	_ = restartedAutonomous
+	return true, r.DB.SaveAgentState(st)
 }
 
 // StartAutonomous is the resolver for the startAutonomous field.
-func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string, prompt string, duration string) (bool, error) {
+func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string, prompt string, duration string, attachments []*AttachmentInput) (bool, error) {
 	dur, err := time.ParseDuration(duration)
 	if err != nil {
 		return false, fmt.Errorf("invalid duration: %w", err)
@@ -328,7 +480,7 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 	}
 	now := time.Now()
 	if err := r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 1, Mode: 1,
+		ThreadID: threadID, Status: storage.AgentStatusRunning, Mode: storage.AgentModeAutonomous,
 		StartedAt: &now, DurationLimit: duration,
 	}); err != nil {
 		return false, err
@@ -353,15 +505,13 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 
 	go func() {
 		defer r.stopRunner(threadID)
-		defer r.DB.SaveAgentState(&storage.AgentState{ThreadID: threadID, Status: 0, Mode: 0})
+		defer r.DB.SaveAgentState(&storage.AgentState{ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModeNormal})
 		defer r.publishAgentState(threadID, &AgentState{
 			ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
 		})
-		log.Printf("[Autonomous] Started for thread %s (duration: %s)", threadID, duration)
-		if err := runner.RunAutonomous(autoCtx, prompt, dur); err != nil {
+		if err := runner.RunAutonomous(autoCtx, prompt, dur, attachmentInputsToBlocks(attachments)...); err != nil {
 			log.Printf("[Autonomous] Error: %v", err)
 		}
-		log.Printf("[Autonomous] Finished for thread %s", threadID)
 	}()
 
 	return true, nil
@@ -369,12 +519,54 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 
 // ApproveToolCall is the resolver for the approveToolCall field.
 func (r *mutationResolver) ApproveToolCall(ctx context.Context, callID string) (bool, error) {
-	// Tool approval is handled via subscription channel — publish approval event
+	r.pendingApprovalsMu.Lock()
+	ch, ok := r.pendingApprovals[callID]
+	r.pendingApprovalsMu.Unlock()
+	if !ok {
+		return false, fmt.Errorf("no pending approval for call %s", callID)
+	}
+	ch <- true
 	return true, nil
 }
 
 // DenyToolCall is the resolver for the denyToolCall field.
 func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reason *string) (bool, error) {
+	r.pendingApprovalsMu.Lock()
+	ch, ok := r.pendingApprovals[callID]
+	threadID := r.pendingThreadIDs[callID]
+	r.pendingApprovalsMu.Unlock()
+	if !ok {
+		return false, fmt.Errorf("no pending approval for call %s", callID)
+	}
+	// Inject denial feedback as a system message — the user's denial reason is
+	// operational context for the model, not a user utterance. It belongs in the
+	// system domain, not the conversation.
+	if reason != nil && *reason != "" && threadID != "" {
+		corpus, _ := r.DB.ThreadCorpus(threadID)
+		denialText := fmt.Sprintf("Tool call denied by user. Reason: %s", *reason)
+		msg := &pb.Message{
+			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
+			Role:      pb.Role_ROLE_SYSTEM,
+			Content:   adapter.TextToProto(denialText),
+			Position:  int64(len(corpus)),
+			ThreadId:  threadID,
+			CreatedAt: timestamppb.Now(),
+		}
+		_ = r.storeMessage(msg, denialText)
+	}
+	ch <- false
+	return true, nil
+}
+
+// AnswerQuestion is the resolver for the answerQuestion field.
+func (r *mutationResolver) AnswerQuestion(ctx context.Context, callID string, answer string) (bool, error) {
+	r.pendingApprovalsMu.Lock()
+	ch, ok := r.pendingAnswers[callID]
+	r.pendingApprovalsMu.Unlock()
+	if !ok {
+		return false, fmt.Errorf("no pending question for call %s", callID)
+	}
+	ch <- answer
 	return true, nil
 }
 
@@ -382,16 +574,76 @@ func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reas
 func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInput) (*Settings, error) {
 	s := &r.Config.Settings
 	if input.Providers != nil {
-		json.Unmarshal([]byte(*input.Providers), &s.Providers)
+		// Replace semantics, not merge. `json.Unmarshal` into an
+		// existing map preserves keys the new payload omits; that
+		// meant removing a provider in the UI never actually removed
+		// it from disk. Zero the map first so the input is the
+		// authoritative state.
+		var next map[string]config.ProviderConfig
+		if err := json.Unmarshal([]byte(*input.Providers), &next); err != nil {
+			return nil, fmt.Errorf("invalid providers JSON: %w", err)
+		}
+		s.Providers = next
 	}
 	if input.Permissions != nil {
-		json.Unmarshal([]byte(*input.Permissions), &s.Permissions)
+		if err := json.Unmarshal([]byte(*input.Permissions), &s.Permissions); err != nil {
+			return nil, fmt.Errorf("invalid permissions JSON: %w", err)
+		}
 	}
 	if input.McpServers != nil {
-		json.Unmarshal([]byte(*input.McpServers), &s.MCPServers)
+		if err := json.Unmarshal([]byte(*input.McpServers), &s.MCPServers); err != nil {
+			return nil, fmt.Errorf("invalid MCP servers JSON: %w", err)
+		}
+	}
+	if input.Hooks != nil {
+		if err := json.Unmarshal([]byte(*input.Hooks), &s.Hooks); err != nil {
+			return nil, fmt.Errorf("invalid hooks JSON: %w", err)
+		}
 	}
 	if input.Preferences != nil {
-		json.Unmarshal([]byte(*input.Preferences), &s.Preferences)
+		if err := json.Unmarshal([]byte(*input.Preferences), &s.Preferences); err != nil {
+			return nil, fmt.Errorf("invalid preferences JSON: %w", err)
+		}
+	}
+	if input.Engine != nil {
+		var cfg config.EngineConfig
+		if err := json.Unmarshal([]byte(*input.Engine), &cfg); err != nil {
+			return nil, fmt.Errorf("invalid engine JSON: %w", err)
+		}
+		// Reject negatives at the boundary. Zero is a legitimate value for
+		// every field (WeightCE=0 → pure-temporal scoring; ScoreFloor=0 →
+		// no cutoff; EdgeThreshold=0 → accept all edges; RadiusSize=0 →
+		// no radius pad; WeightTemp=0 → pure-semantic; RerankTopK=0 →
+		// rerank disabled). Clamping on `> 0` would silently drop valid
+		// zero-saves and create an "unset vs zero" ambiguity the input
+		// shape doesn't carry.
+		if cfg.EdgeThreshold < 0 || cfg.ScoreFloor < 0 ||
+			cfg.WeightCE < 0 || cfg.WeightTemp < 0 ||
+			cfg.ZScoreThreshold < 0 || cfg.MinBatchStdDev < 0 ||
+			cfg.RadiusSize < 0 || cfg.RerankTopK < 0 ||
+			cfg.ContextBudgetTokens < 0 {
+			return nil, fmt.Errorf("engine config: negative values are not allowed")
+		}
+		s.Engine = cfg
+		// Apply to live engine immediately. Stored DAG edges are
+		// unchanged — they carry raw score components (reranker CE +
+		// temporal) that get reprojected under the new config at walk
+		// time. No rebuild step, no score-cache invalidation.
+		live := r.Engine.Config()
+		live.EdgeThreshold = cfg.EdgeThreshold
+		live.ScoreFloor = cfg.ScoreFloor
+		live.WeightCE = cfg.WeightCE
+		live.WeightTemp = cfg.WeightTemp
+		live.ZScoreThreshold = cfg.ZScoreThreshold
+		live.MinBatchStdDev = cfg.MinBatchStdDev
+		live.RadiusSize = cfg.RadiusSize
+		live.RerankTopK = cfg.RerankTopK
+		live.ContextBudgetTokens = cfg.ContextBudgetTokens
+		r.Engine.UpdateConfig(live)
+		log.Printf("[Settings] Engine config applied live: thr=%.3f floor=%.3f wCE=%.2f wT=%.2f z=%.2f minStd=%.3f radius=%d topK=%d budget=%d",
+			live.EdgeThreshold, live.ScoreFloor, live.WeightCE, live.WeightTemp,
+			live.ZScoreThreshold, live.MinBatchStdDev,
+			live.RadiusSize, live.RerankTopK, live.ContextBudgetTokens)
 	}
 	if err := r.Config.Save(); err != nil {
 		return nil, err
@@ -399,44 +651,197 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 	// Hot-reload providers from updated config
 	if err := r.ReloadProviders(); err != nil {
 		log.Printf("[Settings] Provider reload: %v", err)
-	} else {
-		log.Printf("[Settings] Providers reloaded")
 	}
 	return r.Query().Settings(ctx)
 }
 
 // EnterPlanMode is the resolver for the enterPlanMode field.
+// Plan mode is a permission/intent state, NOT an execution status — flipping
+// the composer pill to "plan" without sending anything must not make the UI
+// claim "agent is running." Keep Status=Idle; Mode=Plan. The runner still
+// gets restarted so the plan-mode system prompt is reassembled for the next
+// SendMessage. Mirrors claude-code's model where plan mode is a
+// toolPermissionContext.mode flag, not an agent status.
 func (r *mutationResolver) EnterPlanMode(ctx context.Context, threadID string) (bool, error) {
 	if err := r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 1, Mode: 2,
+		ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModePlan,
 	}); err != nil {
 		return false, err
 	}
-	// Create runner — plan mode is enforced via IsPlanMode check in tools
+	// Stop existing runner so a fresh one is created with plan mode prompt
+	r.stopRunner(threadID)
+	// Creating the runner now picks up mode=plan from DB, assembles plan mode system prompt
 	if _, err := r.getOrCreateRunner(threadID); err != nil {
-		log.Printf("[PlanMode] Failed to create runner: %v", err)
+		return false, fmt.Errorf("create runner: %w", err)
 	}
 	r.publishAgentState(threadID, &AgentState{
-		ThreadID: threadID, Status: AgentStatusRunning, Mode: AgentModePlan,
+		ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModePlan,
 	})
 	return true, nil
 }
 
 // ApprovePlan is the resolver for the approvePlan field.
+// For Manual mode: clears plan content + flips mode to Normal. Status stays
+// Idle since nothing is actively running — the model will implement on the
+// user's next message (or they can ask for specific changes). Publishing
+// Running here would phantom-signal activity just like round-120's
+// EnterPlanMode bug.
+// For Autonomous mode: same state changes, plus kicks a RunAutonomous
+// goroutine with an "implement the plan" prompt. Status=Running there
+// because the goroutine actually runs.
 func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, executionMode ExecutionMode) (bool, error) {
-	// Restore normal mode, plan content enters thread corpus
-	mode := 0
+	stMode := storage.AgentModeNormal
+	gqlMode := AgentModeNormal
 	if executionMode == ExecutionModeAutonomous {
-		mode = 1
+		stMode = storage.AgentModeAutonomous
+		gqlMode = AgentModeAutonomous
 	}
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: 1, Mode: mode,
+	// Manual: Idle (nothing running). Autonomous: Running (goroutine below).
+	stStatus := storage.AgentStatusIdle
+	gqlStatus := AgentStatusIdle
+	if executionMode == ExecutionModeAutonomous {
+		stStatus = storage.AgentStatusRunning
+		gqlStatus = AgentStatusRunning
+	}
+	if err := r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: stStatus, Mode: stMode,
+	}); err != nil {
+		return false, err
+	}
+	// Clear plan content — it's been approved and enters the corpus
+	r.planContentMu.Lock()
+	delete(r.planContent, threadID)
+	r.planContentMu.Unlock()
+	r.publishAgentState(threadID, &AgentState{
+		ThreadID: threadID, Status: gqlStatus, Mode: gqlMode,
 	})
+
+	if executionMode == ExecutionModeAutonomous {
+		// Kick an autonomous loop so "approve · autonomous" actually does
+		// something. Default duration 1h — the PlanPanel's autonomous
+		// approve button doesn't currently pass a duration; we use a sane
+		// default and let the user stop/extend via the topbar controls.
+		const defaultDuration = "1h"
+		dur, _ := time.ParseDuration(defaultDuration)
+		runner, err := r.getOrCreateRunner(threadID)
+		if err != nil {
+			return false, fmt.Errorf("create runner: %w", err)
+		}
+		autoCtx, autoCancel := context.WithCancel(context.Background())
+		r.runnersMu.Lock()
+		if entry, ok := r.runners[threadID]; ok {
+			entry.cancel = autoCancel
+		}
+		r.runnersMu.Unlock()
+		go func() {
+			defer r.stopRunner(threadID)
+			defer r.DB.SaveAgentState(&storage.AgentState{ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModeNormal})
+			defer r.publishAgentState(threadID, &AgentState{
+				ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
+			})
+			// Non-empty prompt so the model gets a concrete directive — an
+			// empty-content user turn would leave it inferring from RRC
+			// selection alone, which is less reliable for a post-approval
+			// handoff. The model already has the approved plan in context
+			// (ExitPlan tool_result + plan.adoc on disk), but naming the
+			// transition explicitly is cheap and unambiguous.
+			const approvedPrompt = "Plan approved. Proceed with implementation. Re-read plan.adoc if any detail is unclear."
+			if err := runner.RunAutonomous(autoCtx, approvedPrompt, dur); err != nil {
+				log.Printf("[Autonomous plan-approved] Error: %v", err)
+			}
+		}()
+	}
+	return true, nil
+}
+
+// RejectPlan is the resolver for the rejectPlan field.
+// Clears stored plan content, re-enters plan mode with a fresh runner so the
+// plan-mode system prompt is re-applied, and publishes cleared agent state
+// so the PlanPanel closes. The caller is expected to follow up with a
+// sendMessage carrying the feedback so the model revises plan.adoc.
+func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feedback *string) (bool, error) {
+	r.planContentMu.Lock()
+	delete(r.planContent, threadID)
+	r.planContentMu.Unlock()
+
+	// Status stays Idle — rejectPlan itself doesn't execute a round. The
+	// follow-up sendMessage carrying the feedback is what actually kicks
+	// the revision round; its streaming surfaces via the usual path.
+	if err := r.DB.SaveAgentState(&storage.AgentState{
+		ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModePlan,
+	}); err != nil {
+		return false, err
+	}
+	// Stop the current runner so the next getOrCreateRunner picks up plan
+	// mode and rebuilds the system prompt from scratch (no stale plan in it).
+	r.stopRunner(threadID)
+	if _, err := r.getOrCreateRunner(threadID); err != nil {
+		return false, fmt.Errorf("create runner: %w", err)
+	}
+	r.publishAgentState(threadID, &AgentState{
+		ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModePlan,
+		PlanContent: nil,
+	})
+	_ = feedback // reserved for future inline-feedback injection; caller currently sends feedback via sendMessage
+	return true, nil
+}
+
+// UpdatePlanSource is the resolver for the updatePlanSource field.
+// Overwrites plan.adoc with user-edited content before approval. Updates the
+// in-memory plan-content cache and re-publishes agentState so the PlanPanel
+// re-renders with the edited version. The model will see the new content on
+// its next FileRead of plan.adoc.
+func (r *mutationResolver) UpdatePlanSource(ctx context.Context, threadID string, content string) (bool, error) {
+	planDir, err := planDirForThread(r.Config.DataDir, threadID)
+	if err != nil {
+		return false, err
+	}
+	planPath := filepath.Join(planDir, "plan.adoc")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		return false, fmt.Errorf("ensure plan dir: %w", err)
+	}
+	if err := os.WriteFile(planPath, []byte(content), 0o644); err != nil {
+		return false, fmt.Errorf("write plan: %w", err)
+	}
+	r.planContentMu.Lock()
+	r.planContent[threadID] = content
+	r.planContentMu.Unlock()
+
+	// Re-publish agentState with the fresh plan content. Preserve whatever
+	// status/mode the runner is currently reporting — editing the plan is
+	// an out-of-band user action, not a state transition.
+	st, err := r.DB.GetAgentState(threadID)
+	if err != nil {
+		// State missing is non-fatal here — the file write already succeeded
+		// and a subsequent approve/reject will re-publish with sane defaults.
+		return true, nil
+	}
+	gqlStatus := AgentStatusIdle
+	switch st.Status {
+	case storage.AgentStatusRunning:
+		gqlStatus = AgentStatusRunning
+	case storage.AgentStatusPaused:
+		gqlStatus = AgentStatusPaused
+	}
+	gqlMode := AgentModeNormal
+	switch st.Mode {
+	case storage.AgentModePlan:
+		gqlMode = AgentModePlan
+	case storage.AgentModeAutonomous:
+		gqlMode = AgentModeAutonomous
+	}
+	r.publishAgentState(threadID, &AgentState{
+		ThreadID: threadID, Status: gqlStatus, Mode: gqlMode, PlanContent: &content,
+	})
+	return true, nil
 }
 
 // SaveViewState is the resolver for the saveViewState field.
 func (r *mutationResolver) SaveViewState(ctx context.Context, threadID string, state ViewStateInput) (*ViewState, error) {
-	data, _ := json.Marshal(state)
+	data, err := json.Marshal(state)
+	if err != nil {
+		return nil, fmt.Errorf("marshal view state: %w", err)
+	}
 	if err := r.DB.SaveViewState(threadID, data); err != nil {
 		return nil, err
 	}
@@ -450,7 +855,7 @@ func (r *mutationResolver) SaveViewState(ctx context.Context, threadID string, s
 }
 
 // Threads is the resolver for the threads field.
-func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*Thread, error) {
+func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*pb.Thread, error) {
 	incArch := false
 	if includeArchived != nil {
 		incArch = *includeArchived
@@ -459,17 +864,15 @@ func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*
 	if err != nil {
 		return nil, err
 	}
-	result := make([]*Thread, len(pbThreads))
+	result := make([]*pb.Thread, len(pbThreads))
 	for i, t := range pbThreads {
-		gql := protoThreadToGQL(t)
-		gql.MessageCount = r.DB.MessageCount(t.Id)
-		result[i] = gql
+		result[i] = t
 	}
 	return result, nil
 }
 
 // Thread is the resolver for the thread field.
-func (r *queryResolver) Thread(ctx context.Context, id string) (*Thread, error) {
+func (r *queryResolver) Thread(ctx context.Context, id string) (*pb.Thread, error) {
 	t, err := r.DB.GetThread(id)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -477,13 +880,14 @@ func (r *queryResolver) Thread(ctx context.Context, id string) (*Thread, error) 
 		}
 		return nil, err
 	}
-	gql := protoThreadToGQL(t)
-	gql.MessageCount = r.DB.MessageCount(t.Id)
-	return gql, nil
+	return t, nil
 }
 
 // Search is the resolver for the search field.
 func (r *queryResolver) Search(ctx context.Context, query string, limit *int) ([]*SearchResult, error) {
+	if r.Searcher == nil {
+		return nil, fmt.Errorf("search unavailable: embedder not configured")
+	}
 	lim := 10
 	if limit != nil {
 		lim = *limit
@@ -515,7 +919,7 @@ func (r *queryResolver) Search(ctx context.Context, query string, limit *int) ([
 }
 
 // Messages is the resolver for the messages field.
-func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*Message, error) {
+func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*pb.Message, error) {
 	lim, off := 0, 0
 	if limit != nil {
 		lim = *limit
@@ -527,82 +931,97 @@ func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *in
 	if err != nil {
 		return nil, err
 	}
-	result := make([]*Message, len(msgs))
-	for i, m := range msgs {
-		result[i] = protoMessageToGQL(m)
-	}
-	return result, nil
+	return msgs, nil
 }
 
 // SelectionResult is the resolver for the selectionResult field.
-func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*SelectionResult, error) {
+// Memory first (hot path for the current turn's live view), DB
+// fallback so historical events survive restart. `eventID` may be a
+// thread ID (legacy convenience: returns the latest selection on that
+// thread) or a raw event ID.
+func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*pb.SelectionResult, error) {
 	r.mu.RLock()
-	// If eventID looks like a thread ID, resolve to latest selection for that thread
 	resolvedID := eventID
 	if latestID, ok := r.latestSelection[eventID]; ok {
 		resolvedID = latestID
 	}
 	pbResult, ok := r.selectionResults[resolvedID]
 	r.mu.RUnlock()
-	if !ok || pbResult == nil {
-		return nil, nil
+	if ok && pbResult != nil {
+		return pbResult, nil
 	}
 
-	gql := &SelectionResult{
-		EventID:  pbResult.EventId,
-		Scope:    pbResult.Scope.String(),
-		ThreadID: pbResult.ThreadId,
+	// Memory miss — walk the DB. Try as a direct event_id first, then
+	// as a thread_id (latest selection on that thread).
+	if res, err := r.DB.GetSelection(resolvedID); err != nil {
+		return nil, err
+	} else if res != nil {
+		return res, nil
 	}
-	for _, s := range pbResult.Selected {
-		sm := &SelectedMessage{
-			MessageID:      s.MessageId,
-			EffectiveScore: float64(s.EffectiveScore),
-			HopDepth:       int(s.HopDepth),
-			ThreadID:       s.ThreadId,
-			CrossThread:    s.CrossThread,
-		}
-		// Extract score breakdown from the first via-edge
-		if len(s.ViaEdges) > 0 {
-			e := s.ViaEdges[0]
-			sm.CrossEncoderScore = float64(e.CrossEncoderScore)
-			sm.QudWeight = float64(e.QudWeight)
-			sm.TemporalProximity = float64(e.TemporalProximity)
-		}
-		gql.Selected = append(gql.Selected, sm)
+	if res, err := r.DB.LatestSelectionForThread(eventID); err != nil {
+		return nil, err
+	} else if res != nil {
+		return res, nil
 	}
-	for _, e := range pbResult.Excluded {
-		gql.Excluded = append(gql.Excluded, &ExcludedMessage{
-			MessageID: e.MessageId,
-			Reason:    e.Reason.String(),
-			Score:     float64(e.Score),
-		})
-	}
-	return gql, nil
+	return nil, nil
 }
 
-// QudGraph is the resolver for the qudGraph field.
-func (r *queryResolver) QudGraph(ctx context.Context, threadID string) (*QUDGraph, error) {
-	pbGraph, err := r.DB.QUDGraphForThread(threadID)
-	if err != nil {
-		return nil, err
-	}
-	return protoQUDGraphToGQL(pbGraph), nil
+// SelectionForMessage returns the SelectionResult that drove the turn
+// which produced the given target message. Pure DB lookup — this is
+// the primary path for auditing any historical turn, live or long past.
+func (r *queryResolver) SelectionForMessage(ctx context.Context, messageID string) (*pb.SelectionResult, error) {
+	return r.DB.GetSelectionForMessage(messageID)
 }
 
 // Settings is the resolver for the settings field.
 func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	s := r.Config.Settings
-	providers, _ := json.Marshal(s.Providers)
-	permissions, _ := json.Marshal(s.Permissions)
-	mcpServers, _ := json.Marshal(s.MCPServers)
-	hooks, _ := json.Marshal(s.Hooks)
-	preferences, _ := json.Marshal(s.Preferences)
+	providers, err := json.Marshal(s.Providers)
+	if err != nil {
+		return nil, fmt.Errorf("marshal providers: %w", err)
+	}
+	permissions, err := json.Marshal(s.Permissions)
+	if err != nil {
+		return nil, fmt.Errorf("marshal permissions: %w", err)
+	}
+	mcpServers, err := json.Marshal(s.MCPServers)
+	if err != nil {
+		return nil, fmt.Errorf("marshal mcp servers: %w", err)
+	}
+	hooks, err := json.Marshal(s.Hooks)
+	if err != nil {
+		return nil, fmt.Errorf("marshal hooks: %w", err)
+	}
+	preferences, err := json.Marshal(s.Preferences)
+	if err != nil {
+		return nil, fmt.Errorf("marshal preferences: %w", err)
+	}
+	// Serialize engine config from the currently-live engine, not from
+	// config file. This lets the UI reflect the actual operating
+	// config (including any defaults that kicked in when Settings had
+	// zero-value engine fields).
+	engineCfg := r.Engine.Config()
+	engine, err := json.Marshal(map[string]any{
+		"edge_threshold":        engineCfg.EdgeThreshold,
+		"score_floor":           engineCfg.ScoreFloor,
+		"weight_ce":             engineCfg.WeightCE,
+		"weight_temp":           engineCfg.WeightTemp,
+		"z_score_threshold":     engineCfg.ZScoreThreshold,
+		"min_batch_stddev":      engineCfg.MinBatchStdDev,
+		"radius_size":           engineCfg.RadiusSize,
+		"rerank_top_k":          engineCfg.RerankTopK,
+		"context_budget_tokens": engineCfg.ContextBudgetTokens,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal engine config: %w", err)
+	}
 	return &Settings{
 		Providers:   string(providers),
 		Permissions: string(permissions),
 		McpServers:  string(mcpServers),
 		Hooks:       string(hooks),
 		Preferences: string(preferences),
+		Engine:      string(engine),
 	}, nil
 }
 
@@ -616,114 +1035,234 @@ func (r *queryResolver) ViewState(ctx context.Context, threadID string) (*ViewSt
 		return nil, err
 	}
 	var vs ViewState
-	json.Unmarshal(data, &vs)
+	if err := json.Unmarshal(data, &vs); err != nil {
+		return nil, fmt.Errorf("unmarshal view state: %w", err)
+	}
 	vs.ThreadID = threadID
 	return &vs, nil
 }
 
-// Scope is the resolver for the scope field.
-func (r *selectionResultResolver) Scope(ctx context.Context, obj *SelectionResult) (SelectionScope, error) {
-	switch obj.Scope {
-	case "ALL_THREADS":
-		return SelectionScopeAllThreads, nil
-	default:
-		return SelectionScopeThread, nil
+// AgentState is the resolver for the agentState query field.
+func (r *queryResolver) AgentState(ctx context.Context, threadID string) (*AgentState, error) {
+	st, err := r.DB.GetAgentState(threadID)
+	if err != nil {
+		return &AgentState{
+			ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
+		}, nil
 	}
+	status := AgentStatusIdle
+	if st.Status == storage.AgentStatusRunning {
+		status = AgentStatusRunning
+	} else if st.Status == storage.AgentStatusPaused {
+		status = AgentStatusPaused
+	}
+	mode := AgentModeNormal
+	if st.Mode == storage.AgentModeAutonomous {
+		mode = AgentModeAutonomous
+	} else if st.Mode == storage.AgentModePlan {
+		mode = AgentModePlan
+	}
+	result := &AgentState{
+		ThreadID:   threadID,
+		Status:     status,
+		Mode:       mode,
+		RoundCount: st.RoundCount,
+	}
+	if st.DurationLimit != "" {
+		result.DurationLimit = &st.DurationLimit
+	}
+	// Plan content: in-memory only. Considered disk-fallback for restart
+	// survival (plan.adoc persists), but that resurrects any plan whose
+	// in-memory state was reset via stopAgent/rejectPlan — the file
+	// on disk stays. Until reject/approve explicitly delete or mark the
+	// artifact, in-memory is the source of UI truth. The model can still
+	// FileRead plan.adoc directly during implementation.
+	r.planContentMu.RLock()
+	if pc, ok := r.planContent[threadID]; ok && pc != "" {
+		result.PlanContent = &pc
+	}
+	r.planContentMu.RUnlock()
+	return result, nil
+}
+
+// Skills is the resolver for the skills field.
+func (r *queryResolver) Skills(ctx context.Context) ([]*SkillInfo, error) {
+	loaded := r.Resolver.Skills
+	result := make([]*SkillInfo, len(loaded))
+	for i, s := range loaded {
+		result[i] = &SkillInfo{Name: s.Name, Description: s.Description}
+	}
+	return result, nil
+}
+
+// RecentActivity is the resolver for the recentActivity field.
+func (r *queryResolver) RecentActivity(ctx context.Context, limit *int) ([]*ActivityItem, error) {
+	lim := 10
+	if limit != nil {
+		lim = *limit
+	}
+	var items []*ActivityItem
+
+	// Recent threads with messages (activity = latest message per thread)
+	threads, err := r.DB.ListThreads(false)
+	if err != nil {
+		return nil, fmt.Errorf("list threads: %w", err)
+	}
+	for _, t := range threads {
+		lastMsg := r.DB.LatestMessage(t.Id)
+		if lastMsg == nil {
+			continue
+		}
+		summary := adapter.ProtoToText(lastMsg.Content)
+		if len(summary) > 80 {
+			summary = summary[:77] + "..."
+		}
+		items = append(items, &ActivityItem{
+			Type:       "message",
+			ThreadID:   t.Id,
+			ThreadName: t.Name,
+			Summary:    summary,
+			Timestamp:  lastMsg.CreatedAt.AsTime(),
+		})
+	}
+
+	// Recent autonomous completions
+	// (agent state with status=0 and mode=0 that previously was autonomous)
+	// For now, we use the thread-based activity above as the primary signal
+
+	// Sort by timestamp descending
+	for i := 1; i < len(items); i++ {
+		for j := i; j > 0 && items[j].Timestamp.After(items[j-1].Timestamp); j-- {
+			items[j], items[j-1] = items[j-1], items[j]
+		}
+	}
+
+	if len(items) > lim {
+		items = items[:lim]
+	}
+	return items, nil
+}
+
+// EffectiveScore is the resolver for the effectiveScore field.
+func (r *selectedMessageResolver) EffectiveScore(ctx context.Context, obj *pb.SelectedMessage) (float64, error) {
+	return float64(obj.EffectiveScore), nil
+}
+
+// CrossEncoderScore is the resolver for the crossEncoderScore field.
+func (r *selectedMessageResolver) CrossEncoderScore(ctx context.Context, obj *pb.SelectedMessage) (float64, error) {
+	if len(obj.ViaEdges) > 0 {
+		return float64(obj.ViaEdges[0].CrossEncoderScore), nil
+	}
+	return 0, nil
+}
+
+// TemporalProximity is the resolver for the temporalProximity field.
+func (r *selectedMessageResolver) TemporalProximity(ctx context.Context, obj *pb.SelectedMessage) (float64, error) {
+	if len(obj.ViaEdges) > 0 {
+		return float64(obj.ViaEdges[0].TemporalProximity), nil
+	}
+	return 0, nil
+}
+
+// Scope is the resolver for the scope field.
+func (r *selectionResultResolver) Scope(ctx context.Context, obj *pb.SelectionResult) (SelectionScope, error) {
+	if obj.Scope == pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS {
+		return SelectionScopeAllThreads, nil
+	}
+	return SelectionScopeThread, nil
 }
 
 // MessageStream is the resolver for the messageStream field.
 func (r *subscriptionResolver) MessageStream(ctx context.Context, threadID string) (<-chan *StreamEvent, error) {
 	ch := r.subscribeStream(threadID)
-	go func() {
-		<-ctx.Done()
+	unsubscribeOnDone(ctx, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		subs := r.streamSubs[threadID]
-		for i, s := range subs {
-			if s == ch {
-				r.streamSubs[threadID] = append(subs[:i], subs[i+1:]...)
-				break
-			}
-		}
+		r.streamSubs[threadID] = removeChan(r.streamSubs[threadID], ch)
 		close(ch)
-	}()
+	})
 	return ch, nil
 }
 
 // AgentState is the resolver for the agentState field.
 func (r *subscriptionResolver) AgentState(ctx context.Context, threadID string) (<-chan *AgentState, error) {
 	ch := r.subscribeAgentState(threadID)
-	go func() {
-		<-ctx.Done()
+	unsubscribeOnDone(ctx, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		subs := r.agentSubs[threadID]
-		for i, s := range subs {
-			if s == ch {
-				r.agentSubs[threadID] = append(subs[:i], subs[i+1:]...)
-				break
-			}
-		}
+		r.agentSubs[threadID] = removeChan(r.agentSubs[threadID], ch)
 		close(ch)
-	}()
+	})
 	return ch, nil
 }
 
 // ToolExecution is the resolver for the toolExecution field.
 func (r *subscriptionResolver) ToolExecution(ctx context.Context, threadID string) (<-chan *ToolExecution, error) {
 	ch := r.subscribeToolExec(threadID)
-	go func() {
-		<-ctx.Done()
+	unsubscribeOnDone(ctx, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		subs := r.toolSubs[threadID]
-		for i, s := range subs {
-			if s == ch {
-				r.toolSubs[threadID] = append(subs[:i], subs[i+1:]...)
-				break
-			}
-		}
+		r.toolSubs[threadID] = removeChan(r.toolSubs[threadID], ch)
 		close(ch)
-	}()
+	})
 	return ch, nil
 }
 
 // SubagentProgress is the resolver for the subagentProgress field.
 func (r *subscriptionResolver) SubagentProgress(ctx context.Context, threadID string) (<-chan *SubagentProgress, error) {
 	ch := r.subscribeSubagent(threadID)
-	go func() {
-		<-ctx.Done()
+	unsubscribeOnDone(ctx, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		subs := r.subagentSubs[threadID]
-		for i, s := range subs {
-			if s == ch {
-				r.subagentSubs[threadID] = append(subs[:i], subs[i+1:]...)
-				break
-			}
-		}
+		r.subagentSubs[threadID] = removeChan(r.subagentSubs[threadID], ch)
 		close(ch)
-	}()
+	})
 	return ch, nil
 }
 
 // ThreadStateChanges is the resolver for the threadStateChanges field.
 func (r *subscriptionResolver) ThreadStateChanges(ctx context.Context) (<-chan *ThreadStateEvent, error) {
 	ch := r.subscribeThreadState()
-	go func() {
-		<-ctx.Done()
+	unsubscribeOnDone(ctx, func() {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		for i, s := range r.threadSubs {
-			if s == ch {
-				r.threadSubs = append(r.threadSubs[:i], r.threadSubs[i+1:]...)
-				break
-			}
-		}
+		r.threadSubs = removeChan(r.threadSubs, ch)
 		close(ch)
-	}()
+	})
 	return ch, nil
 }
+
+// CreatedAt is the resolver for the createdAt field.
+func (r *threadResolver) CreatedAt(ctx context.Context, obj *pb.Thread) (*time.Time, error) {
+	if obj.CreatedAt != nil {
+		t := obj.CreatedAt.AsTime()
+		return &t, nil
+	}
+	return nil, nil
+}
+
+// ArchivedAt is the resolver for the archivedAt field.
+func (r *threadResolver) ArchivedAt(ctx context.Context, obj *pb.Thread) (*time.Time, error) {
+	if obj.ArchivedAt != nil {
+		t := obj.ArchivedAt.AsTime()
+		return &t, nil
+	}
+	return nil, nil
+}
+
+// MessageCount is the resolver for the messageCount field.
+func (r *threadResolver) MessageCount(ctx context.Context, obj *pb.Thread) (int, error) {
+	return r.DB.MessageCount(obj.Id), nil
+}
+
+// Edge returns EdgeResolver implementation.
+func (r *Resolver) Edge() EdgeResolver { return &edgeResolver{r} }
+
+// ExcludedMessage returns ExcludedMessageResolver implementation.
+func (r *Resolver) ExcludedMessage() ExcludedMessageResolver { return &excludedMessageResolver{r} }
+
+// Message returns MessageResolver implementation.
+func (r *Resolver) Message() MessageResolver { return &messageResolver{r} }
 
 // Mutation returns MutationResolver implementation.
 func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
@@ -731,15 +1270,52 @@ func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
 // Query returns QueryResolver implementation.
 func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 
+// SelectedMessage returns SelectedMessageResolver implementation.
+func (r *Resolver) SelectedMessage() SelectedMessageResolver { return &selectedMessageResolver{r} }
+
 // SelectionResult returns SelectionResultResolver implementation.
 func (r *Resolver) SelectionResult() SelectionResultResolver { return &selectionResultResolver{r} }
 
 // Subscription returns SubscriptionResolver implementation.
 func (r *Resolver) Subscription() SubscriptionResolver { return &subscriptionResolver{r} }
 
+// Thread returns ThreadResolver implementation.
+func (r *Resolver) Thread() ThreadResolver { return &threadResolver{r} }
+
+type edgeResolver struct{ *Resolver }
+type excludedMessageResolver struct{ *Resolver }
+type messageResolver struct{ *Resolver }
 type mutationResolver struct{ *Resolver }
 type queryResolver struct{ *Resolver }
+type selectedMessageResolver struct{ *Resolver }
 type selectionResultResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
+type threadResolver struct{ *Resolver }
 
-// Helper functions moved to helpers.go
+// remainingAutonomousDuration computes how much of an autonomous run's
+// configured wall-clock budget is left, given the stored AgentState.
+// Used by ResumeAgent to restart an autonomous loop after a process
+// restart. Default budget 1h when DurationLimit is unset; a 5-minute
+// floor prevents immediate expiration on near-deadline resumes.
+//
+// Kept as a file-local helper (not a method on resolver) because
+// gqlgen's codegen does not know about non-resolver methods and
+// would orphan them on regeneration.
+func remainingAutonomousDuration(st *storage.AgentState) (time.Duration, error) {
+	if st.DurationLimit == "" {
+		return time.Hour, nil
+	}
+	total, err := time.ParseDuration(st.DurationLimit)
+	if err != nil {
+		return 0, fmt.Errorf("parse durationLimit %q: %w", st.DurationLimit, err)
+	}
+	if st.StartedAt == nil {
+		return total, nil
+	}
+	elapsed := time.Since(*st.StartedAt)
+	remaining := total - elapsed
+	if remaining < 5*time.Minute {
+		remaining = 5 * time.Minute
+	}
+	return remaining, nil
+}

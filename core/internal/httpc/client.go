@@ -13,6 +13,23 @@ import (
 const (
 	TimeoutDefault   = 30 * time.Second
 	TimeoutStreaming = 120 * time.Second
+
+	// TimeoutTEI bounds a single TEI /rerank or /embed HTTP call.
+	// The default 30s was too tight — healthy reranks are sub-second,
+	// but a legitimately-queued batch on a shared GPU can take 30-90s
+	// to drain. 120s tolerates realistic queue depth without masking
+	// a true wedge (which appears as indefinite silence; we let the
+	// docker-compose healthcheck's canary /rerank probe detect that
+	// and restart the container). The resilience-layer retry above
+	// this composes cleanly: one wedge-then-restart cycle fits
+	// inside the retry budget.
+	TimeoutTEI = 120 * time.Second
+
+	// StreamingHeaderTimeout bounds how long we wait for the upstream
+	// LLM to start producing bytes (TTFB). Past this, the model is
+	// effectively wedged. The body itself is not time-limited — a
+	// long completion streaming for minutes is normal.
+	StreamingHeaderTimeout = 120 * time.Second
 )
 
 // Client is a shared HTTP client used by all provider adapters. Auth is
@@ -25,10 +42,39 @@ type Client struct {
 
 // New creates a Client with the given timeout and auth callback. Pass nil
 // for authFn if the provider requires no authentication (e.g. local Ollama).
+// The timeout is a whole-request deadline — appropriate for non-streaming
+// JSON calls, inappropriate for streaming (see NewStreaming).
 func New(timeout time.Duration, authFn func(*http.Request)) *Client {
 	return &Client{
 		http: &http.Client{
 			Timeout: timeout,
+		},
+		authFn: authFn,
+	}
+}
+
+// NewStreaming builds a client for streaming LLM calls. Critically it
+// does NOT set http.Client.Timeout, which is a whole-request deadline
+// that includes reading the response body — a 120s cap there killed
+// autonomous loops mid-stream once a response took longer than two
+// minutes to arrive or finish. Instead we bound the TTFB via
+// Transport.ResponseHeaderTimeout; once headers arrive, the body can
+// stream indefinitely. Overall cancellation is the caller's
+// responsibility via context.
+func NewStreaming(authFn func(*http.Request)) *Client {
+	return &Client{
+		http: &http.Client{
+			Transport: &http.Transport{
+				ResponseHeaderTimeout: StreamingHeaderTimeout,
+				// Explicit defaults copied from http.DefaultTransport
+				// so we don't accidentally drop connection pooling.
+				Proxy:                 http.ProxyFromEnvironment,
+				MaxIdleConns:          100,
+				MaxIdleConnsPerHost:   10,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
 		},
 		authFn: authFn,
 	}

@@ -17,6 +17,14 @@ message LLMMessage {
   repeated ContentBlock content = 2;
 }
 
+// ToolDeclaration describes a tool the model can call.
+message ToolDeclaration {
+  string name = 1;
+  string description = 2;
+  // JSON Schema for the tool's parameters, as a JSON string.
+  string parameters_json = 3;
+}
+
 message CompletionRequest {
   repeated LLMMessage messages = 1;
   string model = 2;
@@ -29,6 +37,8 @@ message CompletionRequest {
   // Avoids leaking the abstraction when a provider supports options
   // we don't model explicitly.
   google.protobuf.Struct provider_options = 8;
+  // Tool declarations — functions the model can call.
+  repeated ToolDeclaration tools = 9;
 }
 
 message CompletionResponse {

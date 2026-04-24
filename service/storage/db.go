@@ -8,15 +8,56 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Chunker splits message text into storable Chunk slices. Injected at
+// service startup (wiring in rrc.ChunkText) so storage doesn't depend
+// on the rrc package directly — chunking is pure text manipulation
+// and conceptually belongs in rrc, but storage needs to invoke it to
+// keep chunks consistent with messages on insert.
+type Chunker func(text string) []Chunk
+
 // DB wraps an SQLite connection with WAL mode.
 type DB struct {
 	*sql.DB
+	chunker Chunker
 }
 
+// SetChunker installs the chunking callback. InsertMessage will use
+// it to populate the chunks table atomically with the message row.
+// Must be set before any InsertMessage call for chunks to be produced;
+// callers that forget get a message row with zero chunks (and zero
+// embeddings, zero scores — effectively invisible to RRC).
+func (d *DB) SetChunker(c Chunker) { d.chunker = c }
+
 // Open creates or opens the SQLite database at the given data directory.
+//
+// Concurrency notes:
+//   - modernc/sqlite ignores the `?_journal_mode=WAL` DSN form other
+//     drivers accept; it wants `?_pragma=journal_mode(WAL)` instead.
+//     Previously we used the other-driver form and it was silently
+//     dropped — result: journal_mode stayed at "delete" and
+//     busy_timeout stayed at 0, so any concurrent write failed
+//     instantly with SQLITE_BUSY. Fixed by passing pragmas in
+//     modernc's format so every pool connection gets them on open.
+//   - No MaxOpenConns cap. An earlier iteration set it to 1 to serialize
+//     writes, but that blocked long-running reads (subscriptions, large
+//     corpus fetches) against every incoming query — the UI hung.
+//     WAL mode + busy_timeout handle the write contention; the default
+//     pool size is fine.
 func Open(dataDir string) (*DB, error) {
 	dbPath := filepath.Join(dataDir, "spidey.db")
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	// modernc/sqlite DSN: query-string pragmas are applied on every
+	// connection the pool opens, not just the first. `_txlock=immediate`
+	// ensures every BEGIN grabs the write lock up front, avoiding the
+	// "two readers upgrading to writers" SQLITE_BUSY deadlock.
+	dsn := dbPath +
+		"?_pragma=journal_mode(WAL)" +
+		"&_pragma=synchronous(NORMAL)" + // WAL-safe default — fsync at checkpoint, not per-commit
+		"&_pragma=busy_timeout(30000)" + // ms — wait up to 30s for a lock rather than failing instantly
+		"&_pragma=foreign_keys(ON)" + // CASCADE delete
+		"&_pragma=temp_store(MEMORY)" + // keep temp tables off disk
+		"&_txlock=immediate"
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
@@ -26,13 +67,20 @@ func Open(dataDir string) (*DB, error) {
 		return nil, fmt.Errorf("ping db: %w", err)
 	}
 
-	// Enable foreign keys for CASCADE delete
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+	// Verify journal_mode actually flipped — WAL activation can fail if
+	// another process has the DB open in rollback mode, and a silent
+	// revert would resurrect the BUSY storm. Fail fast instead.
+	var mode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("pragma foreign_keys: %w", err)
+		return nil, fmt.Errorf("read journal_mode: %w", err)
+	}
+	if mode != "wal" {
+		db.Close()
+		return nil, fmt.Errorf("journal_mode is %q, expected wal — another process may hold the DB", mode)
 	}
 
-	d := &DB{db}
+	d := &DB{DB: db}
 	if err := d.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -42,8 +90,26 @@ func Open(dataDir string) (*DB, error) {
 }
 
 func (d *DB) migrate() error {
-	_, err := d.Exec(schema)
-	return err
+	if _, err := d.Exec(schema); err != nil {
+		return err
+	}
+	// Schema version guard — v2 introduces chunk-keyed embeddings and
+	// per-chunk-pair scores. Running against an older DB drops the
+	// obsolete derived tables (embeddings, scores, edges) so they get
+	// recreated with the new keys. Messages and threads are preserved.
+	var ver int
+	if err := d.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&ver); err != nil {
+		return fmt.Errorf("read schema_version: %w", err)
+	}
+	if ver < 2 {
+		if _, err := d.Exec(migrationV2); err != nil {
+			return fmt.Errorf("migrate v2: %w", err)
+		}
+		if _, err := d.Exec("INSERT INTO schema_version(version) VALUES (2)"); err != nil {
+			return fmt.Errorf("record schema_version 2: %w", err)
+		}
+	}
+	return nil
 }
 
 const schema = `
@@ -90,12 +156,29 @@ CREATE TABLE IF NOT EXISTS edges (
 );
 CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_message_id);
 
-CREATE TABLE IF NOT EXISTS scores (
-    from_message_id TEXT NOT NULL,
-    to_message_id TEXT NOT NULL,
-    score REAL NOT NULL,
-    PRIMARY KEY (from_message_id, to_message_id)
+-- Schema version sentinel. Each row is a migration that has run.
+-- Introduced at v2 to gate the embeddings/scores → chunk-keyed rewrite.
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Chunks: paragraph-sized slices of a message, persisted so embeddings
+-- and cross-encoder scores can be keyed at sub-message granularity.
+-- The old message-level scoring silently truncated any message past
+-- the classifier's 512-token limit — the character bible (~6K tokens)
+-- had 11/12 of its content invisible to RRC. Chunking restores
+-- visibility; messages remain the graph unit.
+CREATE TABLE IF NOT EXISTS chunks (
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    chunk_index INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    byte_start INTEGER NOT NULL,
+    byte_end INTEGER NOT NULL,
+    token_est INTEGER NOT NULL,
+    PRIMARY KEY (message_id, chunk_index)
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_message ON chunks(message_id);
 
 CREATE TABLE IF NOT EXISTS quds (
     id TEXT PRIMARY KEY,
@@ -144,10 +227,104 @@ CREATE TABLE IF NOT EXISTS user_input_history (
 );
 CREATE INDEX IF NOT EXISTS idx_input_history_thread ON user_input_history(thread_id);
 
+-- Embedding cache: one vector per (chunk, embedder model) triple.
+-- Key includes chunk_index so the same message's multiple chunks each
+-- get their own vector. Model ID in the PK lets multiple model
+-- versions coexist for the same chunk (user swaps embedder → old rows
+-- stay, new rows accrue). FK on (message_id, chunk_index) cascades
+-- from chunks which itself cascades from messages.
 CREATE TABLE IF NOT EXISTS embeddings (
-    message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    message_id TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    model_id TEXT NOT NULL,
     vector BLOB NOT NULL,
-    model TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (message_id, chunk_index, model_id),
+    FOREIGN KEY (message_id, chunk_index) REFERENCES chunks(message_id, chunk_index) ON DELETE CASCADE
+);
+
+-- Score cache: one row per (prior-chunk, target-chunk, reranker model)
+-- quintuple. Keys at chunk granularity so the cache survives across
+-- different chunk combinations and model switches invalidate cleanly.
+-- Aggregation to message-pair score happens at read time in the engine.
+CREATE TABLE IF NOT EXISTS scores (
+    from_message_id TEXT NOT NULL,
+    from_chunk_index INTEGER NOT NULL,
+    to_message_id TEXT NOT NULL,
+    to_chunk_index INTEGER NOT NULL,
+    model_id TEXT NOT NULL,
+    score REAL NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (from_message_id, from_chunk_index, to_message_id, to_chunk_index, model_id),
+    FOREIGN KEY (from_message_id, from_chunk_index) REFERENCES chunks(message_id, chunk_index) ON DELETE CASCADE,
+    FOREIGN KEY (to_message_id, to_chunk_index) REFERENCES chunks(message_id, chunk_index) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_scores_target ON scores(to_message_id, to_chunk_index, model_id);
+
+-- Selection audit trail. One row per SelectionResult produced during
+-- a Retrieval Event. Persisted so every historical turn can be
+-- introspected — without this, restart wipes the in-memory map and
+-- "what did RRC pull for turn N?" becomes unanswerable. event_id
+-- matches the engine's synthesized ID (sel-<target_message_id>).
+CREATE TABLE IF NOT EXISTS selections (
+    event_id TEXT PRIMARY KEY,
+    target_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    thread_id TEXT NOT NULL,
+    scope INTEGER NOT NULL,
+    result BLOB NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_selections_target ON selections(target_message_id);
+CREATE INDEX IF NOT EXISTS idx_selections_thread_created ON selections(thread_id, created_at);
+`
+
+// migrationV2 converts pre-v2 deployments to chunk-keyed embeddings
+// and per-chunk-pair scores. Pre-v2 embeddings/scores/edges were
+// keyed at message level under the old 512-token NLI classifier; the
+// new schema (above) supersedes them. We drop the derived tables and
+// let the runtime rebuild them from scratch — messages and threads
+// stay untouched, so the user's conversation history is preserved.
+const migrationV2 = `
+DROP TABLE IF EXISTS embeddings;
+DROP TABLE IF EXISTS scores;
+DROP TABLE IF EXISTS edges;
+
+CREATE TABLE embeddings (
+    message_id TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    model_id TEXT NOT NULL,
+    vector BLOB NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (message_id, chunk_index, model_id),
+    FOREIGN KEY (message_id, chunk_index) REFERENCES chunks(message_id, chunk_index) ON DELETE CASCADE
+);
+
+CREATE TABLE scores (
+    from_message_id TEXT NOT NULL,
+    from_chunk_index INTEGER NOT NULL,
+    to_message_id TEXT NOT NULL,
+    to_chunk_index INTEGER NOT NULL,
+    model_id TEXT NOT NULL,
+    score REAL NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (from_message_id, from_chunk_index, to_message_id, to_chunk_index, model_id),
+    FOREIGN KEY (from_message_id, from_chunk_index) REFERENCES chunks(message_id, chunk_index) ON DELETE CASCADE,
+    FOREIGN KEY (to_message_id, to_chunk_index) REFERENCES chunks(message_id, chunk_index) ON DELETE CASCADE
+);
+CREATE INDEX idx_scores_target ON scores(to_message_id, to_chunk_index, model_id);
+
+CREATE TABLE edges (
+    from_message_id TEXT NOT NULL,
+    to_message_id TEXT NOT NULL,
+    score REAL NOT NULL,
+    source INTEGER NOT NULL,
+    cross_encoder_score REAL NOT NULL,
+    qud_weight REAL NOT NULL,
+    temporal_proximity REAL NOT NULL,
+    detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    from_thread_id TEXT NOT NULL,
+    to_thread_id TEXT NOT NULL,
+    PRIMARY KEY (from_message_id, to_message_id)
+);
+CREATE INDEX idx_edges_to ON edges(to_message_id);
 `

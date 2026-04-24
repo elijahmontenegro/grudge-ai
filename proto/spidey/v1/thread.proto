@@ -27,6 +27,7 @@ message ContentBlock {
     ToolCallContent tool_call = 3;
     ToolResultContent tool_result = 4;
     ImageContent image = 5;
+    AttachmentContent attachment = 6;
   }
 }
 
@@ -53,6 +54,21 @@ message ToolResultContent {
 message ImageContent {
   string media_type = 1;
   bytes data = 2;
+}
+
+// AttachmentContent: a file the user attached to the message, already
+// imported into the thread's workspace. `path` is the sandbox-relative
+// location the agent resolves via FileRead. `inlined_text` carries
+// extracted UTF-8 text for text-like MIME types so RRC can chunk and
+// score attachment content alongside prose; binary attachments leave
+// it empty and are referenced by path only.
+message AttachmentContent {
+  string id = 1;            // UUID, also the subdirectory name under _attachments/
+  string filename = 2;      // sanitized display name, also the basename on disk
+  string mime_type = 3;     // sniffed from actual content at upload time
+  int64 size_bytes = 4;
+  string path = 5;          // sandbox-relative, e.g. "/workspace/_attachments/{id}/{filename}"
+  string inlined_text = 6;  // populated for text/* MIME; capped at a reasonable size
 }
 
 // Corpus message. The persistent record in a thread.

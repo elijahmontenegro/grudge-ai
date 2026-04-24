@@ -5,6 +5,7 @@ import (
 	net_http "net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -15,11 +16,41 @@ type Settings struct {
 	MCPServers  []MCPServer               `json:"mcp_servers"`
 	Hooks       []HookConfig              `json:"hooks"`
 	Preferences map[string]string         `json:"preferences"`
+	Engine      EngineConfig              `json:"engine"`
 	UserName    string                    `json:"user_name,omitempty"`
 }
 
-// GetUserName returns the configured user name, falling back to OS user.
+// EngineConfig holds live-tunable RRC engine parameters. Mirrors
+// rrc.EngineConfig but lives in the config package to avoid a
+// service→rrc cycle at settings-serialization time. Zero-value
+// Engine means "use the rrc default" — handled at the service
+// boundary.
+type EngineConfig struct {
+	EdgeThreshold       float64 `json:"edge_threshold"`
+	ScoreFloor          float64 `json:"score_floor"`
+	WeightCE            float64 `json:"weight_ce"`
+	WeightTemp          float64 `json:"weight_temp"`
+	ZScoreThreshold     float64 `json:"z_score_threshold"`
+	MinBatchStdDev      float64 `json:"min_batch_stddev"`
+	RadiusSize          int     `json:"radius_size"`
+	RerankTopK          int     `json:"rerank_top_k"`
+	ContextBudgetTokens int     `json:"context_budget_tokens"`
+}
+
+// GetUserName returns the configured display name, in priority:
+//  1. `preferences.name` — the field the Settings UI writes to.
+//  2. top-level `user_name` — a legacy slot some callers may still set.
+//  3. `$USER` / `$USERNAME` — OS login fallback (e.g. "alice" on Windows).
+//  4. literal "User" as a last resort.
+// Previously the UI-entered name never reached the agent because the
+// UI wrote to preferences.name but this function only checked
+// s.UserName, falling through to the Windows login on every turn.
 func (s *Settings) GetUserName() string {
+	if s.Preferences != nil {
+		if name := strings.TrimSpace(s.Preferences["name"]); name != "" {
+			return name
+		}
+	}
 	if s.UserName != "" {
 		return s.UserName
 	}

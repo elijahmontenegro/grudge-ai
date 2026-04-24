@@ -10,6 +10,14 @@ import (
 	"time"
 )
 
+type ActivityItem struct {
+	Type       string    `json:"type"`
+	ThreadID   string    `json:"threadId"`
+	ThreadName string    `json:"threadName"`
+	Summary    string    `json:"summary"`
+	Timestamp  time.Time `json:"timestamp"`
+}
+
 type AgentState struct {
 	ThreadID      string      `json:"threadId"`
 	Status        AgentStatus `json:"status"`
@@ -18,12 +26,54 @@ type AgentState struct {
 	StartedAt     *time.Time  `json:"startedAt,omitempty"`
 	DurationLimit *string     `json:"durationLimit,omitempty"`
 	ElapsedTime   *string     `json:"elapsedTime,omitempty"`
+	PlanContent   *string     `json:"planContent,omitempty"`
+	// Retry status of the underlying provider call. Null when not retrying.
+	Retry *RetryStatus `json:"retry,omitempty"`
+}
+
+// Attachment metadata on a message. Files live in the thread's sandbox
+// workspace under `_attachments/{id}/{filename}`; `path` is the
+// sandbox-relative location the agent resolves via FileRead. Download
+// via GET /api/attachments/{threadId}/{id}/{filename}.
+type AttachmentBlock struct {
+	ID        string `json:"id"`
+	Filename  string `json:"filename"`
+	MimeType  string `json:"mimeType"`
+	SizeBytes int    `json:"sizeBytes"`
+	Path      string `json:"path"`
+}
+
+// AttachmentInput is the shape the client sends after a successful
+// POST /api/attachments/{threadId} — echoing what that endpoint
+// returned. The server reconstructs AttachmentContent blocks from
+// these and stamps them into the message at send time.
+type AttachmentInput struct {
+	ID          string  `json:"id"`
+	Filename    string  `json:"filename"`
+	MimeType    string  `json:"mimeType"`
+	SizeBytes   int     `json:"sizeBytes"`
+	Path        string  `json:"path"`
+	InlinedText *string `json:"inlinedText,omitempty"`
 }
 
 type Mutation struct {
 }
 
 type Query struct {
+}
+
+// Transient-failure retry progress for the current LLM request.
+// Surfaced to the UI so the user sees "retrying 2/10, next attempt in
+// 8s" instead of a silent pause.
+type RetryStatus struct {
+	Attempt     int `json:"attempt"`
+	MaxAttempts int `json:"maxAttempts"`
+	// Last error message that triggered the retry (null on success).
+	Error *string `json:"error,omitempty"`
+	// Milliseconds until the next attempt. 0 when this is the final event.
+	NextDelayMs int `json:"nextDelayMs"`
+	// True when no more attempts will be made (success or exhaustion).
+	Final bool `json:"final"`
 }
 
 type SearchResult struct {
@@ -40,13 +90,26 @@ type Settings struct {
 	McpServers  string `json:"mcpServers"`
 	Hooks       string `json:"hooks"`
 	Preferences string `json:"preferences"`
+	// Engine config as JSON: { edgeThreshold, scoreFloor, weightCE, weightTemp, radiusSize, rerankTopK }.
+	// Live-tunable — the RRC engine re-projects stored edges under the new config
+	// at walk time, so saving here changes Selection behavior on the next turn
+	// without a restart. Raw reranker scores are preserved; only the fused
+	// projection shifts.
+	Engine string `json:"engine"`
 }
 
 type SettingsInput struct {
 	Providers   *string `json:"providers,omitempty"`
 	Permissions *string `json:"permissions,omitempty"`
 	McpServers  *string `json:"mcpServers,omitempty"`
+	Hooks       *string `json:"hooks,omitempty"`
 	Preferences *string `json:"preferences,omitempty"`
+	Engine      *string `json:"engine,omitempty"`
+}
+
+type SkillInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type StreamEvent struct {
@@ -77,6 +140,12 @@ type ThreadStateEvent struct {
 	Name     string      `json:"name"`
 }
 
+type ToolCallBlock struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
 type ToolCallDelta struct {
 	ID        string  `json:"id"`
 	Name      string  `json:"name"`
@@ -91,6 +160,11 @@ type ToolExecution struct {
 	Status    string  `json:"status"`
 	Result    *string `json:"result,omitempty"`
 	IsError   *bool   `json:"isError,omitempty"`
+}
+
+type ToolResultBlock struct {
+	ToolCallID string `json:"toolCallId"`
+	Content    string `json:"content"`
 }
 
 type ViewState struct {

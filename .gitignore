@@ -1,0 +1,17 @@
+# Compiled binaries and their backup-suffix variants
+*.exe
+*.exe~*
+
+# Local editor / tooling state
+.idea/
+.claude/
+
+# Runtime artifacts
+*.log
+*.db
+*.db-wal
+*.db-shm
+
+# Frontend node modules (if they ever get picked up by accident)
+web/node_modules/
+node_modules/

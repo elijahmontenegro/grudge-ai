@@ -1,202 +1,320 @@
-import { gql } from '@apollo/client'
-import { useQuery, useMutation } from '@apollo/client/react'
-import { useNavigate, useParams } from 'react-router'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { cn } from '@/lib/utils'
-import { useThreadStateChanges } from '@/hooks/useThreadState'
-import { useTheme } from '@/lib/theme'
-import type { Thread } from '@/graphql/generated/types'
+import { Fragment, useMemo, useRef, useState } from 'react'
+import { IconChats, IconChevron, IconPlus, IconSearch, IconX, IconPanel } from '@/components/atoms/icons'
+import { kbdLabel } from '@/components/atoms/platform'
+import { ThreadRow } from '@/components/molecules/ThreadRow'
+import { SidebarSection } from '@/components/molecules/SidebarSection'
+import { UserMenu } from '@/components/molecules/UserMenu'
+import { useThreadMutations } from '@/hooks/useThreadMutations'
+import { useMe } from '@/hooks/useMe'
+import type { Thread } from '@/data/types'
 
-const THREADS_QUERY = gql`
-  query SidebarThreads($includeArchived: Boolean) {
-    threads(includeArchived: $includeArchived) {
-      id
-      name
-      createdAt
-      archivedAt
-      parentThreadId
-      messageCount
-    }
-  }
-`
+/** Number of most-recently-active non-pinned threads shown in the sidebar.
+ *  Everything beyond lives on the Home "all chats" view. Keeps the sidebar
+ *  calm rather than an ever-growing list. */
+const RECENT_CAP = 10
 
-const CREATE_THREAD = gql`
-  mutation CreateThread($name: String) {
-    createThread(name: $name) { id name }
-  }
-`
-
-const ARCHIVE_THREAD = gql`
-  mutation ArchiveThread($id: ID!) { archiveThread(id: $id) }
-`
-
-const DELETE_THREAD = gql`
-  mutation DeleteThread($id: ID!) { deleteThread(id: $id) }
-`
-
-type ThreadsData = { threads: Thread[] }
-
-function formatRelativeTime(dateStr: string): string {
-  const date = new Date(dateStr)
-  const now = new Date()
-  const diffMs = now.getTime() - date.getTime()
-  const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1) return 'now'
-  if (diffMin < 60) return `${diffMin}m`
-  const diffHr = Math.floor(diffMin / 60)
-  if (diffHr < 24) return `${diffHr}h`
-  const diffDays = Math.floor(diffHr / 24)
-  if (diffDays < 7) return `${diffDays}d`
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+interface GroupedSection {
+  key: string
+  label: string
+  threads: Thread[]
+  childrenByParent: Record<string, Thread[]>
+  defaultCollapsed?: boolean
 }
 
-function threadDisplayName(thread: Thread): string {
-  if (thread.name && thread.name !== 'New Thread' && thread.name !== 'Untitled') {
-    return thread.name
+/**
+ * Two-section groupThreads:
+ *   - Starred (all pinned, non-archived)
+ *   - Recent (non-pinned, non-archived, sorted by lastActive, capped)
+ * Search collapses both into a single "results" section.
+ * Archived is removed from the sidebar entirely — accessible via the
+ * "View all chats" button at the bottom, which goes to Home.
+ */
+function groupThreads(threads: Thread[], query: string): GroupedSection[] {
+  const q = query.trim().toLowerCase()
+  const matches = threads.filter(
+    (t) => !q || t.name.toLowerCase().includes(q) || t.id.toLowerCase().includes(q),
+  )
+
+  const roots = matches.filter((t) => !t.parentId)
+  const childrenByParent: Record<string, Thread[]> = {}
+  matches
+    .filter((t) => t.parentId)
+    .forEach((c) => {
+      const key = c.parentId as string
+      ;(childrenByParent[key] ||= []).push(c)
+    })
+
+  if (q) {
+    return [{ key: 'results', label: 'results', threads: roots, childrenByParent }]
   }
-  return 'New conversation'
+
+  const active = roots.filter((t) => !t.archived)
+  const starred = active.filter((t) => t.pinned)
+  const recent = active.filter((t) => !t.pinned).slice(0, RECENT_CAP)
+
+  const sections: GroupedSection[] = []
+  if (starred.length) sections.push({ key: 'starred', label: 'starred', threads: starred, childrenByParent })
+  sections.push({ key: 'recent', label: 'recent', threads: recent, childrenByParent })
+  return sections
 }
 
-export function ThreadSidebar() {
-  const { threadId } = useParams<{ threadId: string }>()
-  const navigate = useNavigate()
-  const { data, loading, refetch } = useQuery<ThreadsData>(THREADS_QUERY, {
-    variables: { includeArchived: false },
-  })
-  const [createThread] = useMutation<{createThread: {id: string; name: string}}>(CREATE_THREAD)
-  const [archiveThread] = useMutation(ARCHIVE_THREAD)
-  const [deleteThread] = useMutation(DELETE_THREAD)
-  const { resolved, setTheme } = useTheme()
-  const { event: stateChange } = useThreadStateChanges()
-  // Refetch thread list when any thread state changes
-  if (stateChange) {
-    refetch()
+interface SidebarProps {
+  threads: Thread[]
+  activeId: string
+  view: string
+  onSelect: (id: string) => void
+  onNew: () => void
+  /** Brand click — takes the user to Home (the composer-first landing). */
+  onGoHome: () => void
+  /** "View all chats" / rail Chats icon — goes to the /chats browser. */
+  onOpenChats: () => void
+  onOpenPalette: () => void
+  onAfterDelete?: (id: string) => void
+  collapsed: boolean
+  onToggleCollapsed: () => void
+  theme: 'light' | 'dark'
+  onToggleTheme: () => void
+  onOpenFirstRun: () => void
+  onOpenSettings: () => void
+}
+
+export function ThreadSidebar({
+  threads,
+  activeId,
+  view,
+  onSelect,
+  onNew,
+  onGoHome,
+  onOpenChats,
+  onOpenPalette,
+  onAfterDelete,
+  collapsed,
+  onToggleCollapsed,
+  theme,
+  onToggleTheme,
+  onOpenFirstRun,
+  onOpenSettings,
+}: SidebarProps) {
+  const [query, setQuery] = useState('')
+  const [expandedBranches, setExpandedBranches] = useState<Record<string, boolean>>({})
+  const [menuOpen, setMenuOpen] = useState(false)
+  const userAnchorRef = useRef<HTMLDivElement>(null)
+  const railAnchorRef = useRef<HTMLButtonElement>(null)
+  const threadMuts = useThreadMutations()
+  const me = useMe()
+
+  const sections = useMemo(() => groupThreads(threads, query), [threads, query])
+  const visibleThreadCount = threads.filter((t) => !t.archived).length
+
+  function toggleArchive(t: Thread) {
+    if (t.archived) void threadMuts.unarchive(t.id)
+    else void threadMuts.archive(t.id)
+  }
+  async function rename(id: string, name: string) {
+    await threadMuts.rename(id, name)
+  }
+  async function remove(id: string) {
+    await threadMuts.remove(id)
+    onAfterDelete?.(id)
   }
 
-  const handleNew = async () => {
-    const result = await createThread({ variables: { name: null } })
-    if (result.data?.createThread) {
-      refetch()
-      navigate(`/thread/${result.data.createThread.id}`)
-    }
-  }
-
-  const handleArchive = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    await archiveThread({ variables: { id } })
-    refetch()
-  }
-
-  const handleDelete = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!confirm('Delete this thread permanently?')) return
-    await deleteThread({ variables: { id } })
-    refetch()
-    if (threadId === id) navigate('/')
-  }
-
-  const threads = data?.threads ?? []
-
-  return (
-    <aside className="sidebar w-64 flex flex-col shrink-0">
-      {/* Header */}
-      <div className="h-14 px-4 flex items-center shrink-0">
-        <button
-          onClick={() => navigate('/')}
-          className="text-base font-semibold tracking-tight text-foreground/80 hover:text-foreground transition-colors"
-        >
-          Spidey
+  if (collapsed) {
+    // Collapsed rail: single primary nav — the Chats button — analogous
+    // to the "View all chats" button in the expanded list. No per-thread
+    // avatars; specific threads are reached via the expanded sidebar,
+    // the palette (⌘K), or Home. Keeps the rail minimal and forces all
+    // thread navigation through consistent entry points.
+    return (
+      <aside className="sidebar sidebar-rail">
+        {/* Panel toggle is layout chrome (expand sidebar) — separated
+            from the action/nav cluster below by breathing room so the
+            rail reads as two zones: "toggle the sidebar" on its own,
+            "everything you can do" underneath. `.rail-nav-gap` on the
+            next button supplies the extra margin-top. */}
+        <button className="rail-btn" onClick={onToggleCollapsed} title="Expand sidebar">
+          <IconPanel size={18} />
         </button>
-      </div>
-
-      {/* New thread button */}
-      <div className="px-3 pb-3">
-        <button
-          onClick={handleNew}
-          className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm text-muted-foreground hover:text-foreground hover:bg-foreground/[0.04] transition-all"
-        >
-          <span className="text-lg leading-none">+</span>
-          <span>New thread</span>
-        </button>
-      </div>
-
-      {/* Thread list */}
-      <ScrollArea className="flex-1">
-        <div className="px-2 space-y-0.5">
-          {loading && <p className="text-xs text-muted-foreground px-3 py-2">Loading...</p>}
-          {threads.map((thread) => {
-            const isActive = threadId === thread.id
-            const isBranch = !!thread.parentThreadId
-            return (
-              <button
-                key={thread.id}
-                className={cn(
-                  'group flex items-center w-full text-left px-3 py-2.5 rounded-xl transition-all relative',
-                  isActive
-                    ? 'sidebar-item-active text-foreground'
-                    : 'text-muted-foreground hover:text-foreground hover:bg-foreground/[0.03]',
-                  isBranch && 'ml-4',
-                )}
-                onClick={() => navigate(`/thread/${thread.id}`)}
-              >
-                {isBranch && (
-                  <span className="text-[10px] text-muted-foreground/40 mr-1.5">&#8627;</span>
-                )}
-                <span className={cn(
-                  'truncate flex-1 text-[13px] leading-snug',
-                  isActive && 'font-medium text-foreground',
-                )}>
-                  {threadDisplayName(thread)}
-                </span>
-                <span className="text-[10px] text-muted-foreground/40 shrink-0 tabular-nums ml-2 group-hover:hidden">
-                  {(thread.messageCount ?? 0) > 0
-                    ? `${thread.messageCount}`
-                    : thread.createdAt ? formatRelativeTime(thread.createdAt) : ''}
-                </span>
-
-                {/* Hover actions */}
-                <span className="hidden group-hover:flex gap-0.5 shrink-0 ml-2">
-                  <button
-                    onClick={(e) => handleArchive(thread.id, e)}
-                    className="h-5 w-5 rounded-md flex items-center justify-center text-muted-foreground/60 hover:text-foreground hover:bg-foreground/[0.06] transition-colors"
-                    title="Archive"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
-                  </button>
-                  <button
-                    onClick={(e) => handleDelete(thread.id, e)}
-                    className="h-5 w-5 rounded-md flex items-center justify-center text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                    title="Delete"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
-                  </button>
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </ScrollArea>
-
-      {/* Footer */}
-      <div className="p-3 flex items-center gap-1">
-        <button
-          onClick={() => navigate('/settings')}
-          className="flex items-center gap-2 flex-1 px-3 py-2 rounded-xl text-xs text-muted-foreground/60 hover:text-muted-foreground hover:bg-foreground/[0.03] transition-all"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-          Settings
+        <button className="rail-btn rail-nav-gap" onClick={onNew} title="New thread">
+          <IconPlus size={18} />
         </button>
         <button
-          onClick={() => setTheme(resolved === 'dark' ? 'light' : 'dark')}
-          className="h-8 w-8 rounded-xl flex items-center justify-center text-muted-foreground/60 hover:text-muted-foreground hover:bg-foreground/[0.03] transition-all shrink-0"
-          title={`Switch to ${resolved === 'dark' ? 'light' : 'dark'} mode`}
+          className="rail-btn"
+          onClick={onOpenPalette}
+          title={`Jump to anything (${kbdLabel('K')})`}
         >
-          {resolved === 'dark' ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+          <IconSearch size={18} />
+        </button>
+        <button
+          className="rail-btn rail-chats rail-nav-gap"
+          onClick={onOpenChats}
+          data-active={view === 'chats' || undefined}
+          title={`Threads · ${visibleThreadCount}`}
+        >
+          <IconChats size={18} />
+          {visibleThreadCount > 0 && (
+            <span className="rail-chats-count">{visibleThreadCount}</span>
           )}
         </button>
+        <div style={{ flex: 1 }} />
+        <button
+          ref={railAnchorRef}
+          className="rail-btn"
+          onClick={() => setMenuOpen((o) => !o)}
+          title={me.name}
+        >
+          <span className="rail-avatar">{me.initials}</span>
+        </button>
+        <UserMenu
+          open={menuOpen}
+          anchorRef={railAnchorRef}
+          placement="right"
+          onClose={() => setMenuOpen(false)}
+          theme={theme}
+          onToggleTheme={onToggleTheme}
+          onOpenFirstRun={onOpenFirstRun}
+          onOpenSettings={onOpenSettings}
+        />
+      </aside>
+    )
+  }
+
+  return (
+    <aside className="sidebar">
+      <div className="sb-head">
+        {/* Collapse toggle sits at the far-left of the header so it
+            lines up with the same button at the top of the collapsed
+            rail — same 32×32 frame at the same viewport x, so the
+            control reads as "one button that doesn't move" across
+            the two sidebar states. Brand is pushed to the opposite
+            side by the spacer. */}
+        <button className="sb-icon-btn" onClick={onToggleCollapsed} title="Collapse sidebar">
+          <IconPanel size={18} />
+        </button>
+        <span className="sb-head-spacer" />
+        <button
+          className="sb-brand"
+          onClick={onGoHome}
+          title="Home"
+          type="button"
+        >
+          <span className="sb-brand-text">spidey</span>
+        </button>
+      </div>
+
+      <div className="sb-search-row">
+        <div className="sb-search">
+          <IconSearch size={13} />
+          <input
+            type="text"
+            placeholder="Filter threads"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query && (
+            <button className="sb-search-clear" onClick={() => setQuery('')} title="Clear">
+              <IconX size={10} />
+            </button>
+          )}
+        </div>
+        <button className="sb-new-btn" onClick={onNew} title={`New thread (${kbdLabel('N')})`}>
+          <IconPlus size={13} />
+          <span>New</span>
+        </button>
+      </div>
+
+      {/* "Jump to…" lives in the sidebar, under New, so the palette is
+          reachable from every route (not just when there's a composer
+          on screen). Uses the search glyph because the palette is
+          fundamentally a search across threads/messages/skills. */}
+      <button
+        className="sb-jump-btn"
+        onClick={onOpenPalette}
+        title={`Jump to anything (${kbdLabel('K')})`}
+      >
+        <IconSearch size={13} />
+        <span>Jump to…</span>
+        <span className="sb-jump-kbd">{kbdLabel('K')}</span>
+      </button>
+
+      <div className="sb-list scroll">
+        {sections.map((section) => (
+          <SidebarSection
+            key={section.key}
+            label={section.label}
+            count={section.threads.length}
+            defaultCollapsed={section.defaultCollapsed}
+          >
+            {section.threads.map((t) => {
+              const kids = section.childrenByParent[t.id] || []
+              const expanded = !!expandedBranches[t.id]
+              return (
+                <Fragment key={t.id}>
+                  <ThreadRow
+                    thread={t}
+                    active={view === 'thread' && activeId === t.id}
+                    onClick={() => onSelect(t.id)}
+                    hasBranches={kids.length > 0}
+                    showBranches={expanded}
+                    onToggleBranches={() => setExpandedBranches((e) => ({ ...e, [t.id]: !e[t.id] }))}
+                    onArchiveToggle={() => toggleArchive(t)}
+                    onDelete={() => void remove(t.id)}
+                    onRename={(name) => void rename(t.id, name)}
+                  />
+                  {expanded &&
+                    kids.map((c) => (
+                      <ThreadRow
+                        key={c.id}
+                        thread={c}
+                        child
+                        active={view === 'thread' && activeId === c.id}
+                        onClick={() => onSelect(c.id)}
+                        onArchiveToggle={() => toggleArchive(c)}
+                        onDelete={() => void remove(c.id)}
+                        onRename={(name) => void rename(c.id, name)}
+                      />
+                    ))}
+                </Fragment>
+              )
+            })}
+            {section.threads.length === 0 && section.key === 'recent' && !query && (
+              <div className="sb-empty">no threads yet — hit New</div>
+            )}
+            {section.threads.length === 0 && query && <div className="sb-empty">no matches</div>}
+          </SidebarSection>
+        ))}
+        <button
+          type="button"
+          className="sb-view-all"
+          onClick={onOpenChats}
+          data-active={view === 'chats' || undefined}
+          title="See every thread, including archived"
+        >
+          <span>View all threads</span>
+          {visibleThreadCount > RECENT_CAP && (
+            <span className="sb-view-all-count">{visibleThreadCount}</span>
+          )}
+        </button>
+      </div>
+
+      <div className="sb-footer">
+        <div ref={userAnchorRef} className="sb-user" onClick={() => setMenuOpen((o) => !o)}>
+          <span className="sb-avatar">{me.initials}</span>
+          <div className="sb-user-text">
+            <div className="sb-user-name">{me.name}</div>
+            <div className="sb-user-handle">@{me.handle}</div>
+          </div>
+          <IconChevron size={10} />
+        </div>
+        <UserMenu
+          open={menuOpen}
+          anchorRef={userAnchorRef}
+          placement="top"
+          onClose={() => setMenuOpen(false)}
+          theme={theme}
+          onToggleTheme={onToggleTheme}
+          onOpenFirstRun={onOpenFirstRun}
+          onOpenSettings={onOpenSettings}
+        />
       </div>
     </aside>
   )

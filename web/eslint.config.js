@@ -6,7 +6,9 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // Generated files — don't lint them, they're regenerated from .graphql
+  // documents and their `any` usage is expected.
+  globalIgnores(['dist', 'src/graphql/generated']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -18,6 +20,14 @@ export default defineConfig([
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,
+    },
+    rules: {
+      // We use `setState inside useEffect on [key]` intentionally for reset
+      // patterns in subscription hooks (useLiveToolCalls, useSendAndStream,
+      // useSubagentProgress, useToolApprovals). React 19's recommended rule
+      // prefers `key` on the parent, but hook state can't be reset that way
+      // without leaking state across mounts. The pattern is explicitly fine.
+      'react-hooks/set-state-in-effect': 'off',
     },
   },
 ])

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
@@ -8,18 +9,53 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// InsertMessage stores a message with proto-encoded content.
+// InsertMessage stores a message with proto-encoded content and,
+// if a chunker is wired, derives and persists its chunks in the same
+// logical operation. Chunks are the scoring substrate for RRC — a
+// message without chunks is invisible to the classifier and the
+// embedder, so we treat chunk insertion as part of a successful
+// InsertMessage: if chunking fails, the whole operation fails and
+// the message row is rolled back.
 func (d *DB) InsertMessage(msg *pb.Message) error {
 	content, err := marshalContentBlocks(msg.Content)
 	if err != nil {
 		return err
 	}
 
-	_, err = d.Exec(
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
 		`INSERT INTO messages (id, thread_id, role, content, position, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		msg.Id, msg.ThreadId, int(msg.Role), content, msg.Position, msg.CreatedAt.AsTime(),
-	)
-	return err
+	); err != nil {
+		return err
+	}
+
+	if d.chunker != nil {
+		text := textFromBlocks(msg.Content)
+		if text != "" {
+			chunks := d.chunker(text)
+			if len(chunks) > 0 {
+				stmt, err := tx.Prepare(`INSERT INTO chunks (message_id, chunk_index, text, byte_start, byte_end, token_est) VALUES (?, ?, ?, ?, ?, ?)`)
+				if err != nil {
+					return err
+				}
+				for _, c := range chunks {
+					if _, err := stmt.Exec(msg.Id, c.ChunkIndex, c.Text, c.ByteStart, c.ByteEnd, c.TokenEst); err != nil {
+						stmt.Close()
+						return err
+					}
+				}
+				stmt.Close()
+			}
+		}
+	}
+
+	return tx.Commit()
 }
 
 // GetMessage retrieves a single message by ID.
@@ -80,8 +116,89 @@ func (d *DB) ListMessages(threadID string, limit, offset int) ([]*pb.Message, er
 }
 
 // ThreadCorpus returns all messages for a thread (full corpus, no pagination).
+// For branched threads, includes the parent's messages up to the branch point
+// (referenced, not copied — per spec: "messages 1..N-1 are immutable, referenced not copied").
 func (d *DB) ThreadCorpus(threadID string) ([]*pb.Message, error) {
-	return d.ListMessages(threadID, 0, 0)
+	// Check if this is a branch
+	var parentID *string
+	var branchPos *int64
+	d.QueryRow(
+		`SELECT parent_thread_id, branch_point_position FROM threads WHERE id = ?`, threadID,
+	).Scan(&parentID, &branchPos)
+
+	var corpus []*pb.Message
+
+	// Include parent prefix if this is a branch
+	if parentID != nil && *parentID != "" && branchPos != nil {
+		parentMsgs, err := d.ListMessages(*parentID, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, msg := range parentMsgs {
+			if msg.Position < *branchPos {
+				corpus = append(corpus, msg)
+			}
+		}
+	}
+
+	// Add this thread's own messages
+	ownMsgs, err := d.ListMessages(threadID, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	corpus = append(corpus, ownMsgs...)
+	return corpus, nil
+}
+
+// AllCorpus returns every stored message across every thread — the
+// candidate set for cross-thread RRC selection. Sorted by (thread_id,
+// position) so in-thread ordering is preserved. Required when scope ==
+// SELECTION_SCOPE_ALL_THREADS; otherwise RRC can only ever score the
+// query against messages from its own thread and cross-thread edges
+// never form.
+func (d *DB) AllCorpus() ([]*pb.Message, error) {
+	rows, err := d.Query(
+		`SELECT id, thread_id, role, content, position, created_at
+		 FROM messages ORDER BY thread_id, position`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var corpus []*pb.Message
+	for rows.Next() {
+		msg := &pb.Message{}
+		var roleInt int
+		var content []byte
+		var createdAt time.Time
+		if err := rows.Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt); err != nil {
+			return nil, err
+		}
+		msg.Role = pb.Role(roleInt)
+		msg.CreatedAt = timestamppb.New(createdAt)
+		msg.Content, _ = unmarshalContentBlocks(content)
+		corpus = append(corpus, msg)
+	}
+	return corpus, rows.Err()
+}
+
+// LatestMessage returns the most recent message in a thread, or nil if empty.
+func (d *DB) LatestMessage(threadID string) *pb.Message {
+	msg := &pb.Message{}
+	var roleInt int
+	var content []byte
+	var createdAt time.Time
+	err := d.QueryRow(
+		`SELECT id, thread_id, role, content, position, created_at
+		 FROM messages WHERE thread_id = ? ORDER BY position DESC LIMIT 1`, threadID,
+	).Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt)
+	if err != nil {
+		return nil
+	}
+	msg.Role = pb.Role(roleInt)
+	msg.CreatedAt = timestamppb.New(createdAt)
+	msg.Content, _ = unmarshalContentBlocks(content)
+	return msg
 }
 
 // MessageCount returns the number of messages in a thread.
@@ -104,4 +221,48 @@ func unmarshalContentBlocks(data []byte) ([]*pb.ContentBlock, error) {
 		return nil, err
 	}
 	return wrapper.Content, nil
+}
+
+// textFromBlocks concatenates every scorable block into a single
+// string. Mirrors rrc/engine.go:textFromMessage so embeddings and
+// classifier inputs key off the exact same string — a mismatch here
+// would make the vector cache useless (the live classifier would
+// embed a different string and skip the cached vector). Tool calls
+// and tool results are included; skipping them would leave
+// autonomous tool-rounds unscored and selection dark.
+func textFromBlocks(blocks []*pb.ContentBlock) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if t := b.GetText(); t != nil {
+			sb.WriteString(t.Text)
+			sb.WriteByte('\n')
+		} else if t := b.GetThinking(); t != nil {
+			sb.WriteString(t.Text)
+			sb.WriteByte('\n')
+		} else if tc := b.GetToolCall(); tc != nil {
+			sb.WriteString(tc.Name)
+			sb.WriteString(": ")
+			sb.WriteString(tc.Arguments)
+			sb.WriteByte('\n')
+		} else if tr := b.GetToolResult(); tr != nil {
+			sb.WriteString(tr.Content)
+			sb.WriteByte('\n')
+		} else if a := b.GetAttachment(); a != nil {
+			// Path reference so the agent sees where to FileRead; plus
+			// extracted text (if any) so RRC's scorer has something
+			// meaningful to chunk for text-like attachments. Binary
+			// attachments only leave the reference — their content is
+			// opaque to the reranker anyway.
+			sb.WriteString("[attached: ")
+			sb.WriteString(a.Filename)
+			sb.WriteString(" at ")
+			sb.WriteString(a.Path)
+			sb.WriteString("]\n")
+			if a.InlinedText != "" {
+				sb.WriteString(a.InlinedText)
+				sb.WriteByte('\n')
+			}
+		}
+	}
+	return sb.String()
 }

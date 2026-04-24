@@ -50,7 +50,7 @@ func (p *provider) Completer(model string) (core.Completer, error) {
 		model:        model,
 		baseURL:      p.cfg.BaseURL,
 		client:       p.client,
-		streamClient: httpc.New(httpc.TimeoutStreaming, authFn),
+		streamClient: httpc.NewStreaming(authFn),
 	}, nil
 }
 
