@@ -533,22 +533,22 @@ func TestScoreCache(t *testing.T) {
 
 	// Score cache is chunk-granular: key is (fromMsgID, fromChunkIdx,
 	// toMsgID, toChunkIdx). Messages with a single chunk use index 0.
-	sc.Set("a", 0, "b", 0, 0.75)
+	sc.set("a", 0, "b", 0, 0.75)
 
-	score, ok := sc.Get("a", 0, "b", 0)
+	score, ok := sc.get("a", 0, "b", 0)
 	if !ok || score != 0.75 {
 		t.Fatalf("expected 0.75, got %f (ok=%v)", score, ok)
 	}
 
-	if _, ok := sc.Get("b", 0, "a", 0); ok {
+	if _, ok := sc.get("b", 0, "a", 0); ok {
 		t.Fatal("reverse direction should not be cached")
 	}
 
-	if _, ok := sc.Get("x", 0, "y", 0); ok {
+	if _, ok := sc.get("x", 0, "y", 0); ok {
 		t.Fatal("unknown pair should return false")
 	}
 
-	if _, ok := sc.Get("a", 1, "b", 0); ok {
+	if _, ok := sc.get("a", 1, "b", 0); ok {
 		t.Fatal("different chunk index should not be cached")
 	}
 }
@@ -622,7 +622,7 @@ func TestOnMessage_ScoreCachePopulated(t *testing.T) {
 	// chunk at index 0). The reranker score is cached even when no
 	// edge was emitted — future OnMessage calls touching this pair
 	// skip the reranker entirely.
-	score, ok := e.scores.Get("m0", 0, "m1", 0)
+	score, ok := e.scores.get("m0", 0, "m1", 0)
 	if !ok {
 		t.Fatal("score should be cached")
 	}
@@ -941,7 +941,7 @@ func TestOnMessage_CachedScoresCountAsRescored(t *testing.T) {
 
 	// Pre-seed the score cache for the m0→q pair. The engine should
 	// see the cached value instead of calling Rerank on this pair.
-	e.scores.Set("m0", 0, "q", 0, 0.8)
+	e.scores.set("m0", 0, "q", 0, 0.8)
 
 	_, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1})
 	if err != nil {

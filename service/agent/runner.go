@@ -31,7 +31,6 @@ import (
 // RRC integrates as the model.LLM implementation — ADK doesn't know.
 type Runner struct {
 	engine          *rrc.Engine
-	engineMu        *sync.RWMutex // shared engine lock
 	completer       core.Completer
 	db              *storage.DB
 	threadID        string
@@ -101,10 +100,9 @@ func (r *Runner) SetRoundCallback(cb func(round int, elapsed time.Duration)) {
 // are persisted in the scores table. Passed through to RRCLLM so
 // its protocol-rectification resolver can score Store-resident
 // candidates against the current query.
-func NewRunner(engine *rrc.Engine, engineMu *sync.RWMutex, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName, instruction, rerankerModelID string) (*Runner, error) {
+func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName, instruction, rerankerModelID string) (*Runner, error) {
 	r := &Runner{
 		engine:          engine,
-		engineMu:        engineMu,
 		completer:       completer,
 		db:              db,
 		threadID:        threadID,
@@ -114,9 +112,10 @@ func NewRunner(engine *rrc.Engine, engineMu *sync.RWMutex, completer core.Comple
 		rerankerModelID: rerankerModelID,
 	}
 
-	// RRC-as-LLM: ADK calls this thinking it's an LLM
+	// RRC-as-LLM: ADK calls this thinking it's an LLM. Engine owns its
+	// own lock now; rrcLLM acquires it directly via engine.Lock /
+	// Unlock — no shared mutex passed in.
 	rrcLLM := adapter.NewRRCLLM(engine, completer, db, threadID, modelName, rerankerModelID)
-	rrcLLM.EngineMu = engineMu
 	rrcLLM.OnStream = func(delta, thinking string, done bool) {
 		if r.onStream != nil {
 			r.onStream(delta, thinking, done)

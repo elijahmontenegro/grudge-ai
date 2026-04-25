@@ -241,17 +241,18 @@ func main() {
 	}
 	if rerankerModelID != "" {
 		if scores, err := db.ChunkScoresForModel(rerankerModelID); err == nil && len(scores) > 0 {
-			// Convert storage.ChunkScoreKey → rrc.ScoreKey
-			converted := make(map[rrc.ScoreKey]float64, len(scores))
+			// Convert storage.ChunkScoreKey → rrc.PersistedScore.
+			converted := make([]rrc.PersistedScore, 0, len(scores))
 			for k, v := range scores {
-				converted[rrc.ScoreKey{
+				converted = append(converted, rrc.PersistedScore{
 					FromMsgID:    k.FromID,
 					FromChunkIdx: k.FromIdx,
 					ToMsgID:      k.ToID,
 					ToChunkIdx:   k.ToIdx,
-				}] = v
+					Score:        v,
+				})
 			}
-			engine.LoadScoreCache(converted)
+			engine.LoadScores(converted)
 			log.Printf("Loaded %d chunk-pair scores (model=%s)", len(scores), rerankerModelID)
 		}
 	}
@@ -260,7 +261,7 @@ func main() {
 	// score writes through to the scores table so restarts and forks
 	// inherit the cache per spec.
 	if rerankerModelID != "" {
-		engine.Scores().SetPersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
+		engine.SetScorePersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
 			if err := db.InsertChunkScore(fromID, fromIdx, toID, toIdx, rerankerModelID, score); err != nil {
 				log.Printf("InsertChunkScore(%s[%d], %s[%d], %s): %v", fromID, fromIdx, toID, toIdx, rerankerModelID, err)
 			}

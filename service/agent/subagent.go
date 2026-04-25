@@ -14,14 +14,14 @@ import (
 // not reentrant, so re-locking would deadlock the thread. The accessed
 // fields (engine, threadID, completer, db, tools, modelName, instruction)
 // are either immutable after NewRunner or have their own synchronization
-// (engine via engineMu, db internally).
+// (engine owns its own lock; db internally).
 func (r *Runner) SpawnSubagent(ctx context.Context, task string, forkThreadID string) (*Runner, error) {
 	forkedEngine, err := r.engine.Fork(r.threadID)
 	if err != nil {
 		return nil, fmt.Errorf("fork engine: %w", err)
 	}
 
-	fork, err := NewRunner(forkedEngine, r.engineMu, r.completer, r.db, forkThreadID, r.tools, r.modelName, r.instruction, r.rerankerModelID)
+	fork, err := NewRunner(forkedEngine, r.completer, r.db, forkThreadID, r.tools, r.modelName, r.instruction, r.rerankerModelID)
 	if err != nil {
 		return nil, fmt.Errorf("create fork runner: %w", err)
 	}
@@ -35,7 +35,7 @@ func (r *Runner) SpawnSubagent(ctx context.Context, task string, forkThreadID st
 
 // MergeSubagent merges a fork's edges and scores back into the parent.
 // Same no-r.mu rule as SpawnSubagent — called from Agent tool context.
-// r.engine.Merge uses engineMu internally, which is the right level.
+// r.engine.Merge uses the engine's own lock internally.
 func (r *Runner) MergeSubagent(fork *Runner) error {
 	return r.engine.Merge(fork.engine, r.threadID)
 }

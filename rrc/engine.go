@@ -6,15 +6,17 @@ import (
 	"log"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Engine implements the RRC algorithm. NOT goroutine-safe — the caller
-// serializes access. The substrate is a DAG of message-level edges
-// whose scores are derived from chunk-level reranker outputs.
+// Engine implements the RRC algorithm. Goroutine-safe at the level
+// of one operation per call: callers that need to serialize multi-
+// call sequences (e.g., OnMessage followed atomically by Select)
+// take Engine.Lock / Engine.Unlock around the whole sequence.
 //
 // Scoring substrate: chunks (paragraph-sized slices of a message),
 // resolved via a ChunkOracle. Each chunk carries an embedding vector
@@ -29,10 +31,11 @@ import (
 // so re-chunking or chunk-reordering is a no-op at the cache boundary.
 // Messages are immutable → cached scores never become stale.
 type Engine struct {
+	mu         sync.RWMutex
 	classifier Classifier
 	entailer   Entailer    // optional — composite NLI stage layered on top of classifier
 	dag        *DAG
-	scores     *ScoreCache
+	scores     *scoreCache
 	cfg        EngineConfig
 	oracle     ChunkOracle // optional — nil falls back to full-text-as-single-chunk fallback
 }
@@ -66,8 +69,9 @@ type ChunkOracle interface {
 }
 
 // NewEngine creates an RRC engine. The classifier is the only
-// required external dependency. Use SetChunkOracle and the
-// ScoreCache's persister hook to wire the rest.
+// required external dependency. Use SetEntailer / SetChunkOracle /
+// SetScorePersister to wire the optional substrate before
+// running OnMessage.
 func NewEngine(cfg EngineConfig, classifier Classifier) *Engine {
 	return &Engine{
 		classifier: classifier,
@@ -77,32 +81,40 @@ func NewEngine(cfg EngineConfig, classifier Classifier) *Engine {
 	}
 }
 
-// SetClassifier replaces the classifier. Caller must hold the engine lock.
+// Lock / Unlock / RLock / RUnlock expose the engine's internal
+// RWMutex. Callers serialize multi-call sequences by holding Lock
+// around the whole sequence. Single-call entry points (OnMessage,
+// Select, ApplyMMR, Snapshot) acquire the lock internally — the
+// public Lock methods exist for the agent runner's atomic
+// "OnMessage(query); Select(query.Id)" sequence inside one round.
+func (e *Engine) Lock()    { e.mu.Lock() }
+func (e *Engine) Unlock()  { e.mu.Unlock() }
+func (e *Engine) RLock()   { e.mu.RLock() }
+func (e *Engine) RUnlock() { e.mu.RUnlock() }
+
+// SetClassifier replaces the classifier. Caller must hold Lock().
 func (e *Engine) SetClassifier(c Classifier) { e.classifier = c }
 
-// SetEntailer wires the optional NLI stage. Passing nil disables it;
-// OnMessage then uses reranker-only scoring (today's behavior). When
-// set, OnMessage fuses the NLI entailment probability into each
-// rerank-scored candidate via the NLIFusionWeight α:
+// SetEntailer wires the optional NLI stage. Passing nil disables it.
+// When set, OnMessage fuses NLI entailment probability into each
+// rerank score via NLIFusionWeight α:
 //
 //	fused_raw = α · bge_rerank + (1-α) · nli_entail
 //
-// The fused value replaces the raw reranker score going into the
-// score cache and edge-formation gates, so downstream everything
-// (edge threshold, z-score gate, min-stddev meta-gate) sees the
-// composite signal. Caller must hold the engine lock.
+// Caller must hold Lock().
 func (e *Engine) SetEntailer(en Entailer) { e.entailer = en }
 
-// SetChunkOracle wires the chunk+vector provider. Passing nil
-// disables chunked scoring — OnMessage falls back to treating each
-// message as a single chunk derived from its full text, which scales
-// linearly but silently truncates long content at the model's input
-// window. Set it during startup.
+// SetChunkOracle wires the chunk+vector provider. Caller must hold Lock().
 func (e *Engine) SetChunkOracle(o ChunkOracle) { e.oracle = o }
 
-// Scores exposes the score cache so the service can install the
-// persister hook.
-func (e *Engine) Scores() *ScoreCache { return e.scores }
+// SetScorePersister installs the write-through hook fired on every
+// new chunk-pair score. The service wires it to storage at boot;
+// passing nil disables persistence (test path). Caller must hold Lock().
+func (e *Engine) SetScorePersister(p ScorePersister) {
+	if e.scores != nil {
+		e.scores.setPersister(p)
+	}
+}
 
 // RadiusSize is the protocol §2 Radius window — the count of most-recent
 // thread messages the Network Regime (§3.3) inserts between Selected
@@ -245,7 +257,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 		pairStates := make([]pairState, len(priorChunks))
 		var unscoredIdx []int
 		for j, pc := range priorChunks {
-			if s, ok := e.scores.Get(pc.chunk.MessageID, pc.chunk.ChunkIndex, msg.Id, nc.ChunkIndex); ok {
+			if s, ok := e.scores.get(pc.chunk.MessageID, pc.chunk.ChunkIndex, msg.Id, nc.ChunkIndex); ok {
 				pairStates[j] = pairState{cached: true, score: s, localIdx: j}
 			} else {
 				unscoredIdx = append(unscoredIdx, j)
@@ -346,7 +358,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 				}
 				pairStates[j] = pairState{cached: false, score: s, localIdx: j}
 				// Writes through scores.persist → InsertChunkScore → SQLite.
-				e.scores.Set(priorChunks[j].chunk.MessageID, priorChunks[j].chunk.ChunkIndex, msg.Id, nc.ChunkIndex, s)
+				e.scores.set(priorChunks[j].chunk.MessageID, priorChunks[j].chunk.ChunkIndex, msg.Id, nc.ChunkIndex, s)
 			}
 			totalReranked += len(rerankSet)
 		}
@@ -725,7 +737,7 @@ func (e *Engine) Fork(_ string) (*Engine, error) {
 	for _, edge := range e.dag.AllEdges() {
 		fork.dag.AddEdge(edge)
 	}
-	for k, v := range e.scores.All() {
+	for k, v := range e.scores.all() {
 		fork.scores.loadSilent(k, v)
 	}
 	return fork, nil
@@ -733,14 +745,14 @@ func (e *Engine) Fork(_ string) (*Engine, error) {
 
 // Merge integrates a fork's edges into the parent. New scores from the
 // fork flow through the parent's persister; inherited ones don't
-// double-write because they're already cached (Get-ok path in Set).
+// double-write because they're already cached (get-ok path in set).
 func (e *Engine) Merge(fork *Engine, _ string) error {
 	for _, edge := range fork.dag.AllEdges() {
 		e.dag.AddEdge(edge)
 	}
-	for k, v := range fork.scores.All() {
-		if _, exists := e.scores.Get(k.FromMsgID, k.FromChunkIdx, k.ToMsgID, k.ToChunkIdx); !exists {
-			e.scores.Set(k.FromMsgID, k.FromChunkIdx, k.ToMsgID, k.ToChunkIdx, v)
+	for k, v := range fork.scores.all() {
+		if _, exists := e.scores.get(k.FromMsgID, k.FromChunkIdx, k.ToMsgID, k.ToChunkIdx); !exists {
+			e.scores.set(k.FromMsgID, k.FromChunkIdx, k.ToMsgID, k.ToChunkIdx, v)
 		}
 	}
 	return nil
@@ -753,11 +765,18 @@ func (e *Engine) LoadDAG(edges []*pb.Edge) {
 	}
 }
 
-// LoadScoreCache loads persisted scores into the engine at startup.
-// Uses the silent path — no write-back to the DB.
-func (e *Engine) LoadScoreCache(scores map[ScoreKey]float64) {
-	for k, v := range scores {
-		e.scores.loadSilent(k, v)
+// LoadScores hydrates the in-memory chunk-pair score cache from
+// persisted rows. Replaces the previous LoadScoreCache(map) signature
+// that exposed the internal scoreKey type. Silent path: no
+// write-back to the DB.
+func (e *Engine) LoadScores(scores []PersistedScore) {
+	for _, ps := range scores {
+		e.scores.loadSilent(scoreKey{
+			FromMsgID:    ps.FromMsgID,
+			FromChunkIdx: ps.FromChunkIdx,
+			ToMsgID:      ps.ToMsgID,
+			ToChunkIdx:   ps.ToChunkIdx,
+		}, ps.Score)
 	}
 }
 

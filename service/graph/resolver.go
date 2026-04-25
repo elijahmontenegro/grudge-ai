@@ -95,8 +95,8 @@ type Resolver struct {
 	pendingThreadIDs   map[string]string     // callId -> threadID for denial feedback
 	pendingApprovalsMu sync.Mutex
 
-	// RWMutex for Engine access — Engine is NOT goroutine-safe.
-	engineMu sync.RWMutex
+	// (Engine is goroutine-safe via its own internal RWMutex; the
+	// resolver no longer owns or passes a shared lock.)
 
 	// Active runners per thread — for autonomous/plan mode
 	runners   map[string]*runnerEntry
@@ -212,7 +212,7 @@ func (r *Resolver) ReloadProviders() error {
 	}
 	if nliURL != "" || embedURL != "" || entailerURL != "" {
 		classifier := tei.NewCompositeClassifier(nliURL, embedURL)
-		r.engineMu.Lock()
+		r.Engine.Lock()
 		r.Engine.SetClassifier(classifier)
 
 		// Wire (or un-wire) the entailer atomically under the engine
@@ -227,11 +227,11 @@ func (r *Resolver) ReloadProviders() error {
 		// Re-install the score persister with the (possibly new) model
 		// ID. nil-clears first so a model change doesn't keep writing
 		// under the old key if the new config has no classifier.
-		r.Engine.Scores().SetPersister(nil)
+		r.Engine.SetScorePersister(nil)
 		if nliModelID != "" {
 			db := r.DB
 			modelID := nliModelID
-			r.Engine.Scores().SetPersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
+			r.Engine.SetScorePersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
 				if err := db.InsertChunkScore(fromID, fromIdx, toID, toIdx, modelID, score); err != nil {
 					log.Printf("InsertChunkScore(%s[%d], %s[%d], %s): %v", fromID, fromIdx, toID, toIdx, modelID, err)
 				}
@@ -248,7 +248,7 @@ func (r *Resolver) ReloadProviders() error {
 		} else {
 			r.Engine.SetChunkOracle(nil)
 		}
-		r.engineMu.Unlock()
+		r.Engine.Unlock()
 
 		// Rebuild Searcher + EmbedQueue to point at the new embedder.
 		// Without this, the post-insert embed path (OnMessageStored /
@@ -621,7 +621,7 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 			rerankerModelID = cls.Model
 		}
 	}
-	runner, err := agent.NewRunner(r.Engine, &r.engineMu, mainWithRetry, r.DB, threadID, tools, modelName, instruction, rerankerModelID)
+	runner, err := agent.NewRunner(r.Engine, mainWithRetry, r.DB, threadID, tools, modelName, instruction, rerankerModelID)
 	if err != nil {
 		return nil, err
 	}

@@ -8,7 +8,6 @@ import (
 	"log"
 	"math"
 	"strings"
-	"sync"
 
 	"github.com/emontenegr/spidey/core"
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
@@ -34,8 +33,7 @@ type RRCLLM struct {
 	db              *storage.DB
 	threadID        string
 	modelName       string
-	rerankerModelID string // used by StoreResolver to look up per-query scores
-	EngineMu        *sync.RWMutex     // shared engine lock
+	rerankerModelID string            // used by StoreResolver to look up per-query scores
 	Scope           pb.SelectionScope // set per-call by Runner before ADK runs
 
 	OnStream    StreamCallback                   // publish streaming deltas
@@ -158,14 +156,10 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			queryMsg := corpus[len(corpus)-1]
 			queryMsgID = queryMsg.Id
 
-			if r.EngineMu != nil {
-				r.EngineMu.Lock()
-			}
+			r.engine.Lock()
 			edges, edgeErr := r.engine.OnMessage(ctx, queryMsg, corpus)
 			result, selErr := r.engine.Select(queryMsg.Id, r.Scope, r.threadID)
-			if r.EngineMu != nil {
-				r.EngineMu.Unlock()
-			}
+			r.engine.Unlock()
 
 			// RRC is not optional (CLAUDE.md, spec/web/MANIFEST.adoc:186).
 			// "Cross-encoder unreachable → system does not work. Error
