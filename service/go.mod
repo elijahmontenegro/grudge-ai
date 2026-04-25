@@ -69,6 +69,10 @@ require (
 	rsc.io/ordered v1.1.1 // indirect
 )
 
+// Replace directives for local development. Required (in addition to
+// go.work) because `go build` from a module subdirectory resolves
+// dependencies via the module proxy even under workspace mode. When
+// these modules publish, drop the corresponding lines.
 replace (
 	github.com/emontenegr/spidey/core => ../core
 	github.com/emontenegr/spidey/gen/go => ../gen/go

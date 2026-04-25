@@ -13,4 +13,8 @@ require (
 	github.com/google/uuid v1.3.0 // indirect
 )
 
+// Replace directive for local development. Required (in addition to
+// go.work) because `go build` from a module subdirectory resolves
+// dependencies via the module proxy even under workspace mode. When
+// gen/go publishes to a registry, drop this.
 replace github.com/emontenegr/spidey/gen/go => ../gen/go
