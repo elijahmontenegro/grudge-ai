@@ -176,7 +176,7 @@ func (r *Resolver) ReloadProviders() error {
 
 	// Main completer
 	if mainCfg, ok := cfg.Settings.Providers["main"]; ok && mainCfg.Adapter != "" {
-		p, err := config.BuildProvider(mainCfg)
+		p, err := core.NewProvider(mainCfg.ToCore())
 		if err != nil {
 			return fmt.Errorf("main provider: %w", err)
 		}

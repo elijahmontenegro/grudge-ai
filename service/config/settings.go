@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/emontenegr/spidey/core"
 )
 
 // Settings represents the service configuration from config.json.
@@ -73,6 +75,23 @@ type ProviderConfig struct {
 	Model   string `json:"model"`
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key,omitempty"`
+}
+
+// ToCore converts to a core.ProviderConfig, resolving the API key
+// from the OS keyring when not set inline. Lets callers say
+// `core.NewProvider(cfg.ToCore())` instead of repeating the
+// adapter→key lookup at every callsite.
+func (p ProviderConfig) ToCore() core.ProviderConfig {
+	apiKey := p.APIKey
+	if apiKey == "" {
+		apiKey, _ = GetAPIKey(p.Adapter)
+	}
+	return core.ProviderConfig{
+		Adapter: p.Adapter,
+		Model:   p.Model,
+		BaseURL: p.BaseURL,
+		APIKey:  apiKey,
+	}
 }
 
 // MCPServer configures an MCP endpoint.

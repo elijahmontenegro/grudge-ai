@@ -20,6 +20,14 @@ import (
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/adapter/tei"
+	// Blank-imported for side-effect registration with core.NewProvider.
+	// Importing core alone gives an empty registry; each adapter
+	// package wires itself in init() in core/adapter/X/register.go.
+	_ "github.com/emontenegr/spidey/core/adapter/anthropic"
+	_ "github.com/emontenegr/spidey/core/adapter/googleai"
+	_ "github.com/emontenegr/spidey/core/adapter/ollama"
+	_ "github.com/emontenegr/spidey/core/adapter/openai"
+	_ "github.com/emontenegr/spidey/core/adapter/vllm"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/rrc/tiktoken"
 	"github.com/emontenegr/spidey/service/agent"
@@ -95,7 +103,7 @@ func main() {
 	)
 
 	if mainCfg, ok := cfg.Settings.Providers["main"]; ok {
-		p, err := config.BuildProvider(mainCfg)
+		p, err := core.NewProvider(mainCfg.ToCore())
 		if err != nil {
 			log.Fatalf("main provider: %v", err)
 		}
@@ -122,7 +130,7 @@ func main() {
 
 	// Embedder for semantic search (separate from classifier)
 	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
-		p, err := config.BuildProvider(embCfg)
+		p, err := core.NewProvider(embCfg.ToCore())
 		if err != nil {
 			log.Fatalf("embedder provider: %v", err)
 		}
