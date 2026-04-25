@@ -506,7 +506,7 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			msgTokens := make([]int, len(llmMsgs))
 			total := 0
 			for i, m := range llmMsgs {
-				msgTokens[i] = rrc.EstimateTokens(ProtoToAllText(m.Content))
+				msgTokens[i] = rrc.EstimateTokens(rrc.TextFromBlocks(m.Content))
 				total += msgTokens[i]
 			}
 			// Add tool-schema overhead (constant across iterations) and

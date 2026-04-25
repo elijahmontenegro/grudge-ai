@@ -7,8 +7,17 @@ import (
 	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	"github.com/emontenegr/spidey/rrc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func init() {
+	// rrc.ChunkText (now called from InsertMessage) needs the tiktoken
+	// encoder. Boot it once for the whole storage test run.
+	if err := rrc.InitTokenEncoder(); err != nil {
+		panic("storage_test: InitTokenEncoder: " + err.Error())
+	}
+}
 
 func testDB(t *testing.T) *DB {
 	t.Helper()

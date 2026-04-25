@@ -20,7 +20,6 @@ import (
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/adapter/tei"
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/agent"
 	"github.com/emontenegr/spidey/service/api"
@@ -193,23 +192,12 @@ func main() {
 	}
 	engine := rrc.NewEngine(rrcCfg, classifier)
 
-	// Wire chunking at the storage layer. Messages go in; paragraph-
-	// sized chunks come out, atomic with the message row.
-	chunkFn := func(text string) []storage.Chunk {
-		rcs := rrc.ChunkText(text, rrcCfg.Chunk)
-		out := make([]storage.Chunk, len(rcs))
-		for i, c := range rcs {
-			out[i] = storage.Chunk{
-				ChunkIndex: c.Index,
-				Text:       c.Text,
-				ByteStart:  c.ByteStart,
-				ByteEnd:    c.ByteEnd,
-				TokenEst:   c.TokenEst,
-			}
-		}
-		return out
+	// Storage chunks via rrc.ChunkText directly (db imports rrc/chunk
+	// types). Override the default ChunkConfig if the engine config
+	// diverged.
+	if rrcCfg.Chunk != (rrc.ChunkConfig{}) {
+		db.SetChunkConfig(rrcCfg.Chunk)
 	}
-	db.SetChunker(chunkFn)
 
 	// Chunk backfill for pre-existing messages. Messages inserted
 	// before v2 migration have no chunks table rows — they'd be
@@ -218,7 +206,7 @@ func main() {
 	// because embeddings backfill below depends on chunks existing
 	// first; the whole thing is a fast walk over blob-decode + local
 	// chunking, no network calls.
-	if err := backfillChunks(db, chunkFn); err != nil {
+	if err := backfillChunks(db, rrcCfg.Chunk); err != nil {
 		log.Printf("Chunk backfill: %v", err)
 	}
 
@@ -435,7 +423,7 @@ func main() {
 // exist, the engine can't score anything. Cheap enough to block
 // startup: no network calls, pure text-chunking in Go, hundreds of
 // messages per second.
-func backfillChunks(db *storage.DB, chunk func(string) []storage.Chunk) error {
+func backfillChunks(db *storage.DB, chunkCfg rrc.ChunkConfig) error {
 	ids, err := db.MessagesWithoutChunks()
 	if err != nil {
 		return fmt.Errorf("MessagesWithoutChunks: %w", err)
@@ -451,17 +439,28 @@ func backfillChunks(db *storage.DB, chunk func(string) []storage.Chunk) error {
 		if err != nil || msg == nil {
 			continue
 		}
-		text := textFromProto(msg.Content)
+		text := rrc.TextFromBlocks(msg.Content)
 		if text == "" {
 			withoutText++
 			continue
 		}
-		chunks := chunk(text)
-		if len(chunks) == 0 {
+		rcs := rrc.ChunkText(text, chunkCfg)
+		if len(rcs) == 0 {
 			withoutText++
 			continue
 		}
-		if err := db.InsertChunks(id, chunks); err != nil {
+		// Adapt rrc.Chunk → storage.Chunk for InsertChunks.
+		schunks := make([]storage.Chunk, len(rcs))
+		for i, c := range rcs {
+			schunks[i] = storage.Chunk{
+				ChunkIndex: c.Index,
+				Text:       c.Text,
+				ByteStart:  c.ByteStart,
+				ByteEnd:    c.ByteEnd,
+				TokenEst:   c.TokenEst,
+			}
+		}
+		if err := db.InsertChunks(id, schunks); err != nil {
 			log.Printf("Chunk backfill: InsertChunks(%s): %v", id, err)
 			continue
 		}
@@ -470,42 +469,4 @@ func backfillChunks(db *storage.DB, chunk func(string) []storage.Chunk) error {
 	log.Printf("Chunk backfill: chunked %d messages (%d text-only, %d empty) in %v",
 		withChunks, withChunks, withoutText, time.Since(start))
 	return nil
-}
-
-// textFromProto mirrors storage.textFromBlocks at the main package
-// boundary so the backfill doesn't need a storage package API just
-// for text extraction. Kept in sync with storage/messages.go:textFromBlocks
-// and rrc/engine.go:textFromMessage — all three concatenate the same
-// scorable blocks so the chunking/scoring/embedding keys stay
-// coherent with each other.
-func textFromProto(blocks []*pb.ContentBlock) string {
-	var sb strings.Builder
-	for _, b := range blocks {
-		if t := b.GetText(); t != nil {
-			sb.WriteString(t.Text)
-			sb.WriteByte('\n')
-		} else if t := b.GetThinking(); t != nil {
-			sb.WriteString(t.Text)
-			sb.WriteByte('\n')
-		} else if tc := b.GetToolCall(); tc != nil {
-			sb.WriteString(tc.Name)
-			sb.WriteString(": ")
-			sb.WriteString(tc.Arguments)
-			sb.WriteByte('\n')
-		} else if tr := b.GetToolResult(); tr != nil {
-			sb.WriteString(tr.Content)
-			sb.WriteByte('\n')
-		} else if a := b.GetAttachment(); a != nil {
-			sb.WriteString("[attached: ")
-			sb.WriteString(a.Filename)
-			sb.WriteString(" at ")
-			sb.WriteString(a.Path)
-			sb.WriteString("]\n")
-			if a.InlinedText != "" {
-				sb.WriteString(a.InlinedText)
-				sb.WriteByte('\n')
-			}
-		}
-	}
-	return sb.String()
 }

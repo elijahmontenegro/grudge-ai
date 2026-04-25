@@ -1,10 +1,10 @@
 package storage
 
 import (
-	"strings"
 	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	"github.com/emontenegr/spidey/rrc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -35,23 +35,21 @@ func (d *DB) InsertMessage(msg *pb.Message) error {
 		return err
 	}
 
-	if d.chunker != nil {
-		text := textFromBlocks(msg.Content)
-		if text != "" {
-			chunks := d.chunker(text)
-			if len(chunks) > 0 {
-				stmt, err := tx.Prepare(`INSERT INTO chunks (message_id, chunk_index, text, byte_start, byte_end, token_est) VALUES (?, ?, ?, ?, ?, ?)`)
-				if err != nil {
+	text := textFromBlocks(msg.Content)
+	if text != "" {
+		chunks := rrc.ChunkText(text, d.chunkCfg)
+		if len(chunks) > 0 {
+			stmt, err := tx.Prepare(`INSERT INTO chunks (message_id, chunk_index, text, byte_start, byte_end, token_est) VALUES (?, ?, ?, ?, ?, ?)`)
+			if err != nil {
+				return err
+			}
+			for _, c := range chunks {
+				if _, err := stmt.Exec(msg.Id, c.Index, c.Text, c.ByteStart, c.ByteEnd, c.TokenEst); err != nil {
+					stmt.Close()
 					return err
 				}
-				for _, c := range chunks {
-					if _, err := stmt.Exec(msg.Id, c.ChunkIndex, c.Text, c.ByteStart, c.ByteEnd, c.TokenEst); err != nil {
-						stmt.Close()
-						return err
-					}
-				}
-				stmt.Close()
 			}
+			stmt.Close()
 		}
 	}
 
@@ -223,46 +221,10 @@ func unmarshalContentBlocks(data []byte) ([]*pb.ContentBlock, error) {
 	return wrapper.Content, nil
 }
 
-// textFromBlocks concatenates every scorable block into a single
-// string. Mirrors rrc/engine.go:textFromMessage so embeddings and
-// classifier inputs key off the exact same string — a mismatch here
-// would make the vector cache useless (the live classifier would
-// embed a different string and skip the cached vector). Tool calls
-// and tool results are included; skipping them would leave
-// autonomous tool-rounds unscored and selection dark.
+// textFromBlocks delegates to rrc.TextFromBlocks. Single source of
+// truth lives in rrc/text.go — embeddings and classifier inputs
+// (driven from rrc) and storage chunking key off the exact same
+// string, which a divergent local copy would break.
 func textFromBlocks(blocks []*pb.ContentBlock) string {
-	var sb strings.Builder
-	for _, b := range blocks {
-		if t := b.GetText(); t != nil {
-			sb.WriteString(t.Text)
-			sb.WriteByte('\n')
-		} else if t := b.GetThinking(); t != nil {
-			sb.WriteString(t.Text)
-			sb.WriteByte('\n')
-		} else if tc := b.GetToolCall(); tc != nil {
-			sb.WriteString(tc.Name)
-			sb.WriteString(": ")
-			sb.WriteString(tc.Arguments)
-			sb.WriteByte('\n')
-		} else if tr := b.GetToolResult(); tr != nil {
-			sb.WriteString(tr.Content)
-			sb.WriteByte('\n')
-		} else if a := b.GetAttachment(); a != nil {
-			// Path reference so the agent sees where to FileRead; plus
-			// extracted text (if any) so RRC's scorer has something
-			// meaningful to chunk for text-like attachments. Binary
-			// attachments only leave the reference — their content is
-			// opaque to the reranker anyway.
-			sb.WriteString("[attached: ")
-			sb.WriteString(a.Filename)
-			sb.WriteString(" at ")
-			sb.WriteString(a.Path)
-			sb.WriteString("]\n")
-			if a.InlinedText != "" {
-				sb.WriteString(a.InlinedText)
-				sb.WriteByte('\n')
-			}
-		}
-	}
-	return sb.String()
+	return rrc.TextFromBlocks(blocks)
 }

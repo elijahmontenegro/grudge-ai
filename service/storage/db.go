@@ -5,28 +5,21 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/emontenegr/spidey/rrc"
 	_ "modernc.org/sqlite"
 )
 
-// Chunker splits message text into storable Chunk slices. Injected at
-// service startup (wiring in rrc.ChunkText) so storage doesn't depend
-// on the rrc package directly — chunking is pure text manipulation
-// and conceptually belongs in rrc, but storage needs to invoke it to
-// keep chunks consistent with messages on insert.
-type Chunker func(text string) []Chunk
-
-// DB wraps an SQLite connection with WAL mode.
+// DB wraps an SQLite connection with WAL mode. ChunkConfig drives the
+// rrc.ChunkText call inside InsertMessage; SetChunkConfig overrides
+// the default if the service wants different chunking semantics.
 type DB struct {
 	*sql.DB
-	chunker Chunker
+	chunkCfg rrc.ChunkConfig
 }
 
-// SetChunker installs the chunking callback. InsertMessage will use
-// it to populate the chunks table atomically with the message row.
-// Must be set before any InsertMessage call for chunks to be produced;
-// callers that forget get a message row with zero chunks (and zero
-// embeddings, zero scores — effectively invisible to RRC).
-func (d *DB) SetChunker(c Chunker) { d.chunker = c }
+// SetChunkConfig installs a custom chunking config. Optional — the
+// default is rrc.DefaultChunkConfig().
+func (d *DB) SetChunkConfig(cfg rrc.ChunkConfig) { d.chunkCfg = cfg }
 
 // Open creates or opens the SQLite database at the given data directory.
 //
@@ -80,7 +73,7 @@ func Open(dataDir string) (*DB, error) {
 		return nil, fmt.Errorf("journal_mode is %q, expected wal — another process may hold the DB", mode)
 	}
 
-	d := &DB{DB: db}
+	d := &DB{DB: db, chunkCfg: rrc.DefaultChunkConfig()}
 	if err := d.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)

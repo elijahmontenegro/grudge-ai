@@ -6,7 +6,6 @@ import (
 	"log"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
@@ -764,48 +763,10 @@ func (e *Engine) LoadScoreCache(scores map[ScoreKey]float64) {
 
 // --- internal helpers ---
 
-// textFromMessage extracts a scorable text representation from a
-// message. Includes tool calls (as "Name: args") and tool results
-// (raw content) so autonomous rounds, which step through tool
-// calls/results as distinct messages, can still be scored against
-// prior context. Previously this skipped tool blocks and returned
-// empty for entire tool-only turns — OnMessage then bailed out via
-// the empty-text guard, no edges formed, and the next round's
-// selection started from a node with no incoming edges and returned
-// zero. The cross-encoder's entailment score on args JSON or tool
-// output is a weaker signal than on prose, but "weaker" is still
-// miles better than "silently zero."
-func textFromMessage(msg *pb.Message) string {
-	var sb strings.Builder
-	for _, block := range msg.Content {
-		if t := block.GetText(); t != nil {
-			sb.WriteString(t.Text)
-			sb.WriteByte('\n')
-		} else if t := block.GetThinking(); t != nil {
-			sb.WriteString(t.Text)
-			sb.WriteByte('\n')
-		} else if tc := block.GetToolCall(); tc != nil {
-			sb.WriteString(tc.Name)
-			sb.WriteString(": ")
-			sb.WriteString(tc.Arguments)
-			sb.WriteByte('\n')
-		} else if tr := block.GetToolResult(); tr != nil {
-			sb.WriteString(tr.Content)
-			sb.WriteByte('\n')
-		} else if a := block.GetAttachment(); a != nil {
-			sb.WriteString("[attached: ")
-			sb.WriteString(a.Filename)
-			sb.WriteString(" at ")
-			sb.WriteString(a.Path)
-			sb.WriteString("]\n")
-			if a.InlinedText != "" {
-				sb.WriteString(a.InlinedText)
-				sb.WriteByte('\n')
-			}
-		}
-	}
-	return sb.String()
-}
+// textFromMessage delegates to TextFromBlocks. Kept as a tiny shim so
+// existing internal call sites (the empty-text filter in OnMessage)
+// don't all need updating; it has no other purpose.
+func textFromMessage(msg *pb.Message) string { return TextFromBlocks(msg.Content) }
 
 // cosine is the standard cosine similarity; returns 0 for
 // zero-length or mismatched vectors.

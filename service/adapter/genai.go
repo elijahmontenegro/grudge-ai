@@ -19,44 +19,6 @@ func ProtoToText(blocks []*pb.ContentBlock) string {
 	return sb.String()
 }
 
-// ProtoToAllText extracts every semantic-bearing text from a message's
-// content blocks — text, thinking, tool-call arguments, tool-result
-// content, attachment inlined text. This is the right primitive for
-// deriving the RRC Query from a message, because an autonomous turn's
-// meaningful content is almost never in a plain text block — it's in
-// the model's thinking, the FileWrite arguments (which carry chapter
-// prose), and tool results. Mirrors storage's textFromBlocks so the
-// Query text matches what the embedder was given at ingest time.
-func ProtoToAllText(blocks []*pb.ContentBlock) string {
-	var sb strings.Builder
-	for _, b := range blocks {
-		switch {
-		case b.GetText() != nil:
-			sb.WriteString(b.GetText().Text)
-			sb.WriteByte('\n')
-		case b.GetThinking() != nil:
-			sb.WriteString(b.GetThinking().Text)
-			sb.WriteByte('\n')
-		case b.GetToolCall() != nil:
-			tc := b.GetToolCall()
-			sb.WriteString(tc.Name)
-			sb.WriteString(": ")
-			sb.WriteString(tc.Arguments)
-			sb.WriteByte('\n')
-		case b.GetToolResult() != nil:
-			sb.WriteString(b.GetToolResult().Content)
-			sb.WriteByte('\n')
-		case b.GetAttachment() != nil:
-			a := b.GetAttachment()
-			if a.InlinedText != "" {
-				sb.WriteString(a.InlinedText)
-				sb.WriteByte('\n')
-			}
-		}
-	}
-	return sb.String()
-}
-
 // TextToProto wraps a text string as a proto content block.
 func TextToProto(text string) []*pb.ContentBlock {
 	return []*pb.ContentBlock{

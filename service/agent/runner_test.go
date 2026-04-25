@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/storage"
 
 	"google.golang.org/adk/model"
@@ -15,6 +16,14 @@ import (
 	"google.golang.org/genai"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func init() {
+	// rrc.ChunkText is called from storage.InsertMessage; the encoder
+	// must be loaded before any test that exercises that path runs.
+	if err := rrc.InitTokenEncoder(); err != nil {
+		panic("runner_test: InitTokenEncoder: " + err.Error())
+	}
+}
 
 // --- Test runner + event fixtures ---
 
