@@ -1,6 +1,6 @@
 module github.com/emontenegr/spidey/rrc
 
-go 1.24.2
+go 1.25.0
 
 require (
 	github.com/emontenegr/spidey/gen/go v0.0.0

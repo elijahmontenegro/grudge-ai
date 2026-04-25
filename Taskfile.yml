@@ -1,0 +1,97 @@
+version: '3'
+
+# Build orchestration for spidey. Cross-platform (works on Windows
+# without WSL via go-task). Replaces ad-hoc per-module commands.
+
+vars:
+  MODULES: gen/go core rrc service
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build all Go modules
+    deps: [embed-sync]
+    cmds:
+      - for: [gen/go, core, rrc, service]
+        cmd: cd {{.ITEM}} && go build ./...
+
+  test:
+    desc: Test all Go modules
+    cmds:
+      - for: [rrc, core, service]
+        cmd: cd {{.ITEM}} && go test ./...
+
+  lint:
+    desc: Vet all Go modules
+    cmds:
+      - for: [gen/go, core, rrc, service]
+        cmd: cd {{.ITEM}} && go vet ./...
+
+  tidy:
+    desc: Run go mod tidy in each module
+    cmds:
+      - for: [gen/go, core, rrc, service]
+        cmd: cd {{.ITEM}} && go mod tidy
+
+  proto:
+    desc: Regenerate gen/go from .proto sources via buf
+    cmds:
+      - buf generate
+
+  proto:check:
+    desc: Verify gen/go is up to date with proto sources (CI)
+    cmds:
+      - buf generate
+      - git diff --exit-code gen/go/
+
+  web:install:
+    desc: Install frontend dependencies
+    dir: web
+    cmds:
+      - npm install
+
+  web:build:
+    desc: Build frontend bundle
+    dir: web
+    cmds:
+      - npm run build
+
+  web:dev:
+    desc: Run frontend dev server
+    dir: web
+    cmds:
+      - npm run dev
+
+  embed-sync:
+    desc: Sync web/dist into service/cmd/spidey/dist for go:embed
+    deps: [web:build]
+    cmds:
+      - rm -rf service/cmd/spidey/dist
+      - cp -r web/dist service/cmd/spidey/dist
+    sources:
+      - web/dist/**/*
+    generates:
+      - service/cmd/spidey/dist/**/*
+
+  run:
+    desc: Build everything and run spidey
+    deps: [build]
+    cmds:
+      - service/spidey.exe
+
+  sandbox:image:
+    desc: Build the sandbox docker image
+    cmds:
+      - docker build -t spidey-sandbox -f Dockerfile.sandbox .
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf web/dist
+      - rm -rf service/cmd/spidey/dist
+      - rm -f service/spidey.exe service/spidey-web.exe

@@ -15,3 +15,13 @@
 # Frontend node modules (if they ever get picked up by accident)
 web/node_modules/
 node_modules/
+
+# Frontend build output. web/dist is the Vite output; the
+# service/cmd/spidey/dist copy is the //go:embed source synced by the
+# Taskfile's embed-sync task. Both are build artifacts.
+web/dist/
+service/cmd/spidey/dist/
+
+# Generated proto code (gen/go) is intentionally checked in for
+# external go-get consumption — see go.mod replace directives.
+# When the proto module publishes, this stays committed.

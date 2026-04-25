@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -33,6 +35,13 @@ import (
 	"github.com/emontenegr/spidey/service/storage"
 	"github.com/emontenegr/spidey/service/tray"
 )
+
+// Embedded web bundle. The Taskfile's embed-sync task copies the
+// freshly-built web/dist into ./dist before `go build`. The
+// directory is in .gitignore — it's a build artifact, not source.
+//
+//go:embed all:dist
+var embeddedWeb embed.FS
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -351,26 +360,20 @@ func main() {
 		attachmentMgr.HandleUpload(w, r)
 	})
 
-	// Static assets — check multiple paths for web/dist
-	var webDist string
-	candidates := []string{
-		filepath.Join(filepath.Dir(os.Args[0]), "..", "..", "..", "web", "dist"),
-		filepath.Join("web", "dist"),
-		filepath.Join("..", "web", "dist"),
+	// Static assets — embedded via //go:embed dist (Taskfile's
+	// embed-sync task copies web/dist into ./dist before build).
+	// Self-contained binary; no runtime path lookup, no ../../../web/dist
+	// candidate list, no surprises when the binary ships standalone.
+	webRoot, err := fs.Sub(embeddedWeb, "dist")
+	if err != nil {
+		log.Fatalf("embedded web: %v", err)
 	}
-	for _, c := range candidates {
-		if info, err := os.Stat(c); err == nil && info.IsDir() {
-			webDist = c
-			break
-		}
-	}
-	if webDist != "" {
-		fs := http.Dir(webDist)
-		fileServer := http.FileServer(fs)
+	if _, err := fs.Stat(webRoot, "index.html"); err == nil {
+		fileServer := http.FileServer(http.FS(webRoot))
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			path := r.URL.Path
 			if path != "/" {
-				if _, err := fs.Open(path); err != nil {
+				if _, err := fs.Stat(webRoot, strings.TrimPrefix(path, "/")); err != nil {
 					// Asset-like paths must 404 cleanly. Falling back to
 					// index.html sends HTML for a <script src> and browsers
 					// reject it with "Expected a JavaScript-or-Wasm module
@@ -396,11 +399,11 @@ func main() {
 			}
 			fileServer.ServeHTTP(w, r)
 		})
-		log.Printf("Serving web UI from %s", webDist)
+		log.Printf("Serving web UI from embedded dist")
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(`<!doctype html><html><body><h1>Spidey</h1><p>Web UI not built. Run <code>cd web &amp;&amp; npm run build</code></p></body></html>`))
+			w.Write([]byte(`<!doctype html><html><body><h1>Spidey</h1><p>Web UI not built into binary. Run <code>task embed-sync</code> then rebuild.</p></body></html>`))
 		})
 	}
 
