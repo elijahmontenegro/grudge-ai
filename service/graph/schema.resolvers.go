@@ -345,9 +345,10 @@ func (r *mutationResolver) StopAgent(ctx context.Context, threadID string) (bool
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
 	})
-	return true, r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModeNormal,
-	})
+	if err := r.DB.EnsureAgentStateRow(threadID, storage.AgentStatusIdle, storage.AgentModeNormal); err != nil {
+		return false, err
+	}
+	return true, r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
 }
 
 // PauseAgent is the resolver for the pauseAgent field.
@@ -357,14 +358,10 @@ func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (boo
 		entry.runner.PauseAutonomous()
 	}
 	r.runnersMu.Unlock()
-	// SaveAgentState is a full-row UPSERT — writing only Status would zero
-	// out Mode/RoundCount/StartedAt/DurationLimit. Read the current state
-	// and preserve everything except the Status transition.
 	st, err := r.DB.GetAgentState(threadID)
 	if err != nil {
 		return false, fmt.Errorf("load state: %w", err)
 	}
-	st.Status = storage.AgentStatusPaused
 	gqlMode := AgentModeNormal
 	switch st.Mode {
 	case storage.AgentModePlan:
@@ -375,7 +372,7 @@ func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (boo
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: AgentStatusPaused, Mode: gqlMode,
 	})
-	return true, r.DB.SaveAgentState(st)
+	return true, r.DB.SetAgentStatus(threadID, storage.AgentStatusPaused)
 }
 
 // ResumeAgent is the resolver for the resumeAgent field.
@@ -440,7 +437,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 			}
 			go func() {
 				defer r.stopRunner(threadID)
-				defer r.DB.SaveAgentState(&storage.AgentState{ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModeNormal})
+				defer r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
 				defer r.publishAgentState(threadID, &AgentState{ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal})
 				if err := runner.RunAutonomous(autoCtx, kickoff, remaining); err != nil {
 					log.Printf("[Autonomous resumed] Error: %v", err)
@@ -449,7 +446,6 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 			restartedAutonomous = true
 		}
 	}
-	st.Status = storage.AgentStatusRunning
 	gqlMode := AgentModeNormal
 	switch st.Mode {
 	case storage.AgentModePlan:
@@ -461,7 +457,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 		ThreadID: threadID, Status: AgentStatusRunning, Mode: gqlMode,
 	})
 	_ = restartedAutonomous
-	return true, r.DB.SaveAgentState(st)
+	return true, r.DB.SetAgentStatus(threadID, storage.AgentStatusRunning)
 }
 
 // StartAutonomous is the resolver for the startAutonomous field.
@@ -479,10 +475,7 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 		dur = maxDur
 	}
 	now := time.Now()
-	if err := r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: storage.AgentStatusRunning, Mode: storage.AgentModeAutonomous,
-		StartedAt: &now, DurationLimit: duration,
-	}); err != nil {
+	if err := r.DB.StartAutonomousRun(threadID, now, duration); err != nil {
 		return false, err
 	}
 
@@ -505,7 +498,7 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 
 	go func() {
 		defer r.stopRunner(threadID)
-		defer r.DB.SaveAgentState(&storage.AgentState{ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModeNormal})
+		defer r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
 		defer r.publishAgentState(threadID, &AgentState{
 			ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
 		})
@@ -672,9 +665,10 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 // SendMessage. Mirrors claude-code's model where plan mode is a
 // toolPermissionContext.mode flag, not an agent status.
 func (r *mutationResolver) EnterPlanMode(ctx context.Context, threadID string) (bool, error) {
-	if err := r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModePlan,
-	}); err != nil {
+	if err := r.DB.EnsureAgentStateRow(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
+		return false, err
+	}
+	if err := r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
 		return false, err
 	}
 	// Stop existing runner so a fresh one is created with plan mode prompt
@@ -712,9 +706,10 @@ func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, exe
 		stStatus = storage.AgentStatusRunning
 		gqlStatus = AgentStatusRunning
 	}
-	if err := r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: stStatus, Mode: stMode,
-	}); err != nil {
+	if err := r.DB.EnsureAgentStateRow(threadID, stStatus, stMode); err != nil {
+		return false, err
+	}
+	if err := r.DB.SetAgentStatusAndMode(threadID, stStatus, stMode); err != nil {
 		return false, err
 	}
 	// Clear plan content — it's been approved and enters the corpus
@@ -744,7 +739,7 @@ func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, exe
 		r.runnersMu.Unlock()
 		go func() {
 			defer r.stopRunner(threadID)
-			defer r.DB.SaveAgentState(&storage.AgentState{ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModeNormal})
+			defer r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
 			defer r.publishAgentState(threadID, &AgentState{
 				ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
 			})
@@ -776,9 +771,10 @@ func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feed
 	// Status stays Idle — rejectPlan itself doesn't execute a round. The
 	// follow-up sendMessage carrying the feedback is what actually kicks
 	// the revision round; its streaming surfaces via the usual path.
-	if err := r.DB.SaveAgentState(&storage.AgentState{
-		ThreadID: threadID, Status: storage.AgentStatusIdle, Mode: storage.AgentModePlan,
-	}); err != nil {
+	if err := r.DB.EnsureAgentStateRow(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
+		return false, err
+	}
+	if err := r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
 		return false, err
 	}
 	// Stop the current runner so the next getOrCreateRunner picks up plan

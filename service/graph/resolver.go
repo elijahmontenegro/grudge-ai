@@ -737,12 +737,7 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 		// the error text — no corpus write needed.
 		log.Printf("[Autonomous] mid-run error on %s: %v — pausing", threadID, err)
 		runner.PauseAutonomous()
-		st, gerr := r.DB.GetAgentState(threadID)
-		if gerr != nil {
-			st = &storage.AgentState{ThreadID: threadID, Mode: storage.AgentModeAutonomous}
-		}
-		st.Status = storage.AgentStatusPaused
-		_ = r.DB.SaveAgentState(st)
+		_ = r.DB.SetAgentStatus(threadID, storage.AgentStatusPaused)
 		errMsg := err.Error()
 		r.publishAgentState(threadID, &AgentState{
 			ThreadID: threadID, Status: AgentStatusPaused, Mode: AgentModeAutonomous,

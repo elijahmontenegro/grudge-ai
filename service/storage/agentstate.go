@@ -33,29 +33,52 @@ type AgentState struct {
 	DurationLimit string
 }
 
-// SaveAgentState persists agent state for a thread. Full-row UPSERT —
-// any field not set on the struct gets written as its zero value (Mode: 0
-// = Normal, RoundCount: 0, StartedAt: nil, DurationLimit: ""). If you
-// only need to change one field, use SetAgentStatus or SetAgentMode
-// instead so the others aren't clobbered.
-func (d *DB) SaveAgentState(s *AgentState) error {
+// StartAutonomousRun is the only legitimate full-row write on
+// agent_state — it begins a new autonomous run by recording the
+// run's parameters (status=Running, mode=Autonomous, started_at,
+// duration_limit) and resetting round_count to 0. Every OTHER state
+// transition is a narrow update via SetAgentStatus /
+// SetAgentStatusAndMode / SetAgentRoundCount; those preserve the
+// metadata this call writes so the run's audit trail survives pause /
+// resume / mid-run state flips.
+//
+// UPSERT (INSERT … ON CONFLICT DO UPDATE) is correct here: a thread
+// that previously ran autonomously and is now starting a fresh run
+// SHOULD have its old start_time / duration_limit replaced with the
+// new run's values. round_count resets to 0 because rounds count
+// per-run, not per-thread.
+func (d *DB) StartAutonomousRun(threadID string, startedAt time.Time, durationLimit string) error {
 	_, err := d.Exec(
 		`INSERT INTO agent_state (thread_id, status, mode, round_count, started_at, duration_limit, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		 VALUES (?, ?, ?, 0, ?, ?, CURRENT_TIMESTAMP)
 		 ON CONFLICT(thread_id) DO UPDATE SET
 		   status = excluded.status, mode = excluded.mode,
 		   round_count = excluded.round_count, started_at = excluded.started_at,
 		   duration_limit = excluded.duration_limit, updated_at = excluded.updated_at`,
-		s.ThreadID, s.Status, s.Mode, s.RoundCount, s.StartedAt, s.DurationLimit,
+		threadID, AgentStatusRunning, AgentModeAutonomous, startedAt, durationLimit,
+	)
+	return err
+}
+
+// EnsureAgentStateRow guarantees a row exists for threadID with the
+// supplied initial status+mode. INSERT OR IGNORE — if a row already
+// exists, this is a no-op (no metadata clobbering). Used by callers
+// that want to set Idle/Normal but don't know whether the row exists
+// yet (Stop on a thread that never ran has no row to update; without
+// this the SetAgentStatusAndMode call below would silently no-op).
+func (d *DB) EnsureAgentStateRow(threadID string, status AgentStatus, mode AgentMode) error {
+	_, err := d.Exec(
+		`INSERT OR IGNORE INTO agent_state (thread_id, status, mode, round_count, updated_at)
+		 VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)`,
+		threadID, status, mode,
 	)
 	return err
 }
 
 // SetAgentStatus updates only the status column (and updated_at), leaving
-// Mode, RoundCount, StartedAt, DurationLimit intact. Returns sql.ErrNoRows
-// semantics only via the caller's expectations — SQLite UPDATE with no
-// matching row is a silent no-op. Callers that need creation should use
-// SaveAgentState instead.
+// Mode, RoundCount, StartedAt, DurationLimit intact. SQLite UPDATE with
+// no matching row is a silent no-op — for transitions on potentially-
+// fresh threads use EnsureAgentStateRow first.
 func (d *DB) SetAgentStatus(threadID string, status AgentStatus) error {
 	_, err := d.Exec(
 		`UPDATE agent_state SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE thread_id = ?`,

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -393,23 +394,18 @@ func TestCascadeDelete(t *testing.T) {
 // TestAgentState_NarrowHelpersPreserveFields verifies that the narrow
 // update helpers (SetAgentStatus, SetAgentRoundCount, SetAgentStatusAndMode)
 // do NOT wipe the other columns. Regression guard against the rounds-93/97
-// partial-UPSERT bug where SaveAgentState{Status: x} would reset mode/
-// roundCount/startedAt/durationLimit to zero values.
+// partial-UPSERT bug where the now-removed SaveAgentState{Status: x} would
+// reset mode/roundCount/startedAt/durationLimit to zero values.
 func TestAgentState_NarrowHelpersPreserveFields(t *testing.T) {
 	db := testDB(t)
 	db.CreateThread(&pb.Thread{Id: "t-agent", Name: "T", CreatedAt: timestamppb.Now()})
 
 	started := timestamppb.Now().AsTime()
-	full := &AgentState{
-		ThreadID:      "t-agent",
-		Status:        AgentStatusRunning,
-		Mode:          AgentModeAutonomous,
-		RoundCount:    5,
-		StartedAt:     &started,
-		DurationLimit: "1h",
+	if err := db.StartAutonomousRun("t-agent", started, "1h"); err != nil {
+		t.Fatalf("StartAutonomousRun: %v", err)
 	}
-	if err := db.SaveAgentState(full); err != nil {
-		t.Fatalf("SaveAgentState full: %v", err)
+	if err := db.SetAgentRoundCount("t-agent", 5); err != nil {
+		t.Fatalf("SetAgentRoundCount seed: %v", err)
 	}
 
 	// SetAgentStatus only touches Status.
@@ -470,37 +466,71 @@ func TestAgentState_NarrowHelpersPreserveFields(t *testing.T) {
 	}
 }
 
-// TestAgentState_SaveAgentStateIsFullUPSERT documents that SaveAgentState
-// writes every field — it does NOT preserve unset ones. Callers that want
-// to change a single column must use the narrow helpers instead. This test
-// locks in the contract so future changes to SaveAgentState don't silently
-// drift into partial-write behavior that callers might rely on.
-func TestAgentState_SaveAgentStateIsFullUPSERT(t *testing.T) {
+// TestAgentState_StartAutonomousRunResetsRoundCount verifies that
+// StartAutonomousRun (the only legitimate full-row write) resets the
+// round_count to 0 — rounds count per-run, not per-thread, so beginning
+// a new run on a thread that previously ran SHOULD clear the counter.
+func TestAgentState_StartAutonomousRunResetsRoundCount(t *testing.T) {
 	db := testDB(t)
-	db.CreateThread(&pb.Thread{Id: "t-full", Name: "T", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&pb.Thread{Id: "t-restart", Name: "T", CreatedAt: timestamppb.Now()})
 
-	started := timestamppb.Now().AsTime()
-	if err := db.SaveAgentState(&AgentState{
-		ThreadID: "t-full", Status: AgentStatusRunning, Mode: AgentModeAutonomous,
-		RoundCount: 5, StartedAt: &started, DurationLimit: "1h",
-	}); err != nil {
-		t.Fatalf("SaveAgentState: %v", err)
+	// First run: round_count climbs.
+	first := timestamppb.Now().AsTime()
+	if err := db.StartAutonomousRun("t-restart", first, "1h"); err != nil {
+		t.Fatalf("StartAutonomousRun first: %v", err)
+	}
+	if err := db.SetAgentRoundCount("t-restart", 12); err != nil {
+		t.Fatalf("SetAgentRoundCount: %v", err)
 	}
 
-	// Partial write — other fields SHOULD be zeroed by design.
-	if err := db.SaveAgentState(&AgentState{
-		ThreadID: "t-full", Status: AgentStatusPaused,
-	}); err != nil {
-		t.Fatalf("SaveAgentState partial: %v", err)
+	// Second run on the same thread: full-row UPSERT replaces metadata
+	// AND resets round_count.
+	second := first.Add(2 * time.Hour)
+	if err := db.StartAutonomousRun("t-restart", second, "30m"); err != nil {
+		t.Fatalf("StartAutonomousRun second: %v", err)
 	}
-	got, _ := db.GetAgentState("t-full")
-	if got.Mode != AgentModeNormal {
-		t.Errorf("Mode = %v after partial save, want Normal (zero) — if this changed, fix callers", got.Mode)
-	}
+	got, _ := db.GetAgentState("t-restart")
 	if got.RoundCount != 0 {
-		t.Errorf("RoundCount = %d after partial save, want 0", got.RoundCount)
+		t.Errorf("RoundCount = %d after restart, want 0", got.RoundCount)
 	}
-	if got.DurationLimit != "" {
-		t.Errorf("DurationLimit = %q after partial save, want empty", got.DurationLimit)
+	if got.DurationLimit != "30m" {
+		t.Errorf("DurationLimit = %q after restart, want 30m", got.DurationLimit)
+	}
+	if got.StartedAt == nil || !got.StartedAt.Equal(second) {
+		t.Errorf("StartedAt not updated to second-run start time")
+	}
+}
+
+// TestAgentState_EnsureAgentStateRowIsIdempotent verifies that
+// EnsureAgentStateRow is INSERT-OR-IGNORE: it creates a row if missing
+// and is a no-op if one already exists. Used by callers (StopAgent,
+// EnterPlanMode) that don't know whether the row exists yet — without
+// it, the subsequent narrow UPDATE silently no-ops on a missing row.
+func TestAgentState_EnsureAgentStateRowIsIdempotent(t *testing.T) {
+	db := testDB(t)
+	db.CreateThread(&pb.Thread{Id: "t-ensure", Name: "T", CreatedAt: timestamppb.Now()})
+
+	// First call: row created.
+	if err := db.EnsureAgentStateRow("t-ensure", AgentStatusIdle, AgentModeNormal); err != nil {
+		t.Fatalf("EnsureAgentStateRow first: %v", err)
+	}
+	got, err := db.GetAgentState("t-ensure")
+	if err != nil {
+		t.Fatalf("GetAgentState after Ensure: %v", err)
+	}
+	if got.Status != AgentStatusIdle || got.Mode != AgentModeNormal {
+		t.Errorf("first ensure: got Status=%v Mode=%v, want Idle/Normal", got.Status, got.Mode)
+	}
+
+	// Mutate; second Ensure call must NOT clobber.
+	if err := db.SetAgentStatusAndMode("t-ensure", AgentStatusRunning, AgentModeAutonomous); err != nil {
+		t.Fatalf("SetAgentStatusAndMode: %v", err)
+	}
+	if err := db.EnsureAgentStateRow("t-ensure", AgentStatusIdle, AgentModeNormal); err != nil {
+		t.Fatalf("EnsureAgentStateRow second: %v", err)
+	}
+	got, _ = db.GetAgentState("t-ensure")
+	if got.Status != AgentStatusRunning || got.Mode != AgentModeAutonomous {
+		t.Errorf("second ensure clobbered: got Status=%v Mode=%v, want Running/Autonomous", got.Status, got.Mode)
 	}
 }
