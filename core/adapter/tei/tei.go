@@ -232,7 +232,7 @@ const rerankBatchSize = 32
 // even when the request was split across multiple HTTP calls
 // internally. Empty candidates returns an empty slice without a
 // network call.
-func (c *classifier) Rerank(ctx context.Context, query string, candidates []string) ([]float64, error) {
+func (c *classifier) Score(ctx context.Context, query string, candidates []string) ([]float64, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -250,7 +250,7 @@ func (c *classifier) Rerank(ctx context.Context, query string, candidates []stri
 			end = len(candidates)
 		}
 		slice := candidates[offset:end]
-		if err := c.rerankOnce(ctx, query, slice, scores[offset:end]); err != nil {
+		if err := c.scoreOnce(ctx, query, slice, scores[offset:end]); err != nil {
 			return nil, err
 		}
 	}
@@ -263,7 +263,7 @@ func (c *classifier) Rerank(ctx context.Context, query string, candidates []stri
 // restart-in-progress container (triggered by the docker-compose
 // healthcheck's canary /rerank probe) is retried rather than propagated
 // as a classifier error that would pause the whole round.
-func (c *classifier) rerankOnce(ctx context.Context, query string, slice []string, out []float64) error {
+func (c *classifier) scoreOnce(ctx context.Context, query string, slice []string, out []float64) error {
 	body, err := json.Marshal(rerankRequest{
 		Query:     query,
 		Texts:     slice,
@@ -342,7 +342,7 @@ const predictBatchSize = 32
 // returns the entailment-class score aligned to the input order of
 // hypotheses. Empty hypotheses returns an empty slice without a
 // network call.
-func (en *entailer) Entail(ctx context.Context, premise string, hypotheses []string) ([]float64, error) {
+func (en *entailer) Score(ctx context.Context, premise string, hypotheses []string) ([]float64, error) {
 	if len(hypotheses) == 0 {
 		return nil, nil
 	}
@@ -359,14 +359,14 @@ func (en *entailer) Entail(ctx context.Context, premise string, hypotheses []str
 			end = len(hypotheses)
 		}
 		slice := hypotheses[offset:end]
-		if err := en.entailOnce(ctx, premise, slice, scores[offset:end]); err != nil {
+		if err := en.scoreOnce(ctx, premise, slice, scores[offset:end]); err != nil {
 			return nil, err
 		}
 	}
 	return scores, nil
 }
 
-func (en *entailer) entailOnce(ctx context.Context, premise string, slice []string, out []float64) error {
+func (en *entailer) scoreOnce(ctx context.Context, premise string, slice []string, out []float64) error {
 	pairs := make([][]string, len(slice))
 	for i, h := range slice {
 		pairs[i] = []string{premise, h}

@@ -33,7 +33,7 @@ func (m *mockClassifier) SetScore(prior, new string, score float64) {
 	m.pairScores[prior+"|"+new] = score
 }
 
-func (m *mockClassifier) Rerank(_ context.Context, query string, candidates []string) ([]float64, error) {
+func (m *mockClassifier) Score(_ context.Context, query string, candidates []string) ([]float64, error) {
 	m.callCount++
 	scores := make([]float64, len(candidates))
 	for i, c := range candidates {
@@ -1094,7 +1094,7 @@ type mockEntailer struct {
 	err    error
 }
 
-func (m *mockEntailer) Entail(_ context.Context, _ string, hypotheses []string) ([]float64, error) {
+func (m *mockEntailer) Score(_ context.Context, _ string, hypotheses []string) ([]float64, error) {
 	m.calls++
 	if m.err != nil {
 		return nil, m.err

@@ -291,7 +291,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 			for i, j := range rerankSet {
 				candidates[i] = priorChunks[j].chunk.Text
 			}
-			scores, rerr := e.classifier.Rerank(ctx, nc.Text, candidates)
+			scores, rerr := e.classifier.Score(ctx, nc.Text, candidates)
 			if rerr != nil {
 				return nil, fmt.Errorf("%w: %v", ErrClassifierFailed, rerr)
 			}
@@ -310,7 +310,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 			// would leave the caller unaware that their composite
 			// pipeline is running one-legged.
 			if e.entailer != nil && e.cfg.NLIFusionWeight > 0 && e.cfg.NLIFusionWeight < 1 && len(candidates) > 0 {
-				nliScores, nerr := e.entailer.Entail(ctx, nc.Text, candidates)
+				nliScores, nerr := e.entailer.Score(ctx, nc.Text, candidates)
 				if nerr != nil {
 					return nil, fmt.Errorf("%w: entailer: %v", ErrClassifierFailed, nerr)
 				}

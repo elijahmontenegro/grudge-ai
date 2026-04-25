@@ -56,9 +56,9 @@ func (c *CompositeClassifier) Embedder() core.Embedder {
 // Rerank delegates to the reranker. Without one wired, returns zeros
 // so callers don't need to conditionally skip — "no signal" is a
 // valid answer per protocol §I13 (zero-return valid).
-func (c *CompositeClassifier) Rerank(ctx context.Context, query string, candidates []string) ([]float64, error) {
+func (c *CompositeClassifier) Score(ctx context.Context, query string, candidates []string) ([]float64, error) {
 	if c.reranker == nil || len(candidates) == 0 {
 		return make([]float64, len(candidates)), nil
 	}
-	return c.reranker.Rerank(ctx, query, candidates)
+	return c.reranker.Score(ctx, query, candidates)
 }

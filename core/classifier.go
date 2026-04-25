@@ -2,35 +2,30 @@ package core
 
 import "context"
 
-// Classifier scores candidates against a query. This replaces the
-// pair-based NLI interface — bge-reranker-v2-m3 (our new cross-encoder)
-// outputs a single relevance score per (query, candidate), which maps
-// directly to the "is this a prerequisite?" question RRC needs to ask.
-// NLI-entailment was the wrong tool: reference material doesn't
-// *entail* the content that consults it, but a reranker trained for
-// relevance captures the "informs" relationship cleanly.
-type Classifier interface {
-	// Rerank scores each candidate against query. Returns one score
-	// per candidate, aligned with the input order. Scores are in
-	// [0, 1] for sigmoid-output rerankers; semantics depend on the
-	// model but "higher = more relevant" is universal.
-	//
-	// A single query+[]candidates call is one HTTP round-trip to the
-	// reranker, so callers should prefer batching into this shape
-	// (one new message against many priors) over pairwise loops.
-	Rerank(ctx context.Context, query string, candidates []string) ([]float64, error)
+// Scorer scores candidates against a query. The single contract for
+// every reranker / entailer / similarity classifier in the system —
+// (query, []candidates) → []float64, one score per candidate aligned
+// with the input order, higher = more relevant. The semantic
+// difference between "rerank for surface relevance" and "entail for
+// directional dependency" lives in the consumer (which Scorer
+// instance is used for what), not in the method shape.
+//
+// A single query+[]candidates call is one round-trip to the model,
+// so callers should prefer batching into this shape (one new
+// message against many priors) over pairwise loops.
+//
+// Empty candidates returns an empty slice with no backend call.
+type Scorer interface {
+	Score(ctx context.Context, query string, candidates []string) ([]float64, error)
 }
 
-// Entailer scores hypotheses for NLI-style entailment against a
-// premise. Implemented by a cross-encoder classification model
-// (DeBERTa-MNLI or similar) served behind /predict. Layered on top of
-// Rerank to distinguish content that INFORMS a query from content
-// that merely MIRRORS the query's surface language. See the matching
-// rrc.Entailer interface for the full motivation.
-//
-// Returns one score per hypothesis, aligned with the input order.
-// Higher = stronger entailment. Empty hypotheses returns an empty
-// slice with no backend call.
-type Entailer interface {
-	Entail(ctx context.Context, premise string, hypotheses []string) ([]float64, error)
-}
+// Classifier is a Scorer used for surface-relevance reranking
+// (bge-reranker-v2-m3 in production). Kept as a named interface so
+// callers and Provider methods can express the role explicitly even
+// though it shares Scorer's contract.
+type Classifier = Scorer
+
+// Entailer is a Scorer used for NLI-style entailment (DeBERTa-MNLI
+// in production). Same contract as Scorer; the named alias documents
+// the consumer role.
+type Entailer = Scorer
