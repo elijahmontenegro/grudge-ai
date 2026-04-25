@@ -1,11 +1,6 @@
 package rrc
 
-import (
-	"log"
-	"strings"
-
-	"github.com/pkoukk/tiktoken-go"
-)
+import "strings"
 
 // Chunk is a contiguous slice of a message's text. Chunks are the
 // unit of embedding and cross-encoder scoring. Messages remain the
@@ -147,52 +142,43 @@ func findBoundary(text string, start, maxEnd, window int) int {
 	return maxEnd
 }
 
-// cl100k_base is GPT-4's BPE tokenizer and is the closest widely-
-// available stand-in for the family of BPE tokenizers modern LLMs
-// use (Claude's internal tokenizer, minimax, most Llama derivatives).
-// It's not exact for non-GPT providers — their vocabularies diverge
-// by a few percent to ~20% — but it's a structurally correct
-// tokenization, not a character heuristic. Budget calculations
-// treat its output as approximate; the reactive shed layer is the
-// ground truth for "actually fits."
-const tokenEncoding = "cl100k_base"
-
-// tokenEncoder is initialized exactly once at package load via
-// InitTokenEncoder(). Never nil after successful init. No fallback
-// estimator — if tiktoken cannot load at startup the process refuses
-// to boot; a silent downgrade to a char-based heuristic would
-// change the unit that every downstream budget check is denominated
-// in, without anyone noticing.
-var tokenEncoder *tiktoken.Tiktoken
-
-// InitTokenEncoder loads the cl100k_base BPE encoder. Called from
-// main() at boot; any error is fatal. The encoder is goroutine-safe
-// once loaded (tiktoken.Tiktoken exposes Encode as a read-only
-// operation on immutable vocab tables).
-func InitTokenEncoder() error {
-	enc, err := tiktoken.GetEncoding(tokenEncoding)
-	if err != nil {
-		return err
-	}
-	tokenEncoder = enc
-	log.Printf("token estimator: tiktoken %s", tokenEncoding)
-	return nil
+// TokenEstimator counts tokens in a string under some tokenization
+// scheme. Implementations are goroutine-safe. Consumers who don't
+// install one get the panic-on-call defaultEstimator below — making
+// the contract explicit instead of silently running with a 0-token
+// estimator that would let every budget check pass.
+//
+// Default implementation lives at rrc/tiktoken (cl100k_base BPE) but
+// is opt-in: importing rrc does not pull tiktoken-go into the
+// consumer's binary. Consumers wire one via SetDefaultEstimator at
+// boot, or pass one through EngineConfig.Estimator (Move B).
+type TokenEstimator interface {
+	Estimate(s string) int
 }
 
-// estimateTokens returns the tokenized length of s under cl100k_base.
-// Panics if the encoder isn't initialized — InitTokenEncoder must be
-// called at startup, and a bare-package consumer (e.g. a test) should
-// call it too. Panicking here is the correct behavior: the caller
-// has a silent-units problem otherwise.
+// defaultEstimator is consulted by the package-level EstimateTokens
+// helper. nil at package init; library consumers MUST set it via
+// SetDefaultEstimator before any code that estimates tokens runs
+// (chunking, budget sizing).
+var defaultEstimator TokenEstimator
+
+// SetDefaultEstimator installs a TokenEstimator as the package-level
+// default. The standard library/main pattern: import rrc/tiktoken at
+// boot and call rrc.SetDefaultEstimator(tiktoken.New()).
+func SetDefaultEstimator(e TokenEstimator) {
+	defaultEstimator = e
+}
+
+// estimateTokens delegates to the default estimator. Panics if none
+// is installed — callers have a silent-units problem otherwise.
 func estimateTokens(s string) int {
-	if tokenEncoder == nil {
-		panic("rrc: token estimator not initialized — call InitTokenEncoder() at startup")
+	if defaultEstimator == nil {
+		panic("rrc: no TokenEstimator installed — call rrc.SetDefaultEstimator(...) at startup (e.g. with rrc/tiktoken)")
 	}
-	return len(tokenEncoder.Encode(s, nil, nil))
+	return defaultEstimator.Estimate(s)
 }
 
-// EstimateTokens exposes the estimator for callers outside this
-// package. The assembler uses it for context-budget sizing.
-func EstimateTokens(s string) int {
-	return estimateTokens(s)
-}
+// EstimateTokens exposes the package-level estimator for callers
+// outside this package. The assembler uses it for context-budget
+// sizing. Panics if no estimator is installed.
+func EstimateTokens(s string) int { return estimateTokens(s) }

@@ -9,6 +9,7 @@ import (
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
+	"github.com/emontenegr/spidey/rrc/tiktoken"
 	"github.com/emontenegr/spidey/service/storage"
 
 	"google.golang.org/adk/model"
@@ -18,11 +19,13 @@ import (
 )
 
 func init() {
-	// rrc.ChunkText is called from storage.InsertMessage; the encoder
-	// must be loaded before any test that exercises that path runs.
-	if err := rrc.InitTokenEncoder(); err != nil {
-		panic("runner_test: InitTokenEncoder: " + err.Error())
+	// rrc.ChunkText is called from storage.InsertMessage; the
+	// estimator must be installed before any test exercises that path.
+	est, err := tiktoken.New()
+	if err != nil {
+		panic("runner_test: tiktoken.New: " + err.Error())
 	}
+	rrc.SetDefaultEstimator(est)
 }
 
 // --- Test runner + event fixtures ---

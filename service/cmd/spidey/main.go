@@ -21,6 +21,7 @@ import (
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/adapter/tei"
 	"github.com/emontenegr/spidey/rrc"
+	"github.com/emontenegr/spidey/rrc/tiktoken"
 	"github.com/emontenegr/spidey/service/agent"
 	"github.com/emontenegr/spidey/service/api"
 	"github.com/emontenegr/spidey/service/config"
@@ -56,9 +57,11 @@ func main() {
 	// unreachable for first-run fetch — we refuse to start rather
 	// than silently degrade to a char-based heuristic that would
 	// change the unit every downstream budget check operates in.
-	if err := rrc.InitTokenEncoder(); err != nil {
-		log.Fatalf("token encoder: %v", err)
+	tokenEst, err := tiktoken.New()
+	if err != nil {
+		log.Fatalf("token estimator: %v", err)
 	}
+	rrc.SetDefaultEstimator(tokenEst)
 
 	db, err := storage.Open(cfg.DataDir)
 	if err != nil {

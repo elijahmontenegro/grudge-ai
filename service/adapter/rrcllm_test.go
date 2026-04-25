@@ -5,15 +5,17 @@ import (
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
+	"github.com/emontenegr/spidey/rrc/tiktoken"
 )
 
 func init() {
-	// tiktoken must be initialized before EstimateTokens is called in
-	// these tests. main() does this at boot; tests have to do it
-	// themselves.
-	if err := rrc.InitTokenEncoder(); err != nil {
-		panic("rrcllm_test: InitTokenEncoder: " + err.Error())
+	// EstimateTokens needs an installed estimator. main() wires
+	// tiktoken at boot; tests do the same.
+	est, err := tiktoken.New()
+	if err != nil {
+		panic("rrcllm_test: tiktoken.New: " + err.Error())
 	}
+	rrc.SetDefaultEstimator(est)
 }
 
 // --- isContextOverflow pattern coverage ---
