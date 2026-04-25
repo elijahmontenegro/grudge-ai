@@ -26,8 +26,6 @@ type provider struct {
 	delegate core.Provider
 }
 
-func (p *provider) ID() string                                      { return "vllm" }
-func (p *provider) Completer(model string) (core.Completer, error)  { return p.delegate.Completer(model) }
-func (p *provider) Embedder(_ string) (core.Embedder, error)        { return nil, core.ErrUnsupported }
-func (p *provider) Classifier(_ string) (core.Classifier, error)    { return nil, core.ErrUnsupported }
-func (p *provider) Close() error                                    { return p.delegate.Close() }
+func (p *provider) Completer(model string) (core.Completer, error) { return p.delegate.Completer(model) }
+func (p *provider) Embedder(_ string) (core.Embedder, error)       { return nil, core.ErrUnsupported }
+func (p *provider) Classifier(_ string) (core.Classifier, error)   { return nil, core.ErrUnsupported }

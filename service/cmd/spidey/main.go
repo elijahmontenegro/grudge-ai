@@ -141,11 +141,10 @@ func main() {
 		}
 	}
 
-	defer func() {
-		for _, p := range providers {
-			p.Close()
-		}
-	}()
+	// Provider.Close() was dropped in Move D-narrow — it returned nil
+	// in every adapter and held no actual resource. The providers
+	// slice is still kept for symmetry (HTTP clients underneath have
+	// their own connection-pool teardown via Go runtime exit).
 
 	if classifier == nil || mainCompleter == nil {
 		log.Printf("WARNING: providers not fully configured — configure at http://spidey.localhost:8420/settings")

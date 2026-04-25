@@ -34,7 +34,6 @@ func New(cfg Config) core.Provider {
 	}
 }
 
-func (p *provider) ID() string { return "googleai" }
 
 func (p *provider) Completer(model string) (core.Completer, error) {
 	return &completer{
@@ -57,7 +56,6 @@ func (p *provider) Classifier(_ string) (core.Classifier, error) {
 	return nil, core.ErrUnsupported
 }
 
-func (p *provider) Close() error { return nil }
 
 // --- Completer ---
 

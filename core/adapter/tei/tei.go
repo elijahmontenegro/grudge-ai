@@ -54,7 +54,6 @@ func New(cfg Config) core.Provider {
 	}
 }
 
-func (p *provider) ID() string { return "tei" }
 
 func (p *provider) Completer(_ string) (core.Completer, error) {
 	return nil, core.ErrUnsupported
@@ -87,7 +86,6 @@ func NewEntailer(baseURL string) core.Entailer {
 	}
 }
 
-func (p *provider) Close() error { return nil }
 
 // --- Embedder ---
 
