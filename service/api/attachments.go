@@ -21,8 +21,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-
-	"github.com/emontenegr/spidey/service/graph"
 )
 
 // MaxAttachmentBytes caps any single uploaded file. 100MB covers
@@ -63,7 +61,8 @@ func NewManager(dataDir string) *Manager { return &Manager{dataDir: dataDir} }
 // Writes each file to {workspace}/_attachments/{uuid}/{sanitized-name},
 // sniffs MIME from the actual content (not the client's claim),
 // extracts text for text/* MIME up to InlinedTextCap, and returns a
-// JSON array of graph.AttachmentInput — the exact shape the client
+// JSON array of api.Attachment — JSON shape matches the gqlgen
+// graph.AttachmentInput so the client round-trips the response —
 // echoes back into sendMessage/startAutonomous. One schema (gqlgen),
 // one Go type, no parallel DTO.
 func (m *Manager) HandleUpload(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +98,7 @@ func (m *Manager) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := make([]*graph.AttachmentInput, 0, len(files))
+	out := make([]*Attachment, 0, len(files))
 	for _, fh := range files {
 		if fh.Size > MaxAttachmentBytes {
 			http.Error(w, fmt.Sprintf("file too large: %s (%d bytes, cap %d)",
@@ -121,7 +120,7 @@ func (m *Manager) HandleUpload(w http.ResponseWriter, r *http.Request) {
 // saveHeader streams one multipart file to disk and returns its
 // metadata. Generates a fresh UUID for the subdirectory so two
 // attachments with the same display name coexist.
-func (m *Manager) saveHeader(fh *multipart.FileHeader, attachRoot string) (*graph.AttachmentInput, error) {
+func (m *Manager) saveHeader(fh *multipart.FileHeader, attachRoot string) (*Attachment, error) {
 	id := uuid.NewString()
 	clean := sanitizeFilename(fh.Filename)
 	if clean == "" {
@@ -169,15 +168,15 @@ func (m *Manager) saveHeader(fh *multipart.FileHeader, attachRoot string) (*grap
 	// always /workspace, regardless of host path, per sandbox mount.
 	sandboxPath := path.Join("/workspace", "_attachments", id, clean)
 
-	// graph.AttachmentInput.InlinedText is *string so an empty excerpt
-	// serializes as omitted JSON rather than as "" — same shape gqlgen
+	// InlinedText is *string so an empty excerpt serializes as omitted
+	// JSON rather than as "" — same shape gqlgen's AttachmentInput
 	// expects when the client echoes this back into the GraphQL input.
 	var inlinedPtr *string
 	if inlined != "" {
 		inlinedPtr = &inlined
 	}
 
-	return &graph.AttachmentInput{
+	return &Attachment{
 		ID:          id,
 		Filename:    clean,
 		MimeType:    mimeType,

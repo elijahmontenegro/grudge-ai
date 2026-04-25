@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/emontenegr/spidey/core"
+	"github.com/emontenegr/spidey/service/secrets"
 )
 
 // Settings represents the service configuration from config.json.
@@ -78,13 +79,13 @@ type ProviderConfig struct {
 }
 
 // ToCore converts to a core.ProviderConfig, resolving the API key
-// from the OS keyring when not set inline. Lets callers say
+// from the secrets store when not set inline. Lets callers say
 // `core.NewProvider(cfg.ToCore())` instead of repeating the
 // adapter→key lookup at every callsite.
 func (p ProviderConfig) ToCore() core.ProviderConfig {
 	apiKey := p.APIKey
 	if apiKey == "" {
-		apiKey, _ = GetAPIKey(p.Adapter)
+		apiKey, _ = secrets.Get(p.Adapter)
 	}
 	return core.ProviderConfig{
 		Adapter: p.Adapter,
