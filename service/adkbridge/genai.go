@@ -1,4 +1,4 @@
-package adapter
+package adkbridge
 
 import (
 	"encoding/json"

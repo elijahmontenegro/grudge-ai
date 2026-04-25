@@ -16,7 +16,7 @@ import (
 	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/service/adapter"
+	"github.com/emontenegr/spidey/service/adkbridge"
 	"github.com/emontenegr/spidey/service/adoc"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/storage"
@@ -244,7 +244,7 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 	msg := &pb.Message{
 		Id:       fmt.Sprintf("msg-%s-0", newThread.Id),
 		Role:     pb.Role_ROLE_USER,
-		Content:  adapter.TextToProto(newContent),
+		Content:  adkbridge.TextToProto(newContent),
 		Position: int64(messagePosition),
 		ThreadId: newThread.Id,
 	}
@@ -385,7 +385,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 		msg := &pb.Message{
 			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 			Role:      pb.Role_ROLE_USER,
-			Content:   adapter.TextToProto(*correction),
+			Content:   adkbridge.TextToProto(*correction),
 			Position:  int64(len(corpus)),
 			ThreadId:  threadID,
 			CreatedAt: timestamppb.Now(),
@@ -540,7 +540,7 @@ func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reas
 		msg := &pb.Message{
 			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 			Role:      pb.Role_ROLE_SYSTEM,
-			Content:   adapter.TextToProto(denialText),
+			Content:   adkbridge.TextToProto(denialText),
 			Position:  int64(len(corpus)),
 			ThreadId:  threadID,
 			CreatedAt: timestamppb.Now(),
@@ -916,7 +916,7 @@ func (r *queryResolver) Search(ctx context.Context, query string, limit *int) ([
 			MessageID:  res.MessageID,
 			ThreadID:   msg.ThreadId,
 			ThreadName: threadName,
-			Snippet:    adapter.ProtoToText(msg.Content),
+			Snippet:    adkbridge.ProtoToText(msg.Content),
 			Score:      res.Score,
 		}
 	}
@@ -1118,7 +1118,7 @@ func (r *queryResolver) RecentActivity(ctx context.Context, limit *int) ([]*Acti
 		if lastMsg == nil {
 			continue
 		}
-		summary := adapter.ProtoToText(lastMsg.Content)
+		summary := adkbridge.ProtoToText(lastMsg.Content)
 		if len(summary) > 80 {
 			summary = summary[:77] + "..."
 		}

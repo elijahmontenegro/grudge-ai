@@ -15,7 +15,7 @@ import (
 	"github.com/emontenegr/spidey/core"
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/service/adapter"
+	"github.com/emontenegr/spidey/service/adkbridge"
 	"github.com/emontenegr/spidey/service/storage"
 
 	adkagent "google.golang.org/adk/agent"
@@ -39,7 +39,7 @@ type Runner struct {
 	instruction     string
 	rerankerModelID string // for subagent forks to inherit
 	adkRunner       *runner.Runner
-	rrcLLM          *adapter.RRCLLM // stored to set scope per-call
+	rrcLLM          *adkbridge.RRCLLM // stored to set scope per-call
 	mu          sync.Mutex
 	msgSeq      atomic.Int64 // monotonic message ID counter
 	autoState   *AutonomousState
@@ -52,7 +52,7 @@ type Runner struct {
 	// interrupting ADK's event iterator (which is running on the
 	// derived ctx) and any in-flight HTTP call underneath.
 	turnCancel  atomic.Pointer[context.CancelFunc]
-	onStream    adapter.StreamCallback
+	onStream    adkbridge.StreamCallback
 	onSelection func(result *pb.SelectionResult)
 	onRound     func(round int, elapsed time.Duration)
 	// Event handlers — service wires these to publish to GraphQL subscriptions
@@ -80,7 +80,7 @@ func (r *Runner) CancelTurn() {
 }
 
 // SetStreamCallback sets the callback for streaming deltas (for subscription publishing).
-func (r *Runner) SetStreamCallback(cb adapter.StreamCallback) {
+func (r *Runner) SetStreamCallback(cb adkbridge.StreamCallback) {
 	r.onStream = cb
 }
 
@@ -115,7 +115,7 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 	// RRC-as-LLM: ADK calls this thinking it's an LLM. Engine owns its
 	// own lock now; rrcLLM acquires it directly via engine.Lock /
 	// Unlock — no shared mutex passed in.
-	rrcLLM := adapter.NewRRCLLM(engine, completer, db, threadID, modelName, rerankerModelID)
+	rrcLLM := adkbridge.NewRRCLLM(engine, completer, db, threadID, modelName, rerankerModelID)
 	rrcLLM.OnStream = func(delta, thinking string, done bool) {
 		if r.onStream != nil {
 			r.onStream(delta, thinking, done)
@@ -222,7 +222,7 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.Selec
 	// at the adapter via repositioning of already-persisted messages,
 	// never by writing synthetic Events here.
 	if content != "" || len(attachments) > 0 {
-		blocks := adapter.TextToProto(content)
+		blocks := adkbridge.TextToProto(content)
 		for _, a := range attachments {
 			blocks = append(blocks, &pb.ContentBlock{
 				Block: &pb.ContentBlock_Attachment{Attachment: a},
@@ -327,7 +327,7 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 
 				argsJSON := "{}"
 				if fc.Args != nil {
-					if s, err := adapter.MarshalFunctionArgs(fc.Args); err == nil {
+					if s, err := adkbridge.MarshalFunctionArgs(fc.Args); err == nil {
 						argsJSON = s
 					}
 				}
@@ -408,7 +408,7 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 		if err := r.db.InsertMessage(lastAssistantMsg); err != nil {
 			return nil, err
 		}
-		r.embedIfWired(lastAssistantMsg.Id, adapter.ProtoToText(lastAssistantMsg.Content))
+		r.embedIfWired(lastAssistantMsg.Id, adkbridge.ProtoToText(lastAssistantMsg.Content))
 		return lastAssistantMsg, nil
 	}
 
