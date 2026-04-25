@@ -86,6 +86,49 @@ type EngineConfig struct {
 	// overhead, tool-declaration blocks, max output tokens, and the
 	// inherent imprecision of character-based token estimation.
 	ContextBudgetTokens int
+
+	// DiversityLambda is the MMR tradeoff between relevance and
+	// diversity at post-Selection emission. effective(C) =
+	// λ·origScore(C) - (1-λ)·max_sim(C, already_kept). At λ=1 MMR
+	// degenerates to score-desc (today's behavior); at λ=0 it picks
+	// purely for diversity with no regard for relevance. 0.7 is the
+	// standard default from Carbonell & Goldstein (1998) — mostly
+	// relevance-driven but with enough diversity penalty to collapse
+	// near-duplicate chains (the "nine copies of let me check the
+	// chapter" pattern) to one or two representatives.
+	DiversityLambda float64
+
+	// BudgetHeadroomPct is a fixed global margin on the context
+	// budget. estimate ≤ ContextBudgetTokens × BudgetHeadroomPct.
+	// Absorbs tokenizer divergence (cl100k_base proxy vs the real
+	// model's BPE), chat-template preambles, and server-side
+	// wrapping without claiming to know any of them. One knob,
+	// globally tunable; per-model calibration is explicitly out of
+	// scope (best-effort estimate). 0.90 means we target 90% of
+	// the advertised budget, holding 10% in reserve for the
+	// inherent imprecision of a cross-tokenizer estimator. Zero
+	// disables the margin (estimate compared directly to budget).
+	BudgetHeadroomPct float64
+
+	// PerMsgDelimiterTokens is a fixed small constant added per
+	// message to account for chat-template delimiter overhead
+	// (ChatML `<|im_start|>` etc., Llama 3 headers, Mistral
+	// `[INST]` pairs). Stable across templates — ChatML ~4, Llama 3
+	// ~5, Mistral ~4. Observed budget estimate has been under-
+	// counting message-count-proportionally without this; with a
+	// 40-message wire that's ~200 tokens.
+	PerMsgDelimiterTokens int
+
+	// NLIFusionWeight is α in the composite scoring fusion:
+	// fused = α · bge_rerank_score + (1-α) · nli_entailment_score.
+	// At α=1 fusion degenerates to bge-only (today's behavior); at
+	// α=0 to NLI-only. 0.5 balances the two — bge captures surface
+	// relevance well, NLI captures the directional dependency
+	// ("this content answers that query") that bge-reranker-v2-m3
+	// misses, surfacing prerequisite content over process-thinking
+	// that merely shares query language. Takes effect only when an
+	// Entailer is wired on the Engine; otherwise ignored.
+	NLIFusionWeight float64
 }
 
 // DefaultConfig returns the default engine configuration.
@@ -161,5 +204,19 @@ func DefaultConfig() EngineConfig {
 		// For 128k-context models (GPT-4o, Llama 3.1) this is too
 		// aggressive on paper; reactive shed catches the residual.
 		ContextBudgetTokens: 150000,
+
+		// MMR diversity default per Carbonell & Goldstein (1998).
+		DiversityLambda: 0.7,
+		// 10% margin absorbs cl100k_base-vs-real-tokenizer drift,
+		// template preambles, and other observable byte-level
+		// accounting gaps that aren't worth enumerating individually.
+		BudgetHeadroomPct: 0.90,
+		// 5 tokens/message covers ChatML / Llama 3 / Mistral role
+		// delimiters to within ±1.
+		PerMsgDelimiterTokens: 5,
+		// Balanced fusion between bge-rerank (surface relevance)
+		// and NLI (directional dependency). Takes effect only if
+		// the engine has an Entailer wired.
+		NLIFusionWeight: 0.5,
 	}
 }

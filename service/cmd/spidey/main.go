@@ -166,6 +166,21 @@ func main() {
 		rrcCfg.RadiusSize = se.RadiusSize
 		rrcCfg.RerankTopK = se.RerankTopK
 		rrcCfg.ContextBudgetTokens = se.ContextBudgetTokens
+		// Preserve DefaultConfig values for the new tunables when the
+		// persisted settings predate them (zero-value means "not set"
+		// only because the Settings UI hadn't exposed them yet).
+		if se.DiversityLambda > 0 {
+			rrcCfg.DiversityLambda = se.DiversityLambda
+		}
+		if se.BudgetHeadroomPct > 0 {
+			rrcCfg.BudgetHeadroomPct = se.BudgetHeadroomPct
+		}
+		if se.PerMsgDelimiterTokens > 0 {
+			rrcCfg.PerMsgDelimiterTokens = se.PerMsgDelimiterTokens
+		}
+		if se.NLIFusionWeight > 0 {
+			rrcCfg.NLIFusionWeight = se.NLIFusionWeight
+		}
 	}
 	engine := rrc.NewEngine(rrcCfg, classifier)
 

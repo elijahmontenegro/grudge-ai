@@ -215,6 +215,21 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			}
 
 			if selErr == nil && result != nil {
+				// Apply MMR diversity rerank on the Selected slice
+				// before publishing / assembly. Rescores each entry
+				// as λ·orig - (1-λ)·max_sim(C, kept), which
+				// penalizes near-duplicates against already-kept
+				// items. No drop; the updated EffectiveScore flows
+				// to the budget shed below, where under pressure the
+				// penalized redundant items fall first.
+				if lambda := r.engine.Config().DiversityLambda; lambda > 0 && lambda < 1 && len(result.Selected) > 1 {
+					if mmrRanked, merr := r.engine.ApplyMMR(ctx, result.Selected, lambda); merr == nil {
+						result.Selected = mmrRanked
+					} else {
+						log.Printf("RRC: MMR rerank skipped for thread %s: %v", r.threadID, merr)
+					}
+				}
+
 				if r.OnSelection != nil {
 					r.OnSelection(result)
 				}
@@ -266,7 +281,58 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 		// budget, drop the lowest-score droppable, repeat.
 
 		droppedSelectedIDs := make(map[string]bool)
-		budget := r.engine.Config().ContextBudgetTokens
+		engineCfg := r.engine.Config()
+		budget := engineCfg.ContextBudgetTokens
+
+		// Score axis for Selected entries: prefer MMR-adjusted
+		// EffectiveScore (post-ApplyMMR) over the raw reranker-max
+		// from the score cache. Under MMR, near-duplicates have
+		// effective scores driven down by the diversity penalty, so
+		// they fall first when the shed loop prioritizes lowest-
+		// scored items. Using resolver.Score here instead would read
+		// from the raw bge cache and lose all diversity signal.
+		selectedScoreByID := make(map[string]float64, len(selectedOrdered))
+		for _, s := range selectedOrdered {
+			selectedScoreByID[s.MessageId] = float64(s.EffectiveScore)
+		}
+
+		// Tool declarations are static across shed iterations — same
+		// set of tools for the whole turn. Hoist conversion + token
+		// estimation out of the loop so (a) the JSON only marshals
+		// once per turn and (b) the estimate can participate in the
+		// budget math without being re-derived every iteration.
+		//
+		// Token estimate serializes the ToolDeclaration list to the
+		// same JSON shape the Ollama adapter emits downstream (name /
+		// description / parameters-as-object). Previously this block
+		// was invisible to the budget math — 22 tools × a few hundred
+		// bytes each is 4-9KB of JSON per request silently added by
+		// the adapter, which accounted for a meaningful slice of the
+		// 2% reactive-shed residual even after ProtoToAllText fixed
+		// the message-body under-counting.
+		var protoTools []*pb.ToolDeclaration
+		if req.Config != nil {
+			for _, gt := range req.Config.Tools {
+				for _, fd := range gt.FunctionDeclarations {
+					paramsJSON := `{"type":"object","properties":{}}`
+					if fd.ParametersJsonSchema != nil {
+						if b, err := json.Marshal(fd.ParametersJsonSchema); err == nil {
+							paramsJSON = string(b)
+						}
+					} else if fd.Parameters != nil {
+						if b, err := json.Marshal(fd.Parameters); err == nil {
+							paramsJSON = string(b)
+						}
+					}
+					protoTools = append(protoTools, &pb.ToolDeclaration{
+						Name:           fd.Name,
+						Description:    fd.Description,
+						ParametersJson: paramsJSON,
+					})
+				}
+			}
+		}
+		toolSchemaTokens := estimateToolSchemaTokens(protoTools)
 
 		for {
 			// === Build Selected (chronological, minus dropped) ===
@@ -288,7 +354,20 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 				}
 			}
 
-			// === Build Radius ===
+			// === Build Radius (dynamical: semantic-aware tail) ===
+			// Raw chronological radius misses the most-recent text turns
+			// whenever the tail is deep in a tool loop — positions
+			// 901..910 can all be tool_call/tool_result while the last
+			// user-text / assistant-text sit at 893/896 and get missed.
+			// That's a conversational-coherence failure: Radius's job
+			// is to anchor the wire against the recent conversation,
+			// not to mechanically reproduce the last N events.
+			//
+			// Policy: take the last N as before, then reach further
+			// back as needed to guarantee the most-recent user-text
+			// and assistant-text messages are in the radius slice.
+			// Chronological ordering is preserved (the wire reads
+			// like a conversation, not like a prioritized list).
 			var radiusMsgs []*pb.LLMMessage
 			radiusN := r.engine.RadiusSize()
 			if radiusN > 0 {
@@ -300,12 +379,68 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 					if start < 0 {
 						start = 0
 					}
-					for _, m := range threadCorpus[start:] {
-						if selectedIDs[m.Id] {
+					window := threadCorpus[start:]
+
+					// Check which anchors are already in the window.
+					haveUserText, haveAssistantText := false, false
+					for _, m := range window {
+						if !hasTextBlock(m.Content) {
 							continue
+						}
+						switch m.Role {
+						case pb.Role_ROLE_USER:
+							haveUserText = true
+						case pb.Role_ROLE_ASSISTANT:
+							haveAssistantText = true
+						}
+					}
+
+					// Reach back to find missing anchors. Walk
+					// backward from just before `start`; stop once
+					// both anchors are found or we exhaust the
+					// thread.
+					inWindow := make(map[string]bool, len(window))
+					for _, m := range window {
+						inWindow[m.Id] = true
+					}
+					var prepended []*pb.Message
+					if !haveUserText || !haveAssistantText {
+						for i := start - 1; i >= 0 && (!haveUserText || !haveAssistantText); i-- {
+							m := threadCorpus[i]
+							if !hasTextBlock(m.Content) {
+								continue
+							}
+							if m.Role == pb.Role_ROLE_USER && !haveUserText {
+								prepended = append([]*pb.Message{m}, prepended...)
+								haveUserText = true
+							} else if m.Role == pb.Role_ROLE_ASSISTANT && !haveAssistantText {
+								prepended = append([]*pb.Message{m}, prepended...)
+								haveAssistantText = true
+							}
+						}
+					}
+
+					if len(prepended) > 0 {
+						log.Printf("RRC: dynamical Radius reached back for %d semantic anchor(s) beyond the last %d",
+							len(prepended), radiusN)
+					}
+
+					// Emit in chronological order: prepended anchors
+					// first (earliest→latest within themselves), then
+					// the raw tail window. Selection inclusion trumps
+					// Radius, same as before.
+					emit := func(m *pb.Message) {
+						if selectedIDs[m.Id] {
+							return
 						}
 						radiusMsgs = append(radiusMsgs, MessageToLLM(m))
 						wireIDs = append(wireIDs, m.Id)
+					}
+					for _, m := range prepended {
+						emit(m)
+					}
+					for _, m := range window {
+						emit(m)
 					}
 				}
 			}
@@ -347,11 +482,13 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 
 			// === Unified budget: shed lowest-score droppable ===
 			// Droppable = Selected entries + rectification inserts.
-			// Score axis = rerank-max against query (Selected entries
-			// read from resolver.Score; rectification inserts
-			// carry score in insertScores). System + Radius are
-			// fixed-cost; not shed. If the fixed cost alone exceeds
-			// budget, we can't fit — surface an error.
+			// Score axis — Selected: MMR-adjusted EffectiveScore
+			// from selectedScoreByID (so near-duplicates with
+			// diversity-penalty scores fall first); Rectification:
+			// rerank-max from resolver's per-query score cache via
+			// insertScores. System + Radius are fixed-cost; not shed.
+			// If the fixed cost alone exceeds budget, we can't fit —
+			// surface an error.
 			// Estimate per-message token cost using ProtoToAllText,
 			// which covers text + thinking + tool_call arguments +
 			// tool_result content + inlined attachment text. The
@@ -372,11 +509,34 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 				msgTokens[i] = rrc.EstimateTokens(ProtoToAllText(m.Content))
 				total += msgTokens[i]
 			}
-			if budget > 0 && total > budget {
+			// Add tool-schema overhead (constant across iterations) and
+			// per-message chat-template delimiters (scales with wire
+			// message count). Both were invisible to the budget math
+			// before — the tool block is 4-9KB / round of raw JSON the
+			// adapter adds unconditionally, and per-message delimiters
+			// (ChatML / Llama 3 / Mistral role wrappers) are ~5 tokens
+			// each, which on a 40-message wire is another ~200 tokens.
+			// Neither number is decisive on its own; together they
+			// closed most of the residual between our "budget cleared"
+			// estimate and the provider's "context_window_exceeded"
+			// response.
+			total += toolSchemaTokens
+			total += len(llmMsgs) * engineCfg.PerMsgDelimiterTokens
+			// Apply a fixed global headroom margin to absorb the
+			// remaining divergence we choose NOT to model exhaustively:
+			// cl100k_base-vs-real-tokenizer drift (minimax / Llama tokenize
+			// denser than GPT on JSON), template-level preambles added
+			// server-side, and other byte-level accounting gaps. One
+			// knob, globally tunable, no per-model calibration.
+			effectiveBudget := budget
+			if engineCfg.BudgetHeadroomPct > 0 && engineCfg.BudgetHeadroomPct <= 1 {
+				effectiveBudget = int(float64(budget) * engineCfg.BudgetHeadroomPct)
+			}
+			if budget > 0 && total > effectiveBudget {
 				// Drop iteratively from lowest-score until fit.
 				dropRectByPtr := make(map[*pb.LLMMessage]bool)
 				var dropSelectedID string
-				for total > budget {
+				for total > effectiveBudget {
 					// Find lowest score across Selected + rect.
 					var bestPtr *pb.LLMMessage
 					bestScore := math.Inf(1)
@@ -389,7 +549,7 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 						if rs, ok := insertScores[m]; ok {
 							s = rs
 						} else if id, ok := selectedPtrToID[m]; ok {
-							s = resolver.Score(id)
+							s = selectedScoreByID[id]
 						} else {
 							continue // system or radius — never shed
 						}
@@ -411,10 +571,10 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 						break // defer actual drop to outer rebuild
 					}
 					dropRectByPtr[bestPtr] = true
-					total -= msgTokens[bestIdx]
+					total -= msgTokens[bestIdx] + engineCfg.PerMsgDelimiterTokens
 				}
 				if dropSelectedID != "" {
-					log.Printf("RRC: shed selected msg=%s (score=%.3f)", dropSelectedID, resolver.Score(dropSelectedID))
+					log.Printf("RRC: shed selected msg=%s (score=%.3f)", dropSelectedID, selectedScoreByID[dropSelectedID])
 					droppedSelectedIDs[dropSelectedID] = true
 					continue // rebuild from scratch
 				}
@@ -453,26 +613,8 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 					t := req.Config.MaxOutputTokens
 					protoReq.MaxTokens = &t
 				}
-				for _, gt := range req.Config.Tools {
-					for _, fd := range gt.FunctionDeclarations {
-						paramsJSON := `{"type":"object","properties":{}}`
-						if fd.ParametersJsonSchema != nil {
-							if b, err := json.Marshal(fd.ParametersJsonSchema); err == nil {
-								paramsJSON = string(b)
-							}
-						} else if fd.Parameters != nil {
-							if b, err := json.Marshal(fd.Parameters); err == nil {
-								paramsJSON = string(b)
-							}
-						}
-						protoReq.Tools = append(protoReq.Tools, &pb.ToolDeclaration{
-							Name:           fd.Name,
-							Description:    fd.Description,
-							ParametersJson: paramsJSON,
-						})
-					}
-				}
 			}
+			protoReq.Tools = protoTools
 
 			// Try the LLM. tryComplete/tryStream return the initial
 			// error WITHOUT yielding it, so the shed loop can observe
@@ -506,7 +648,7 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 				if droppedSelectedIDs[s.MessageId] {
 					continue
 				}
-				sc := resolver.Score(s.MessageId)
+				sc := selectedScoreByID[s.MessageId]
 				if sc < lowestScore {
 					lowestScore = sc
 					forcedDrop = s.MessageId
@@ -520,6 +662,71 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			droppedSelectedIDs[forcedDrop] = true
 		}
 	}
+}
+
+// hasTextBlock reports whether a content-block list contains at least
+// one non-empty plain-text block. Used by dynamical Radius to
+// distinguish "semantic content" messages (user-typed text, assistant
+// replies) from "tool-plumbing" messages (tool_call, tool_result,
+// thinking-only), so Radius can guarantee conversational anchors
+// survive deep tool loops.
+//
+// Thinking-only is explicitly excluded: the model's internal
+// monologue is not a conversational anchor, and including it here
+// would defeat the whole point (if every thinking-only block counts
+// as an "assistant anchor," a nine-thinking tool loop still hides
+// the last real reply).
+func hasTextBlock(blocks []*pb.ContentBlock) bool {
+	for _, b := range blocks {
+		if t := b.GetText(); t != nil && t.Text != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// estimateToolSchemaTokens returns a tiktoken estimate for the JSON
+// shape the Ollama adapter emits for each ToolDeclaration. Mirrors
+// the serialization in core/adapter/ollama/ollama.go — one JSON object
+// per function with name, description, and a parameters sub-object
+// inlined from ParametersJson. Returns 0 for empty input.
+//
+// The estimate is intentionally upstream of the adapter: if the
+// adapter changes its wire format, the budget math diverges. The
+// tradeoff is simplicity — reaching through adapter internals just
+// for a budget estimate would entangle layers that are otherwise
+// independent. Drift is caught empirically via the reactive-shed
+// loop.
+func estimateToolSchemaTokens(tools []*pb.ToolDeclaration) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	type toolJSON struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Parameters  json.RawMessage `json:"parameters"`
+		} `json:"function"`
+	}
+	var total int
+	for _, t := range tools {
+		var tj toolJSON
+		tj.Type = "function"
+		tj.Function.Name = t.Name
+		tj.Function.Description = t.Description
+		if t.ParametersJson != "" {
+			tj.Function.Parameters = json.RawMessage(t.ParametersJson)
+		} else {
+			tj.Function.Parameters = json.RawMessage(`{}`)
+		}
+		b, err := json.Marshal(tj)
+		if err != nil {
+			continue
+		}
+		total += rrc.EstimateTokens(string(b))
+	}
+	return total
 }
 
 // isContextOverflow recognizes provider errors that indicate the request

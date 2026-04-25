@@ -192,7 +192,7 @@ func (r *Resolver) ReloadProviders() error {
 	// filter by the current model; old rows stay under their old key
 	// and never conflict). Rewiring the persister here is what makes
 	// settings changes take effect for scoring without a restart.
-	var nliURL, embedURL, nliModelID, embedModelID string
+	var nliURL, embedURL, entailerURL, nliModelID, embedModelID string
 	if clsCfg, ok := cfg.Settings.Providers["classifier"]; ok {
 		nliURL = clsCfg.BaseURL
 		nliModelID = clsCfg.Model
@@ -201,10 +201,28 @@ func (r *Resolver) ReloadProviders() error {
 		embedURL = embCfg.BaseURL
 		embedModelID = embCfg.Model
 	}
-	if nliURL != "" || embedURL != "" {
+	// Optional composite NLI stage. A separate TEI instance serving an
+	// MNLI-trained classifier (DeBERTa-v3-base-mnli or similar) layered
+	// on top of the reranker for directional-entailment scoring. Empty
+	// URL → no entailer wired, OnMessage falls back to reranker-only
+	// (today's behavior). The NLIFusionWeight engine config controls
+	// the fusion α when an entailer is wired.
+	if enCfg, ok := cfg.Settings.Providers["entailer"]; ok {
+		entailerURL = enCfg.BaseURL
+	}
+	if nliURL != "" || embedURL != "" || entailerURL != "" {
 		classifier := tei.NewCompositeClassifier(nliURL, embedURL)
 		r.engineMu.Lock()
 		r.Engine.SetClassifier(classifier)
+
+		// Wire (or un-wire) the entailer atomically under the engine
+		// lock so OnMessage doesn't observe a half-swapped state.
+		if ent := tei.NewEntailer(entailerURL); ent != nil {
+			r.Engine.SetEntailer(ent)
+			log.Printf("[Providers] entailer wired: url=%s", entailerURL)
+		} else {
+			r.Engine.SetEntailer(nil)
+		}
 
 		// Re-install the score persister with the (possibly new) model
 		// ID. nil-clears first so a model change doesn't keep writing

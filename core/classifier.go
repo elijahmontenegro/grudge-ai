@@ -20,3 +20,17 @@ type Classifier interface {
 	// (one new message against many priors) over pairwise loops.
 	Rerank(ctx context.Context, query string, candidates []string) ([]float64, error)
 }
+
+// Entailer scores hypotheses for NLI-style entailment against a
+// premise. Implemented by a cross-encoder classification model
+// (DeBERTa-MNLI or similar) served behind /predict. Layered on top of
+// Rerank to distinguish content that INFORMS a query from content
+// that merely MIRRORS the query's surface language. See the matching
+// rrc.Entailer interface for the full motivation.
+//
+// Returns one score per hypothesis, aligned with the input order.
+// Higher = stronger entailment. Empty hypotheses returns an empty
+// slice with no backend call.
+type Entailer interface {
+	Entail(ctx context.Context, premise string, hypotheses []string) ([]float64, error)
+}

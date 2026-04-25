@@ -954,3 +954,269 @@ func TestOnMessage_CachedScoresCountAsRescored(t *testing.T) {
 	}
 }
 
+// --- MMR (Phase B.1) ---
+
+// vectorOracle is a ChunkOracle that returns a fixed vector per
+// message ID. Supports MMR tests: cosine similarity between candidates
+// is the distance measure MMR actually penalizes against.
+type vectorOracle struct {
+	vectors map[string][]float32
+}
+
+func newVectorOracle() *vectorOracle {
+	return &vectorOracle{vectors: make(map[string][]float32)}
+}
+
+func (o *vectorOracle) set(id string, v []float32) { o.vectors[id] = v }
+
+func (o *vectorOracle) ChunksForMessages(_ context.Context, ids []string) (map[string][]ChunkRef, error) {
+	out := make(map[string][]ChunkRef)
+	for _, id := range ids {
+		if v, ok := o.vectors[id]; ok {
+			out[id] = []ChunkRef{{MessageID: id, ChunkIndex: 0, Text: id, Vector: v}}
+		}
+	}
+	return out, nil
+}
+
+func (o *vectorOracle) EnsureVector(_ context.Context, ref ChunkRef) ([]float32, error) {
+	if v, ok := o.vectors[ref.MessageID]; ok {
+		return v, nil
+	}
+	return nil, nil
+}
+
+// TestApplyMMR_ReordersNearDuplicates verifies the load-bearing
+// assertion of the Phase B.1 design: given a near-duplicate chain of
+// high-scoring candidates (the observed "nine copies of let me check
+// the chapter" pattern) and one distinct lower-scoring candidate,
+// MMR penalizes the duplicates enough that the distinct one emerges
+// above most of them in the reordered output.
+func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DiversityLambda = 0.7
+	e := NewEngine(cfg, newMockClassifier())
+
+	o := newVectorOracle()
+	// dup1..dup3 are near-identical vectors (cosine ≈ 1).
+	// distinct is orthogonal.
+	o.set("dup1", []float32{1, 0, 0})
+	o.set("dup2", []float32{0.99, 0.01, 0})
+	o.set("dup3", []float32{0.98, 0.02, 0})
+	o.set("distinct", []float32{0, 1, 0})
+	e.SetChunkOracle(o)
+
+	selected := []*pb.SelectedMessage{
+		{MessageId: "dup1", EffectiveScore: 0.95},
+		{MessageId: "dup2", EffectiveScore: 0.94},
+		{MessageId: "dup3", EffectiveScore: 0.93},
+		{MessageId: "distinct", EffectiveScore: 0.60},
+	}
+
+	out, err := e.ApplyMMR(context.Background(), selected, cfg.DiversityLambda)
+	if err != nil {
+		t.Fatalf("ApplyMMR error: %v", err)
+	}
+	if len(out) != len(selected) {
+		t.Fatalf("ApplyMMR must not drop items; got %d want %d", len(out), len(selected))
+	}
+	// First pick is the highest-orig candidate — dup1.
+	if out[0].MessageId != "dup1" {
+		t.Errorf("first pick should be highest orig score (dup1); got %s", out[0].MessageId)
+	}
+	// Second pick should be distinct (orthogonal → diversity bonus
+	// overwhelms the orig-score gap). Under λ=0.7:
+	//   dup2 effective = 0.7*0.94 - 0.3*~0.99 ≈ 0.36
+	//   distinct effective = 0.7*0.60 - 0.3*0   = 0.42
+	if out[1].MessageId != "distinct" {
+		t.Errorf("second pick should be distinct (diversity bonus beats orig-score gap); got %s", out[1].MessageId)
+	}
+	// Scores of non-first picks must be the MMR-adjusted values (lower
+	// than orig), not the originals — otherwise downstream shed would
+	// behave as if MMR never ran.
+	for i := 1; i < len(out); i++ {
+		for _, s := range selected {
+			if s.MessageId == out[i].MessageId && float64(out[i].EffectiveScore) >= float64(s.EffectiveScore) {
+				t.Errorf("MMR-adjusted score for %s (%.3f) should be below original (%.3f)",
+					out[i].MessageId, out[i].EffectiveScore, s.EffectiveScore)
+			}
+		}
+	}
+}
+
+// TestApplyMMR_NoOracleError verifies ApplyMMR fails loud rather than
+// silently pass-through when the oracle isn't wired — an oracle-less
+// engine running MMR is a configuration bug, not an acceptable
+// degradation mode.
+func TestApplyMMR_NoOracleError(t *testing.T) {
+	e := NewEngine(DefaultConfig(), newMockClassifier())
+	// No SetChunkOracle call.
+	_, err := e.ApplyMMR(context.Background(), []*pb.SelectedMessage{
+		{MessageId: "a", EffectiveScore: 0.5},
+		{MessageId: "b", EffectiveScore: 0.4},
+	}, 0.7)
+	if err == nil {
+		t.Fatal("expected ApplyMMR error without oracle wired")
+	}
+}
+
+// TestApplyMMR_LambdaExtremesNoOp verifies that λ at the boundary
+// values (0, 1) is treated as a no-op pass-through. Callers should
+// un-wire the diversity penalty explicitly rather than pay the cost
+// of computing "λ·x + 0" or "0 + (1-λ)·diversity" — those extremes
+// collapse to the non-MMR paths the caller already has.
+func TestApplyMMR_LambdaExtremesNoOp(t *testing.T) {
+	e := NewEngine(DefaultConfig(), newMockClassifier())
+	e.SetChunkOracle(newVectorOracle())
+	selected := []*pb.SelectedMessage{
+		{MessageId: "a", EffectiveScore: 0.9},
+		{MessageId: "b", EffectiveScore: 0.8},
+	}
+	for _, lambda := range []float64{0.0, 1.0} {
+		out, err := e.ApplyMMR(context.Background(), selected, lambda)
+		if err != nil {
+			t.Fatalf("lambda=%.1f: unexpected error: %v", lambda, err)
+		}
+		if len(out) != 2 || out[0].MessageId != "a" || out[1].MessageId != "b" {
+			t.Errorf("lambda=%.1f: expected pass-through, got %v", lambda, out)
+		}
+		if out[0].EffectiveScore != 0.9 || out[1].EffectiveScore != 0.8 {
+			t.Errorf("lambda=%.1f: scores must not be rewritten on pass-through", lambda)
+		}
+	}
+}
+
+// --- Composite NLI fusion (Phase B.3) ---
+
+type mockEntailer struct {
+	scores map[string]float64 // keyed by candidate text
+	calls  int
+	err    error
+}
+
+func (m *mockEntailer) Entail(_ context.Context, _ string, hypotheses []string) ([]float64, error) {
+	m.calls++
+	if m.err != nil {
+		return nil, m.err
+	}
+	out := make([]float64, len(hypotheses))
+	for i, h := range hypotheses {
+		out[i] = m.scores[h]
+	}
+	return out, nil
+}
+
+// TestOnMessage_NLIFusion verifies that when an entailer is wired,
+// the raw reranker score is fused with the NLI score before becoming
+// the edge score. Under α=0.5 with reranker=0.8 and NLI=0.4, the
+// fused value is 0.6 — neither the raw rerank nor the raw NLI.
+func TestOnMessage_NLIFusion(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ZScoreThreshold = 0
+	cfg.MinBatchStdDev = 0
+	cfg.NLIFusionWeight = 0.5
+	cfg.EdgeThreshold = 0.0 // let every edge form so we can inspect scores
+
+	mc := newMockClassifier()
+	// Rerank puts "prior" at 0.8 against query "q".
+	mc.SetScore("prior", "q", 0.8)
+
+	me := &mockEntailer{scores: map[string]float64{"prior": 0.4}}
+
+	o := newMockChunkOracle()
+	e := NewEngine(cfg, mc)
+	e.SetChunkOracle(o)
+	e.SetEntailer(me)
+
+	prior := addMsg(o, "m0", 0, "t1", "prior")
+	q := addMsg(o, "q", 1, "t1", "q")
+
+	edges, err := e.OnMessage(context.Background(), q, []*pb.Message{prior})
+	if err != nil {
+		t.Fatalf("OnMessage error: %v", err)
+	}
+	if me.calls != 1 {
+		t.Errorf("expected 1 Entail call, got %d", me.calls)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	// FuseScore combines CE score with temporal proximity, so we
+	// only verify the CE field itself — that's the fused component.
+	// α=0.5: 0.5*0.8 + 0.5*0.4 = 0.6.
+	wantCE := 0.6
+	got := float64(edges[0].CrossEncoderScore)
+	if diff := got - wantCE; diff < -1e-6 || diff > 1e-6 {
+		t.Errorf("fused reranker+NLI CE score: got %.4f want %.4f (α=0.5, rerank=0.8, nli=0.4)",
+			got, wantCE)
+	}
+}
+
+// TestOnMessage_NLIFailurePropagates — when an entailer IS wired but
+// its call fails, the whole OnMessage round aborts per the classifier-
+// fail-loud policy. A silent skip would leave the composite pipeline
+// running one-legged without the operator knowing.
+func TestOnMessage_NLIFailurePropagates(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ZScoreThreshold = 0
+	cfg.MinBatchStdDev = 0
+	cfg.NLIFusionWeight = 0.5
+
+	mc := newMockClassifier()
+	mc.SetScore("prior", "q", 0.8)
+
+	me := &mockEntailer{err: errors.New("predict server down")}
+
+	o := newMockChunkOracle()
+	e := NewEngine(cfg, mc)
+	e.SetChunkOracle(o)
+	e.SetEntailer(me)
+
+	prior := addMsg(o, "m0", 0, "t1", "prior")
+	q := addMsg(o, "q", 1, "t1", "q")
+
+	_, err := e.OnMessage(context.Background(), q, []*pb.Message{prior})
+	if err == nil {
+		t.Fatal("expected NLI failure to propagate, got nil error")
+	}
+	if !errors.Is(err, ErrClassifierFailed) {
+		t.Errorf("expected ErrClassifierFailed wrap, got %v", err)
+	}
+}
+
+// TestOnMessage_NLISkippedWhenUnwired — when no entailer is wired,
+// OnMessage behaves exactly like the pre-composite path: raw rerank
+// scores flow through without any fusion, regardless of
+// NLIFusionWeight's value.
+func TestOnMessage_NLISkippedWhenUnwired(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.ZScoreThreshold = 0
+	cfg.MinBatchStdDev = 0
+	cfg.NLIFusionWeight = 0.5 // set but no entailer
+	cfg.EdgeThreshold = 0.0
+
+	mc := newMockClassifier()
+	mc.SetScore("prior", "q", 0.8)
+
+	o := newMockChunkOracle()
+	e := NewEngine(cfg, mc)
+	e.SetChunkOracle(o)
+	// No SetEntailer call.
+
+	prior := addMsg(o, "m0", 0, "t1", "prior")
+	q := addMsg(o, "q", 1, "t1", "q")
+
+	edges, err := e.OnMessage(context.Background(), q, []*pb.Message{prior})
+	if err != nil {
+		t.Fatalf("OnMessage error: %v", err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("expected 1 edge, got %d", len(edges))
+	}
+	// No fusion → CE score equals the raw rerank output.
+	if diff := float64(edges[0].CrossEncoderScore) - 0.8; diff < -1e-6 || diff > 1e-6 {
+		t.Errorf("without entailer, CE score should equal raw rerank 0.8; got %.4f",
+			edges[0].CrossEncoderScore)
+	}
+}
+

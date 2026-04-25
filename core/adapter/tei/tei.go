@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/emontenegr/spidey/core"
@@ -71,6 +72,19 @@ func (p *provider) Classifier(_ string) (core.Classifier, error) {
 		baseURL: p.cfg.BaseURL,
 		client:  p.client,
 	}, nil
+}
+
+// NewEntailer wires an NLI entailer to a TEI /predict endpoint.
+// Returns nil on empty URL so callers can conditionally pass through
+// "not configured" without a nil-check on the struct.
+func NewEntailer(baseURL string) core.Entailer {
+	if baseURL == "" {
+		return nil
+	}
+	return &entailer{
+		baseURL: baseURL,
+		client:  httpc.New(httpc.TimeoutTEI, nil),
+	}
 }
 
 func (p *provider) Close() error { return nil }
@@ -287,4 +301,132 @@ func (c *classifier) rerankOnce(ctx context.Context, query string, slice []strin
 		}
 		return nil
 	})
+}
+
+// --- Entailer (NLI classification) ---
+//
+// Layered on top of the reranker per spec — composite NLI stage. TEI
+// serves sequence-classification models (DeBERTa-MNLI and similar)
+// behind the /predict endpoint. The shape accepts paired inputs
+// (premise, hypothesis) and returns per-class scores; we extract the
+// "entailment" class probability and return it as the entailment
+// signal per (premise, hypothesis) pair.
+//
+// Model-agnostic class-name matching: MNLI-trained models commonly
+// label classes "entailment" / "neutral" / "contradiction" or the
+// uppercase variants. We match by name rather than index so a model
+// with classes in a different order still works. Missing the label
+// returns 0 — treating "no entailment evidence" as zero rather than
+// falling back to a synthetic score that would silently bias fusion.
+
+type entailer struct {
+	baseURL string
+	client  *httpc.Client
+}
+
+type predictRequest struct {
+	Inputs    [][]string `json:"inputs"`    // pairs of (premise, hypothesis)
+	Truncate  bool       `json:"truncate"`
+	RawScores bool       `json:"raw_scores"`
+}
+
+type predictHit struct {
+	Label string  `json:"label"`
+	Score float64 `json:"score"`
+}
+
+// predictBatchSize caps pairs per /predict call. TEI's default
+// max_client_batch_size is 32; batching mirrors the reranker path so
+// large candidate lists don't exceed the server-side limit.
+const predictBatchSize = 32
+
+// Entail calls TEI's /predict for each (premise, hypothesis) pair and
+// returns the entailment-class score aligned to the input order of
+// hypotheses. Empty hypotheses returns an empty slice without a
+// network call.
+func (en *entailer) Entail(ctx context.Context, premise string, hypotheses []string) ([]float64, error) {
+	if len(hypotheses) == 0 {
+		return nil, nil
+	}
+	if premise == "" {
+		// NLI requires a non-empty premise; without one, fusion can't
+		// contribute. Zero-out matches the reranker's empty-query
+		// policy for shape parity.
+		return make([]float64, len(hypotheses)), nil
+	}
+	scores := make([]float64, len(hypotheses))
+	for offset := 0; offset < len(hypotheses); offset += predictBatchSize {
+		end := offset + predictBatchSize
+		if end > len(hypotheses) {
+			end = len(hypotheses)
+		}
+		slice := hypotheses[offset:end]
+		if err := en.entailOnce(ctx, premise, slice, scores[offset:end]); err != nil {
+			return nil, err
+		}
+	}
+	return scores, nil
+}
+
+func (en *entailer) entailOnce(ctx context.Context, premise string, slice []string, out []float64) error {
+	pairs := make([][]string, len(slice))
+	for i, h := range slice {
+		pairs[i] = []string{premise, h}
+	}
+	body, err := json.Marshal(predictRequest{
+		Inputs:    pairs,
+		Truncate:  true,
+		RawScores: false,
+	})
+	if err != nil {
+		return err
+	}
+	return resilience.Do(ctx, teiRetryPolicy(), logRetryEvent("tei predict"), func(ctx context.Context) error {
+		httpReq, err := http.NewRequest("POST", en.baseURL+"/predict", bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		respBody, status, err := en.client.DoJSON(ctx, httpReq)
+		if err != nil {
+			return err
+		}
+		if status != http.StatusOK {
+			return fmt.Errorf("%w: tei returned %d: %s", core.ErrProviderUnavailable, status, respBody)
+		}
+		// TEI returns [][]predictHit for batched predict — one hit
+		// list per input pair, each list carrying one entry per
+		// class. Single-pair responses can also come back as
+		// []predictHit; the decoder handles both shapes.
+		var batch [][]predictHit
+		if err := json.Unmarshal(respBody, &batch); err != nil {
+			var single []predictHit
+			if err2 := json.Unmarshal(respBody, &single); err2 != nil {
+				return err
+			}
+			batch = [][]predictHit{single}
+		}
+		for i := range slice {
+			if i >= len(batch) {
+				break
+			}
+			out[i] = entailmentScore(batch[i])
+		}
+		return nil
+	})
+}
+
+// entailmentScore picks the entailment-class score from a predict
+// response. Tolerant to label case and to models that label the
+// class "ENTAILMENT" / "entailment" / "entail". Returns 0 when no
+// matching class is present.
+func entailmentScore(hits []predictHit) float64 {
+	for _, h := range hits {
+		lbl := strings.ToLower(h.Label)
+		if lbl == "entailment" || lbl == "entail" {
+			return h.Score
+		}
+	}
+	return 0
 }

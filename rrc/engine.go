@@ -31,6 +31,7 @@ import (
 // Messages are immutable → cached scores never become stale.
 type Engine struct {
 	classifier Classifier
+	entailer   Entailer    // optional — composite NLI stage layered on top of classifier
 	dag        *DAG
 	scores     *ScoreCache
 	cfg        EngineConfig
@@ -79,6 +80,19 @@ func NewEngine(cfg EngineConfig, classifier Classifier) *Engine {
 
 // SetClassifier replaces the classifier. Caller must hold the engine lock.
 func (e *Engine) SetClassifier(c Classifier) { e.classifier = c }
+
+// SetEntailer wires the optional NLI stage. Passing nil disables it;
+// OnMessage then uses reranker-only scoring (today's behavior). When
+// set, OnMessage fuses the NLI entailment probability into each
+// rerank-scored candidate via the NLIFusionWeight α:
+//
+//	fused_raw = α · bge_rerank + (1-α) · nli_entail
+//
+// The fused value replaces the raw reranker score going into the
+// score cache and edge-formation gates, so downstream everything
+// (edge threshold, z-score gate, min-stddev meta-gate) sees the
+// composite signal. Caller must hold the engine lock.
+func (e *Engine) SetEntailer(en Entailer) { e.entailer = en }
 
 // SetChunkOracle wires the chunk+vector provider. Passing nil
 // disables chunked scoring — OnMessage falls back to treating each
@@ -269,6 +283,34 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 			scores, rerr := e.classifier.Rerank(ctx, nc.Text, candidates)
 			if rerr != nil {
 				return nil, fmt.Errorf("%w: %v", ErrClassifierFailed, rerr)
+			}
+			// Composite NLI stage — fuse entailment on the same
+			// top-K the reranker just scored. Guard: only when
+			// entailer is wired AND NLIFusionWeight is in (0,1).
+			// At the extremes (0 or 1), the fusion degenerates to
+			// NLI-only or bge-only respectively, which callers
+			// should express by un-wiring the entailer rather than
+			// paying the NLI round-trip for a no-op fusion.
+			//
+			// Failure propagates as ErrClassifierFailed, same as a
+			// reranker failure — when the user wires an entailer
+			// they've chosen to make it part of the scoring
+			// substrate, and silent fusion-skipped-for-this-round
+			// would leave the caller unaware that their composite
+			// pipeline is running one-legged.
+			if e.entailer != nil && e.cfg.NLIFusionWeight > 0 && e.cfg.NLIFusionWeight < 1 && len(candidates) > 0 {
+				nliScores, nerr := e.entailer.Entail(ctx, nc.Text, candidates)
+				if nerr != nil {
+					return nil, fmt.Errorf("%w: entailer: %v", ErrClassifierFailed, nerr)
+				}
+				if len(nliScores) != len(scores) {
+					return nil, fmt.Errorf("%w: entailer returned %d scores for %d candidates",
+						ErrClassifierFailed, len(nliScores), len(scores))
+				}
+				alpha := e.cfg.NLIFusionWeight
+				for i := range scores {
+					scores[i] = alpha*scores[i] + (1-alpha)*nliScores[i]
+				}
 			}
 			// Cross-thread visibility: count how many of the reranked
 			// candidates came from threads other than the current one,
@@ -521,6 +563,154 @@ func (e *Engine) Select(promptID string, scope pb.SelectionScope, threadID strin
 	}
 
 	return result, nil
+}
+
+// ApplyMMR reranks a Selected slice with Maximal Marginal Relevance
+// (Carbonell & Goldstein 1998). The highest-score candidate keeps its
+// slot; each subsequent candidate's effective score is replaced with
+//
+//	effective(C) = λ · origScore(C) - (1-λ) · max_sim(C, kept)
+//
+// where sim is cosine similarity between the candidates' representative
+// vectors (mean-pool over chunks). Greedy pick-max-effective, repeat.
+//
+// Purpose per the design plan: collapse near-duplicate entries in the
+// Selected pool — e.g. nine variations of a model's process-thinking
+// (*"let me check what chapter we're on"*) that all score similarly
+// under similarity-only rerankers. After MMR, the first keeps its
+// score, the other eight take a penalty proportional to their
+// redundancy with the kept set. Downstream the rrcllm shed loop uses
+// the updated effective score, so under budget pressure the redundant
+// copies fall first and leave room for the distinct content priors
+// they were crowding out.
+//
+// No hard K cap. Hyperselection is empirical; this function reorders
+// and rescores but doesn't drop anything — the budget shed does the
+// actual shrinking, and does it principled-ly based on the MMR-
+// adjusted scores.
+//
+// Requires the ChunkOracle to be wired (same path as OnMessage's
+// vector prefilter); without it, returns selected unchanged with an
+// error. λ outside [0,1] or zero-length selected is a no-op.
+func (e *Engine) ApplyMMR(ctx context.Context, selected []*pb.SelectedMessage, lambda float64) ([]*pb.SelectedMessage, error) {
+	if len(selected) <= 1 || lambda <= 0 || lambda >= 1 {
+		// lambda=1 is pure-relevance (today's behavior); lambda=0 is
+		// pure-diversity (wrong for a relevance task). Either extreme
+		// is a pass-through.
+		return selected, nil
+	}
+	if e.oracle == nil {
+		return selected, fmt.Errorf("ApplyMMR: no chunk oracle configured")
+	}
+
+	ids := make([]string, 0, len(selected))
+	for _, s := range selected {
+		ids = append(ids, s.MessageId)
+	}
+	chunkMap, err := e.oracle.ChunksForMessages(ctx, ids)
+	if err != nil {
+		return selected, fmt.Errorf("ApplyMMR: load chunks: %w", err)
+	}
+
+	// Representative vector per candidate = mean-pool over its chunks'
+	// vectors. Chunks without a cached vector are fetched live via
+	// EnsureVector — MMR needs every candidate to have a comparable
+	// vector, and a missing vector would silently exclude that
+	// candidate from the diversity penalty (it'd compare as zero-
+	// similarity against everything, inflating its effective score).
+	repVecs := make(map[string][]float32, len(ids))
+	for _, id := range ids {
+		chunks := chunkMap[id]
+		if len(chunks) == 0 {
+			continue
+		}
+		var sumVec []float32
+		var n int
+		for i := range chunks {
+			v := chunks[i].Vector
+			if v == nil {
+				live, verr := e.oracle.EnsureVector(ctx, chunks[i])
+				if verr != nil || live == nil {
+					continue
+				}
+				v = live
+			}
+			if sumVec == nil {
+				sumVec = make([]float32, len(v))
+			}
+			if len(v) != len(sumVec) {
+				continue
+			}
+			for k, x := range v {
+				sumVec[k] += x
+			}
+			n++
+		}
+		if n > 0 {
+			for k := range sumVec {
+				sumVec[k] /= float32(n)
+			}
+			repVecs[id] = sumVec
+		}
+	}
+
+	// Greedy MMR. Track original scores so the tradeoff stays stable
+	// (each pick re-reads origScore; the EffectiveScore we write back
+	// is the MMR-adjusted value).
+	orig := make(map[string]float64, len(selected))
+	for _, s := range selected {
+		orig[s.MessageId] = float64(s.EffectiveScore)
+	}
+
+	// Copy each SelectedMessage before rewriting EffectiveScore so
+	// callers whose original slice escaped elsewhere (logging,
+	// introspection publish, audit trails) don't observe a surprise
+	// mutation. Pointer identity within out is stable for the MMR pass
+	// itself; callers get fresh structs with adjusted scores.
+	remaining := make([]*pb.SelectedMessage, len(selected))
+	for i, s := range selected {
+		cp := *s
+		remaining[i] = &cp
+	}
+	sort.SliceStable(remaining, func(i, j int) bool {
+		return orig[remaining[i].MessageId] > orig[remaining[j].MessageId]
+	})
+
+	out := make([]*pb.SelectedMessage, 0, len(selected))
+	out = append(out, remaining[0])
+	remaining = remaining[1:]
+
+	for len(remaining) > 0 {
+		bestIdx := -1
+		bestScore := math.Inf(-1)
+		for i, cand := range remaining {
+			candVec := repVecs[cand.MessageId]
+			var maxSim float64
+			for _, kept := range out {
+				if candVec == nil {
+					continue
+				}
+				keptVec := repVecs[kept.MessageId]
+				if keptVec == nil {
+					continue
+				}
+				s := cosine(candVec, keptVec)
+				if s > maxSim {
+					maxSim = s
+				}
+			}
+			effective := lambda*orig[cand.MessageId] - (1.0-lambda)*maxSim
+			if effective > bestScore {
+				bestScore = effective
+				bestIdx = i
+			}
+		}
+		pick := remaining[bestIdx]
+		pick.EffectiveScore = float32(bestScore)
+		out = append(out, pick)
+		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
+	}
+	return out, nil
 }
 
 // Fork creates an ephemeral engine for a forked thread. Inherits a

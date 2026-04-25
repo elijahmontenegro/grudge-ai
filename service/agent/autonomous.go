@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -90,12 +89,9 @@ func (r *Runner) RunAutonomous(ctx context.Context, prompt string, duration time
 	r.autoState = newAutonomousState()
 	r.mu.Unlock()
 
-	if _, err := r.SendMessage(ctx, prompt, pb.SelectionScope_SELECTION_SCOPE_THREAD, attachments...); err != nil && !errors.Is(err, ErrNoResponse) {
-		// Kickoff error (genuine, not ErrNoResponse): if a handler is
-		// wired, pause and surface; otherwise the loop can't start so
-		// return as before. ErrNoResponse on kickoff (empty response
-		// to the kickoff prompt) isn't a failure — loop proceeds to
-		// ticking.
+	if _, err := r.SendMessage(ctx, prompt, pb.SelectionScope_SELECTION_SCOPE_THREAD, attachments...); err != nil {
+		// Kickoff error: if a handler is wired, pause and surface; otherwise
+		// the loop can't start so return as before.
 		if r.OnAutonomousError != nil {
 			r.OnAutonomousError(err)
 		} else {
@@ -119,22 +115,21 @@ func (r *Runner) RunAutonomous(ctx context.Context, prompt string, duration time
 			return nil
 		default:
 			// Autonomous tick is an empty Event: runner passes
-			// msg=nil to ADK which walks session history. If the
-			// model has nothing to add, ADK yields zero events and
-			// processEvents returns ErrNoResponse.
+			// msg=nil to ADK which walks session history.
 			//
-			// Per spec (MANIFEST.adoc §142): the timer is the only
-			// natural exit. The model is NOT allowed to signal
-			// completion of an autonomous run — a silent tick is a
-			// no-op, not a pause-trigger. The loop ticks through
-			// until the deadline regardless of whether any
-			// individual round produced output.
-			//
-			// Real errors (provider unreachable, classifier offline,
-			// protocol validation failure) still pause via
-			// OnAutonomousError so the operator can intervene.
-			_, err := r.SendMessage(ctx, "", pb.SelectionScope_SELECTION_SCOPE_THREAD)
-			if err != nil && !errors.Is(err, ErrNoResponse) {
+			// Per spec §142 the timer is the only natural exit; the
+			// model is not allowed to signal completion. BUT a turn
+			// where the model returns zero thinking + zero tool_call
+			// + zero content IS a failure (ADK wiring dropped events,
+			// stream parser broke, or the model genuinely refused).
+			// That's distinct from RRC's "zero-return valid" axiom
+			// which is about Selection returning nothing, not about
+			// model output. Surface it via OnAutonomousError — the
+			// loop pauses, the operator reviews, and resumes with a
+			// correction if warranted. The timer still governs the
+			// outer envelope; per-turn failures can still interrupt
+			// for operator visibility.
+			if _, err := r.SendMessage(ctx, "", pb.SelectionScope_SELECTION_SCOPE_THREAD); err != nil {
 				if r.OnAutonomousError != nil {
 					r.OnAutonomousError(err)
 					continue

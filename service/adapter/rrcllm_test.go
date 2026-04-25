@@ -2,7 +2,19 @@ package adapter
 
 import (
 	"testing"
+
+	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	"github.com/emontenegr/spidey/rrc"
 )
+
+func init() {
+	// tiktoken must be initialized before EstimateTokens is called in
+	// these tests. main() does this at boot; tests have to do it
+	// themselves.
+	if err := rrc.InitTokenEncoder(); err != nil {
+		panic("rrcllm_test: InitTokenEncoder: " + err.Error())
+	}
+}
 
 // --- isContextOverflow pattern coverage ---
 //
@@ -81,3 +93,146 @@ type stringErr string
 func (s stringErr) Error() string { return string(s) }
 
 func errFromString(s string) error { return stringErr(s) }
+
+// --- estimateToolSchemaTokens (Phase A.2) ---
+//
+// The budget estimate must include tool-schema overhead — 22 function
+// declarations at ~300 bytes each is a non-trivial slice of the
+// per-request payload. These tests lock in the serialization shape
+// (matches the Ollama adapter's emission) and guard against drift.
+
+// TestEstimateToolSchemaTokens_Empty returns zero on an empty slice
+// without any tiktoken overhead — a round with no tools should carry
+// no tool-side budget line item at all.
+func TestEstimateToolSchemaTokens_Empty(t *testing.T) {
+	if got := estimateToolSchemaTokens(nil); got != 0 {
+		t.Errorf("empty tools: got %d, want 0", got)
+	}
+	if got := estimateToolSchemaTokens([]*pb.ToolDeclaration{}); got != 0 {
+		t.Errorf("empty slice tools: got %d, want 0", got)
+	}
+}
+
+// TestEstimateToolSchemaTokens_MatchesEncode verifies the estimate is
+// the tiktoken count of the serialized JSON for each tool. Precise
+// equality against a hand-computed token count is provider-tokenizer-
+// specific; instead the test asserts the estimate is strictly
+// positive and larger for a larger description — confirming each
+// tool contributes and the estimate tracks serialized size.
+func TestEstimateToolSchemaTokens_MatchesEncode(t *testing.T) {
+	short := []*pb.ToolDeclaration{{
+		Name:           "Read",
+		Description:    "Read a file",
+		ParametersJson: `{"type":"object","properties":{"path":{"type":"string"}}}`,
+	}}
+	long := []*pb.ToolDeclaration{{
+		Name: "Read",
+		Description: "Read a file from the filesystem. Accepts an absolute " +
+			"path and returns its contents. Handles UTF-8 and binary files. " +
+			"Errors if the path is outside the workspace or does not exist.",
+		ParametersJson: `{"type":"object","properties":{"path":{"type":"string"}}}`,
+	}}
+
+	shortTokens := estimateToolSchemaTokens(short)
+	longTokens := estimateToolSchemaTokens(long)
+
+	if shortTokens <= 0 {
+		t.Errorf("short estimate must be positive; got %d", shortTokens)
+	}
+	if longTokens <= shortTokens {
+		t.Errorf("longer description should yield higher estimate; got short=%d long=%d",
+			shortTokens, longTokens)
+	}
+}
+
+// TestEstimateToolSchemaTokens_AccumulatesAcrossTools verifies each
+// tool contributes to the total — i.e. the loop doesn't short-circuit
+// or accidentally overwrite the running sum.
+func TestEstimateToolSchemaTokens_AccumulatesAcrossTools(t *testing.T) {
+	one := []*pb.ToolDeclaration{{
+		Name:           "A",
+		Description:    "first",
+		ParametersJson: `{"type":"object"}`,
+	}}
+	two := []*pb.ToolDeclaration{
+		one[0],
+		{Name: "B", Description: "second", ParametersJson: `{"type":"object"}`},
+	}
+	t1 := estimateToolSchemaTokens(one)
+	t2 := estimateToolSchemaTokens(two)
+	if t2 <= t1 {
+		t.Errorf("two-tool estimate must exceed one-tool; got one=%d two=%d", t1, t2)
+	}
+}
+
+// --- hasTextBlock (Phase B.2 dynamical Radius helper) ---
+
+func TestHasTextBlock_TextOnly(t *testing.T) {
+	blocks := []*pb.ContentBlock{
+		{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "hello"}}},
+	}
+	if !hasTextBlock(blocks) {
+		t.Error("expected hasTextBlock=true for plain text content")
+	}
+}
+
+func TestHasTextBlock_EmptyText(t *testing.T) {
+	// An empty-text block doesn't count — dynamical Radius needs
+	// actual semantic content to anchor on.
+	blocks := []*pb.ContentBlock{
+		{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: ""}}},
+	}
+	if hasTextBlock(blocks) {
+		t.Error("empty text block should not qualify as semantic content")
+	}
+}
+
+// TestHasTextBlock_ToolOnlyMessage — a message composed solely of a
+// tool_call or tool_result is NOT a conversational anchor. This is
+// the whole point of dynamical Radius: a thread tail deep in a tool
+// loop has messages like these as its tail, and they should NOT
+// satisfy the "guarantee a user-text / assistant-text anchor" rule.
+func TestHasTextBlock_ToolOnlyMessage(t *testing.T) {
+	toolCall := []*pb.ContentBlock{
+		{Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallContent{
+			Id: "t1", Name: "Read", Arguments: `{"path":"x"}`,
+		}}},
+	}
+	if hasTextBlock(toolCall) {
+		t.Error("tool_call-only content must not qualify as an anchor")
+	}
+	toolResult := []*pb.ContentBlock{
+		{Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultContent{
+			ToolCallId: "t1", Content: "file contents here",
+		}}},
+	}
+	if hasTextBlock(toolResult) {
+		t.Error("tool_result-only content must not qualify as an anchor")
+	}
+}
+
+// TestHasTextBlock_ThinkingOnly — thinking-only messages (internal
+// model monologue with no externalized reply) must not count. If
+// they did, a nine-thinking tool loop would spuriously satisfy the
+// "last assistant anchor" requirement and hide the real last reply.
+func TestHasTextBlock_ThinkingOnly(t *testing.T) {
+	blocks := []*pb.ContentBlock{
+		{Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: "deliberating..."}}},
+	}
+	if hasTextBlock(blocks) {
+		t.Error("thinking-only content must not qualify as a conversational anchor")
+	}
+}
+
+// TestHasTextBlock_MixedPrefersText — a message with both thinking
+// AND an externalized text reply DOES qualify. The externalized
+// reply is the conversational anchor; the thinking sits alongside it.
+func TestHasTextBlock_MixedPrefersText(t *testing.T) {
+	blocks := []*pb.ContentBlock{
+		{Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: "deliberating..."}}},
+		{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "here's my reply"}}},
+	}
+	if !hasTextBlock(blocks) {
+		t.Error("thinking+text content should qualify via the text block")
+	}
+}
