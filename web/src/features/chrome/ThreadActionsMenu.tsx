@@ -1,5 +1,5 @@
 import { useCallback, type RefObject } from 'react'
-import { IconArchive, IconEdit, IconTrash } from '@/components/atoms/icons'
+import { IconArchive, IconEdit, IconTrash } from '@/primitives/icons'
 import type { Thread } from '@/domain/types'
 import { usePopover } from '@/primitives/usePopover'
 

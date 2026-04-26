@@ -5,7 +5,7 @@ import {
   type AutonomousDuration,
   type ComposerMode,
   type ComposerScope,
-} from '@/components/organisms/Composer'
+} from '@/features/composer/Composer'
 import { useMe, useGreeting } from '@/hooks/useMe'
 
 interface HomeProps {

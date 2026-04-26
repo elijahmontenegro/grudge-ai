@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { IS_MAC } from '@/components/atoms/platform'
-import { IconX } from '@/components/atoms/icons'
+import { IS_MAC } from '@/primitives/platform'
+import { IconX } from '@/primitives/icons'
 import type { PendingQuestion } from '@/hooks/useToolExecutions'
 
 const OTHER_VALUE = '__other__'

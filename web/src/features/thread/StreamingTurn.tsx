@@ -1,7 +1,7 @@
 import type { StreamState } from '@/hooks/useSendAndStream'
 import type { LiveSubagent } from '@/hooks/useSubagentProgress'
 import type { LiveToolCall } from '@/hooks/useToolExecutions'
-import { ToolCall } from '@/components/molecules/ToolCall'
+import { ToolCall } from '@/features/thread/ToolCall'
 
 interface StreamingTurnProps {
   stream: StreamState

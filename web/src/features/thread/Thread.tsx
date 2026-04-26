@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
-import { ThreadView } from '@/components/organisms/ThreadView'
+import { ThreadView } from '@/features/thread/ThreadView'
 import type {
   AutonomousDuration,
   ComposerMode,
   ComposerScope,
-} from '@/components/organisms/Composer'
+} from '@/features/composer/Composer'
 import { useThreadMessages } from '@/hooks/useThreadMessages'
 import { useThreads } from '@/hooks/useThreads'
 import { useSendAndStream } from '@/hooks/useSendAndStream'

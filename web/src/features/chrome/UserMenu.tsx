@@ -1,5 +1,5 @@
 import { useCallback, type RefObject } from 'react'
-import { IconSun, IconMoon, IconSettings, IconLayers } from '@/components/atoms/icons'
+import { IconSun, IconMoon, IconSettings, IconLayers } from '@/primitives/icons'
 import { useMe } from '@/hooks/useMe'
 import { usePopover } from '@/primitives/usePopover'
 

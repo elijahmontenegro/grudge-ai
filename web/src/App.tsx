@@ -1,16 +1,16 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router'
-import { ThreadSidebar } from '@/components/organisms/ThreadSidebar'
-import { ArtifactsPanel } from '@/components/organisms/ArtifactsPanel'
-import { CommandPalette } from '@/components/organisms/CommandPalette'
+import { ThreadSidebar } from '@/features/chrome/ThreadSidebar'
+import { ArtifactsPanel } from '@/features/artifacts/ArtifactsPanel'
+import { CommandPalette } from '@/features/chrome/CommandPalette'
 import type {
   AutonomousDuration,
   ComposerMode,
   ComposerScope,
-} from '@/components/organisms/Composer'
-import { Topbar } from '@/components/molecules/Topbar'
-import { Home } from '@/pages/Home'
-import { ThreadPage } from '@/pages/Thread'
+} from '@/features/composer/Composer'
+import { Topbar } from '@/features/chrome/Topbar'
+import { Home } from '@/features/home/Home'
+import { ThreadPage } from '@/features/thread/Thread'
 import { useThreads } from '@/hooks/useThreads'
 import { useThreadMessages } from '@/hooks/useThreadMessages'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
@@ -21,9 +21,9 @@ import type { Message } from '@/domain/types'
 
 // FirstRun and Settings are config-flow pages — lazy-loaded so they don't
 // weigh on the thread-view initial paint.
-const FirstRun = lazy(() => import('@/pages/FirstRun').then((m) => ({ default: m.FirstRun })))
-const Settings = lazy(() => import('@/pages/Settings').then((m) => ({ default: m.Settings })))
-const Chats = lazy(() => import('@/pages/Chats').then((m) => ({ default: m.Chats })))
+const FirstRun = lazy(() => import('@/features/firstrun/FirstRun').then((m) => ({ default: m.FirstRun })))
+const Settings = lazy(() => import('@/features/settings/Settings').then((m) => ({ default: m.Settings })))
+const Chats = lazy(() => import('@/features/chats/Chats').then((m) => ({ default: m.Chats })))
 
 type Theme = 'light' | 'dark'
 

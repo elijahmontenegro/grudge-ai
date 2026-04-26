@@ -5,13 +5,13 @@ import {
   type AutonomousDuration,
   type ComposerMode,
   type ComposerScope,
-} from './Composer'
+} from '@/features/composer/Composer'
 import { StreamingTurn } from './StreamingTurn'
-import { EmptyThread } from '@/components/molecules/EmptyThread'
-import { Turn } from '@/components/molecules/Turn'
-import { PlanApprovalCard } from '@/components/molecules/PlanApprovalCard'
-import { ToolApprovalSlot } from '@/components/molecules/ToolApprovalSlot'
-import { AnswerStage } from '@/components/organisms/AnswerStage'
+import { EmptyThread } from '@/features/thread/EmptyThread'
+import { Turn } from '@/features/thread/Turn'
+import { PlanApprovalCard } from '@/features/plan/PlanApprovalCard'
+import { ToolApprovalSlot } from '@/features/thread/ToolApprovalSlot'
+import { AnswerStage } from '@/features/thread/AnswerStage'
 import { AgentMode, AgentStatus } from '@/graphql/generated/types'
 import type { PendingQuestion, PendingToolCall } from '@/hooks/useToolExecutions'
 import type { StreamState } from '@/hooks/useSendAndStream'

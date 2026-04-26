@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { IconArrow, IconSearch, IconSettings, IconSkill } from '@/components/atoms/icons'
-import { StateDot } from '@/components/atoms/StateDot'
+import { IconArrow, IconSearch, IconSettings, IconSkill } from '@/primitives/icons'
+import { StateDot } from '@/features/chrome/StateDot'
 import { PALETTE_ITEMS } from '@/data/fixtures'
 import { useSearch, type SearchHit } from '@/hooks/useSearch'
 import { useSkills } from '@/hooks/useSkills'

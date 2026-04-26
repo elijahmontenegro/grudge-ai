@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { ThreadRow } from '@/components/molecules/ThreadRow'
-import { IconSearch, IconX } from '@/components/atoms/icons'
+import { ThreadRow } from '@/features/chrome/ThreadRow'
+import { IconSearch, IconX } from '@/primitives/icons'
 import { useThreads } from '@/hooks/useThreads'
 import { useRecentActivity } from '@/hooks/useRecentActivity'
 import { useThreadMutations } from '@/hooks/useThreadMutations'

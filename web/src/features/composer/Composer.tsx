@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { IconPaperclip, IconPause, IconPlay, IconPlus, IconSpinner, IconStop, IconX } from '@/components/atoms/icons'
-import { IS_MAC } from '@/components/atoms/platform'
+import { IconPaperclip, IconPause, IconPlay, IconPlus, IconSpinner, IconStop, IconX } from '@/primitives/icons'
+import { IS_MAC } from '@/primitives/platform'
 import { AgentStatus } from '@/graphql/generated/types'
 import { formatSize, useAttachments, type AttachmentMeta, type PendingAttachment } from '@/hooks/useAttachments'
 

@@ -8,7 +8,7 @@ import type {
   SendMessageMutationVariables,
 } from '@/graphql/generated/types'
 import { SelectionScope } from '@/graphql/generated/types'
-import type { ComposerScope } from '@/components/organisms/Composer'
+import type { ComposerScope } from '@/features/composer/Composer'
 import type { AttachmentMeta } from './useAttachments'
 
 /** Ordered timeline of what the agent emitted this turn. The agent

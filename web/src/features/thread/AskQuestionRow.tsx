@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { IconChevron } from '@/components/atoms/icons'
+import { IconChevron } from '@/primitives/icons'
 import { parseAskUserQuestionArgs } from '@/hooks/useToolExecutions'
 
 interface AskQuestionRowProps {

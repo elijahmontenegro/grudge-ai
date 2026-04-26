@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { IconChevron, IconPanelRight } from '@/components/atoms/icons'
-import { AsciiDocBody } from '@/components/atoms/AsciiDocBody'
+import { IconChevron, IconPanelRight } from '@/primitives/icons'
+import { AsciiDocBody } from '@/features/artifacts/AsciiDocBody'
 import { aggregateArtifacts } from '@/domain/artifacts'
 import { useLocalStorage } from '@/primitives/useLocalStorage'
 import type { Artifact, ArtifactOp, Message } from '@/domain/types'

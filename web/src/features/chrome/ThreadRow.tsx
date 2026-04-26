@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { IconArchive, IconChevron, IconPin, IconX } from '@/components/atoms/icons'
+import { IconArchive, IconChevron, IconPin, IconX } from '@/primitives/icons'
 import type { Thread } from '@/domain/types'
 
 interface ThreadRowProps {

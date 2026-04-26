@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { IconChevron } from '@/components/atoms/icons'
+import { IconChevron } from '@/primitives/icons'
 
 interface SectionProps {
   label: string

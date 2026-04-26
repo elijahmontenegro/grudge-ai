@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
-import { ThreadConfigPopover } from '@/components/organisms/ThreadConfigPopover'
-import { IconChevron, IconPanelRight } from '@/components/atoms/icons'
-import { ThreadActionsMenu } from '@/components/molecules/ThreadActionsMenu'
+import { ThreadConfigPopover } from '@/features/thread/ThreadConfigPopover'
+import { IconChevron, IconPanelRight } from '@/primitives/icons'
+import { ThreadActionsMenu } from '@/features/chrome/ThreadActionsMenu'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
 import type { Thread } from '@/domain/types'
 

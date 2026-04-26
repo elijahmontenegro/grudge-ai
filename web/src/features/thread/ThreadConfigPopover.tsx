@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation } from '@apollo/client/react'
 import { UPDATE_THREAD } from '@/graphql/operations'
-import { IconPlus, IconSettings, IconX } from '@/components/atoms/icons'
+import { IconPlus, IconSettings, IconX } from '@/primitives/icons'
 import type {
   UpdateThreadMutation,
   UpdateThreadMutationVariables,
