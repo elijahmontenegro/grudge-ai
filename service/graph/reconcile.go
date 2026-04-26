@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/emontenegr/spidey/service/runtime/agentstate"
 	"github.com/emontenegr/spidey/service/storage"
 )
 
@@ -78,7 +79,7 @@ func (r *Resolver) reconcileRow(ctx context.Context, st *storage.AgentState) str
 	}
 
 	// Autonomous + Running: try to auto-resume.
-	remaining, reason := computeRemainingBudget(st)
+	remaining, reason := agentstate.ComputeRemainingBudget(st)
 	if reason != "" {
 		r.resetToIdle(st.ThreadID)
 		return "reset to idle (" + reason + ")"
@@ -146,41 +147,5 @@ func (r *Resolver) resetToIdle(threadID string) {
 	})
 }
 
-// computeRemainingBudget derives how much of the original autonomous
-// budget is still owed. Returns (remaining, "") on success. On
-// failure returns (0, reason) where reason distinguishes missing-
-// metadata from expired-budget from malformed-duration — each is a
-// meaningfully different reason the reconcile can't resume, and
-// collapsing them into one log line loses the signal that helps
-// diagnose why a particular run didn't pick back up after restart.
-//
-// A 5-minute floor applies: if the computed remaining is shorter than
-// the autonomous-start minimum duration, round up. This preserves the
-// "why we run autonomous" — fewer than a handful of minutes is not a
-// meaningful budget for a multi-round reflective loop.
-func computeRemainingBudget(st *storage.AgentState) (time.Duration, string) {
-	if st.DurationLimit == "" {
-		return 0, "no duration_limit in DB row"
-	}
-	if st.StartedAt == nil {
-		return 0, "no started_at in DB row"
-	}
-	total, err := time.ParseDuration(st.DurationLimit)
-	if err != nil {
-		return 0, "unparseable duration_limit=" + st.DurationLimit
-	}
-	if total <= 0 {
-		return 0, "non-positive duration_limit=" + st.DurationLimit
-	}
-	elapsed := time.Since(*st.StartedAt)
-	remaining := total - elapsed
-	if remaining <= 0 {
-		return 0, "budget expired (started " + elapsed.Round(time.Second).String() + " ago, limit " + total.String() + ")"
-	}
-	const minResume = 5 * time.Minute
-	if remaining < minResume {
-		remaining = minResume
-	}
-	return remaining, ""
-}
+// (computeRemainingBudget moved to service/runtime/agentstate.)
 
