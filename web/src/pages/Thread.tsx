@@ -17,7 +17,6 @@ import { useToolExecutions } from '@/hooks/useToolExecutions'
 import { useEditMessage } from '@/hooks/useEditMessage'
 import { useAgentControls } from '@/hooks/useAgentControls'
 import { useCreateThread } from '@/hooks/useCreateThread'
-import { ToolApprovalPrompt } from '@/components/organisms/ToolApprovalPrompt'
 import { AgentMode, AgentStatus } from '@/graphql/generated/types'
 interface ThreadPageProps {
   mode: ComposerMode
@@ -263,64 +262,60 @@ export function ThreadPage({
   const fullThread = { ...thread, corpus: messages }
 
   return (
-    <>
-      <ToolApprovalPrompt
-        pending={approvals.pending}
-        busy={approvals.busy}
-        onApprove={(cid) => void approvals.approve(cid)}
-        onDeny={(cid, r) => void approvals.deny(cid, r)}
-      />
-      <ThreadView
-        thread={fullThread}
-        parentName={parent?.name}
-        streaming={streaming}
-        stream={stream}
-        subagents={subagents}
-        liveTools={liveTools}
-        onSend={async (text, attachments) => {
-          // Commit plan mode at send time if the user selected it. Runner
-          // restart inside enterPlanMode rebuilds the system prompt before
-          // the next SendMessage sees it.
-          if (mode === 'plan' && agent.mode !== AgentMode.Plan) {
-            await plan.enterPlan(id)
-          }
-          void send(text, attachments)
-        }}
-        onStartAutonomous={(text, d, attachments) => {
-          void autonomous.start(id, text, d, attachments)
-        }}
-        scope={scope}
-        setScope={setScope}
-        mode={mode}
-        setMode={setMode}
-        duration={duration}
-        setDuration={setDuration}
-        focusMessageId={focusMessageId}
-        onEditTurn={onEditTurn}
-        editInFlight={editMsg.loading}
-        artifactsCollapsed={artifactsCollapsed}
-        onToggleArtifacts={onToggleArtifacts}
-        livePlanContent={agent.planContent}
-        agentMode={agent.mode}
-        planApproving={plan.approving}
-        planRejecting={plan.rejecting}
-        planEditing={plan.editing}
-        onApprovePlan={(auto) => void plan.approvePlan(id, auto)}
-        onRejectPlan={(feedback) => void plan.rejectPlan(id, feedback)}
-        onEditPlan={(content) => plan.editPlan(id, content)}
-        agentStatus={agent.status}
-        agentIsAutonomous={agent.isAutonomous}
-        agentElapsed={agent.elapsedTime}
-        agentRetry={agent.retry}
-        onPauseAgent={() => void agentControls.pause(id)}
-        onResumeAgent={(correction) => void agentControls.resume(id, correction)}
-        onStopAgent={() => void agentControls.stop(id)}
-        agentControlsPending={agentControls.pending}
-        pendingQuestions={approvals.questions}
-        onAnswerQuestion={(cid, a) => approvals.answer(cid, a)}
-        onDismissQuestion={(cid) => approvals.dismissQuestion(cid)}
-        questionsBusy={approvals.busy}
-      />
-    </>
+    <ThreadView
+      thread={fullThread}
+      parentName={parent?.name}
+      streaming={streaming}
+      stream={stream}
+      subagents={subagents}
+      liveTools={liveTools}
+      onSend={async (text, attachments) => {
+        // Commit plan mode at send time if the user selected it. Runner
+        // restart inside enterPlanMode rebuilds the system prompt before
+        // the next SendMessage sees it.
+        if (mode === 'plan' && agent.mode !== AgentMode.Plan) {
+          await plan.enterPlan(id)
+        }
+        void send(text, attachments)
+      }}
+      onStartAutonomous={(text, d, attachments) => {
+        void autonomous.start(id, text, d, attachments)
+      }}
+      scope={scope}
+      setScope={setScope}
+      mode={mode}
+      setMode={setMode}
+      duration={duration}
+      setDuration={setDuration}
+      focusMessageId={focusMessageId}
+      onEditTurn={onEditTurn}
+      editInFlight={editMsg.loading}
+      artifactsCollapsed={artifactsCollapsed}
+      onToggleArtifacts={onToggleArtifacts}
+      livePlanContent={agent.planContent}
+      agentMode={agent.mode}
+      planApproving={plan.approving}
+      planRejecting={plan.rejecting}
+      planEditing={plan.editing}
+      onApprovePlan={(auto) => void plan.approvePlan(id, auto)}
+      onRejectPlan={(feedback) => void plan.rejectPlan(id, feedback)}
+      onEditPlan={(content) => plan.editPlan(id, content)}
+      agentStatus={agent.status}
+      agentIsAutonomous={agent.isAutonomous}
+      agentElapsed={agent.elapsedTime}
+      agentRetry={agent.retry}
+      onPauseAgent={() => void agentControls.pause(id)}
+      onResumeAgent={(correction) => void agentControls.resume(id, correction)}
+      onStopAgent={() => void agentControls.stop(id)}
+      agentControlsPending={agentControls.pending}
+      pendingQuestions={approvals.questions}
+      onAnswerQuestion={(cid, a) => approvals.answer(cid, a)}
+      onDismissQuestion={(cid) => approvals.dismissQuestion(cid)}
+      questionsBusy={approvals.busy}
+      pendingApprovals={approvals.pending}
+      onApproveTool={(cid) => void approvals.approve(cid)}
+      onDenyTool={(cid, r) => void approvals.deny(cid, r)}
+      approvalsBusy={approvals.busy}
+    />
   )
 }

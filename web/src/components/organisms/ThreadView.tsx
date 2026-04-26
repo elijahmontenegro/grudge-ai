@@ -10,9 +10,10 @@ import { StreamingTurn } from './StreamingTurn'
 import { EmptyThread } from '@/components/molecules/EmptyThread'
 import { Turn } from '@/components/molecules/Turn'
 import { PlanApprovalCard } from '@/components/molecules/PlanApprovalCard'
+import { ToolApprovalSlot } from '@/components/molecules/ToolApprovalSlot'
 import { AnswerStage } from '@/components/organisms/AnswerStage'
 import { AgentMode, AgentStatus } from '@/graphql/generated/types'
-import type { PendingQuestion } from '@/hooks/useToolExecutions'
+import type { PendingQuestion, PendingToolCall } from '@/hooks/useToolExecutions'
 import type { StreamState } from '@/hooks/useSendAndStream'
 import type { LiveSubagent } from '@/hooks/useSubagentProgress'
 import type { LiveToolCall } from '@/hooks/useToolExecutions'
@@ -80,6 +81,14 @@ interface ThreadViewProps {
   ) => Promise<void>
   onDismissQuestion?: (callId: string) => void
   questionsBusy?: boolean
+  // Tool-approval gates — per-call entries waiting on user approve/deny.
+  // Rendered inside the matching tool's slot via renderToolExtras (see
+  // CLAUDE.md: pre-execution permissions belong with the call they
+  // gate, not floating).
+  pendingApprovals?: PendingToolCall[]
+  onApproveTool?: (callId: string) => void
+  onDenyTool?: (callId: string, reason?: string) => void
+  approvalsBusy?: boolean
 }
 
 interface TurnData {
@@ -131,6 +140,10 @@ export function ThreadView({
   onAnswerQuestion,
   onDismissQuestion,
   questionsBusy,
+  pendingApprovals,
+  onApproveTool,
+  onDenyTool,
+  approvalsBusy,
 }: ThreadViewProps) {
   // `thread.corpus || []` would produce a new array on every render and
   // re-trigger every downstream useMemo. Stabilize with its own memo.
@@ -263,6 +276,12 @@ export function ThreadView({
     return m
   }, [pendingQuestions])
 
+  const pendingApprovalByCallId = useMemo(() => {
+    const m = new Map<string, PendingToolCall>()
+    for (const p of pendingApprovals ?? []) m.set(p.callId, p)
+    return m
+  }, [pendingApprovals])
+
   const latestExitPlanCallId = useMemo(() => {
     // Walk newest-to-oldest; the freshest ExitPlanMode owns the approval card.
     for (let i = corpus.length - 1; i >= 0; i--) {
@@ -344,6 +363,20 @@ export function ThreadView({
             onViewPlan={() => {
               if (artifactsCollapsed) onToggleArtifacts()
             }}
+          />
+        ),
+      }
+    }
+    const pendingApproval = pendingApprovalByCallId.get(call.id)
+    if (pendingApproval && onApproveTool && onDenyTool) {
+      return {
+        forceOpen: true,
+        extras: (
+          <ToolApprovalSlot
+            pending={pendingApproval}
+            busy={!!approvalsBusy}
+            onApprove={onApproveTool}
+            onDeny={onDenyTool}
           />
         ),
       }
