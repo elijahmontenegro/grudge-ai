@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync"
 
 	"github.com/emontenegr/spidey/core/retry"
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
@@ -36,7 +35,6 @@ type Resolver struct {
 	tools     *pubsub.Topic[*ToolExecution]
 	subagents *pubsub.Topic[*SubagentProgress]
 	threads   *pubsub.Broadcast[*ThreadStateEvent]
-	mu        sync.RWMutex
 }
 
 // NewResolver wraps a Kernel with the GraphQL fan-out surface.
