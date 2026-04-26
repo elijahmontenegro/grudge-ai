@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -26,18 +25,11 @@ import (
 	_ "github.com/emontenegr/spidey/core/adapter/openai"
 	_ "github.com/emontenegr/spidey/core/adapter/vllm"
 	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/rrc/tiktoken"
-	"github.com/emontenegr/spidey/service/agent"
 	"github.com/emontenegr/spidey/service/api"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/graph"
-	"github.com/emontenegr/spidey/service/hooks"
-	"github.com/emontenegr/spidey/service/prompt"
 	"github.com/emontenegr/spidey/service/proxy"
-	"github.com/emontenegr/spidey/service/runtime/substrate"
-	"github.com/emontenegr/spidey/service/sandbox"
-	skillspkg "github.com/emontenegr/spidey/service/skills"
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/spidey/service/runtime/kernel"
 	"github.com/emontenegr/spidey/service/tray"
 )
 
@@ -57,98 +49,17 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	// tiktoken is the committed token estimator for context-budget
-	// sizing. If it can't load at boot — corrupt cache, network
-	// unreachable for first-run fetch — we refuse to start rather
-	// than silently degrade to a char-based heuristic that would
-	// change the unit every downstream budget check operates in.
-	tokenEst, err := tiktoken.New()
+	// Bootstrap consolidates: token estimator, storage, sandbox preflight,
+	// substrate (providers + engine), MCP toolset loading, prompt
+	// assembler, hooks dispatcher, skill loading, runner registry, embed
+	// queue, and the per-thread caches the runner factory closes over.
+	k, err := kernel.Bootstrap(ctx, cfg)
 	if err != nil {
-		log.Fatalf("token estimator: %v", err)
+		log.Fatalf("kernel: %v", err)
 	}
-	rrc.SetDefaultEstimator(tokenEst)
+	defer k.Shutdown()
 
-	db, err := storage.Open(cfg.DataDir)
-	if err != nil {
-		log.Fatalf("storage: %v", err)
-	}
-	defer db.Close()
-
-	// Backfill unnamed threads from first message content
-	if n := db.BackfillThreadNames(); n > 0 {
-		log.Printf("Named %d unnamed threads from first message", n)
-	}
-
-	// Sandbox preflight — non-fatal. Threads with sandboxed=true will
-	// fail at Bash-call time with the same error if the image is not
-	// built; logging here makes the situation visible at boot instead
-	// of surprising the user mid-turn.
-	if err := sandbox.CheckReady(); err != nil {
-		log.Printf("Sandbox not ready: %v (sandboxed=false threads unaffected)", err)
-	} else {
-		log.Printf("Sandbox ready: image %s", sandbox.Image)
-	}
-
-	// Construct the runtime substrate (providers + engine + storage
-	// triple, score/edge hydration, score persister wiring, chunk
-	// oracle wiring). Every previous inline construction step is
-	// now in service/runtime/substrate.Build.
-	subs, err := substrate.Build(ctx, cfg, db)
-	if err != nil {
-		log.Fatalf("substrate: %v", err)
-	}
-
-	// Resolve template directory — needed by the prompt assembler.
-	templateDir := "templates"
-	if exePath, err := os.Executable(); err == nil {
-		for _, c := range []string{
-			filepath.Join(filepath.Dir(exePath), "templates"),
-			filepath.Join(filepath.Dir(exePath), "..", "templates"),
-			filepath.Join(filepath.Dir(exePath), "..", "..", "..", "templates"),
-			"templates",
-		} {
-			if info, err := os.Stat(c); err == nil && info.IsDir() {
-				templateDir = c
-				break
-			}
-		}
-	}
-
-	// Load MCP tools from config
-	var mcpConfigs []agent.MCPServerConfig
-	for _, srv := range cfg.Settings.MCPServers {
-		mcpConfigs = append(mcpConfigs, agent.MCPServerConfig{
-			Name: srv.Name, Endpoint: srv.Endpoint, Enabled: srv.Enabled,
-		})
-	}
-	mcpToolsets := agent.LoadMCPTools(mcpConfigs)
-	if len(mcpToolsets) > 0 {
-		log.Printf("Loaded %d MCP toolsets", len(mcpToolsets))
-	}
-	mcpTools, err := agent.MCPToolsAsTools(mcpToolsets)
-	if err != nil {
-		log.Fatalf("mcp tools: %v", err)
-	}
-
-	// Prompt assembler — uses templateDir resolved above
-	assembler := prompt.NewAssembler(templateDir)
-	log.Printf("Prompt templates: %s", templateDir)
-
-	// Hooks dispatcher
-	hookDispatcher := hooks.NewDispatcher(cfg.Settings.Hooks)
-
-	// Load skills from user + project directories
-	loadedSkills := skillspkg.LoadAll(filepath.Join(cfg.DataDir, "skills"), nil)
-	if len(loadedSkills) > 0 {
-		log.Printf("Loaded %d skills", len(loadedSkills))
-	}
-
-	// GraphQL
-	resolver := graph.NewResolver(db, subs.Engine, cfg, subs.Searcher, subs.MainCompleter)
-	resolver.Assembler = assembler
-	resolver.Hooks = hookDispatcher
-	resolver.Skills = loadedSkills
-	resolver.MCPTools = mcpTools
+	resolver := graph.NewResolver(k)
 
 	// Reconcile agent_state rows left non-Idle by the prior session.
 	// Goroutines don't survive process exit — any Running/Paused row
@@ -169,10 +80,11 @@ func main() {
 		},
 	})
 
-	// Proxy
-	proxyHandler := proxy.NewHandler(subs.Classifier, subs.MainCompleter, rrc.DefaultConfig())
+	// Proxy speaks Anthropic Messages and OpenAI Chat Completions on
+	// their respective routes. Stateless RRC selection over the
+	// inbound message list, then forward to the configured completer.
+	proxyHandler := proxy.NewHandler(k.Classifier, k.Main, rrc.DefaultConfig())
 
-	// Routes
 	mux := http.NewServeMux()
 	proxyHandler.RegisterRoutes(mux)
 	mux.Handle("/graphql", gqlSrv)
@@ -193,8 +105,8 @@ func main() {
 
 	// Static assets — embedded via //go:embed dist (Taskfile's
 	// embed-sync task copies web/dist into ./dist before build).
-	// Self-contained binary; no runtime path lookup, no ../../../web/dist
-	// candidate list, no surprises when the binary ships standalone.
+	// Self-contained binary; no runtime path lookup, no surprises
+	// when the binary ships standalone.
 	webRoot, err := fs.Sub(embeddedWeb, "dist")
 	if err != nil {
 		log.Fatalf("embedded web: %v", err)
@@ -259,5 +171,3 @@ func main() {
 		log.Fatalf("server: %v", err)
 	}
 }
-
-// (backfillChunks moved to service/runtime/substrate.)

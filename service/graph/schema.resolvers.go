@@ -124,10 +124,7 @@ func (r *messageResolver) CreatedAt(ctx context.Context, obj *pb.Message) (*time
 
 // CitedByCount is the resolver for the citedByCount field.
 func (r *messageResolver) CitedByCount(ctx context.Context, obj *pb.Message) (int, error) {
-	r.mu.RLock()
-	count := r.citationCount[obj.Id]
-	r.mu.RUnlock()
-	return count, nil
+	return r.CitationCount(obj.Id), nil
 }
 
 // CreateThread is the resolver for the createThread field.
@@ -310,13 +307,10 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 		if st.Mode == storage.AgentModeAutonomous && st.Status == storage.AgentStatusRunning {
 			return
 		}
-		r.planContentMu.RLock()
 		var planPtr *string
-		if pc, ok := r.planContent[threadID]; ok && pc != "" {
-			copied := pc
-			planPtr = &copied
+		if pc := r.GetPlan(threadID); pc != "" {
+			planPtr = &pc
 		}
-		r.planContentMu.RUnlock()
 		// Narrow UPDATE (round 93 helper) so we don't wipe StartedAt /
 		// DurationLimit that an autonomous run may have set. Mode is
 		// already whatever it was — SetAgentStatus leaves it alone.
@@ -354,7 +348,7 @@ func (r *mutationResolver) StopAgent(ctx context.Context, threadID string) (bool
 
 // PauseAgent is the resolver for the pauseAgent field.
 func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (bool, error) {
-	if entry, ok := r.runners.Get(threadID); ok {
+	if entry, ok := r.Runners.Get(threadID); ok {
 		entry.Runner.PauseAutonomous()
 	}
 	st, err := r.DB.GetAgentState(threadID)
@@ -406,7 +400,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 	//       kick a fresh RunAutonomous goroutine so the UX doesn't lie.
 	//       Previously this case silently no-op'd, leaving the UI
 	//       showing "running" forever while no goroutine was alive.
-	entry, haveEntry := r.runners.Get(threadID)
+	entry, haveEntry := r.Runners.Get(threadID)
 	restartedAutonomous := false
 	if haveEntry && entry.Runner.IsAutonomousActive() {
 		entry.Runner.ResumeAutonomous()
@@ -418,7 +412,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 				return false, fmt.Errorf("restart runner: %w", rerr)
 			}
 			autoCtx, autoCancel := context.WithCancel(context.Background())
-			r.runners.SetCancel(threadID, autoCancel)
+			r.Runners.SetCancel(threadID, autoCancel)
 			// Continuation prompt — non-empty so the model gets a
 			// clear directive rather than inferring from RRC alone.
 			// If the caller supplied a correction it's already been
@@ -478,7 +472,7 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 		return false, fmt.Errorf("create runner: %w", err)
 	}
 	autoCtx, autoCancel := context.WithCancel(context.Background())
-	r.runners.SetCancel(threadID, autoCancel)
+	r.Runners.SetCancel(threadID, autoCancel)
 
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: AgentStatusRunning, Mode: AgentModeAutonomous,
@@ -501,25 +495,15 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 
 // ApproveToolCall is the resolver for the approveToolCall field.
 func (r *mutationResolver) ApproveToolCall(ctx context.Context, callID string) (bool, error) {
-	r.pendingApprovalsMu.Lock()
-	ch, ok := r.pendingApprovals[callID]
-	r.pendingApprovalsMu.Unlock()
-	if !ok {
+	if !r.SendApproval(callID, true) {
 		return false, fmt.Errorf("no pending approval for call %s", callID)
 	}
-	ch <- true
 	return true, nil
 }
 
 // DenyToolCall is the resolver for the denyToolCall field.
 func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reason *string) (bool, error) {
-	r.pendingApprovalsMu.Lock()
-	ch, ok := r.pendingApprovals[callID]
-	threadID := r.pendingThreadIDs[callID]
-	r.pendingApprovalsMu.Unlock()
-	if !ok {
-		return false, fmt.Errorf("no pending approval for call %s", callID)
-	}
+	threadID := r.ThreadIDForCall(callID)
 	// Inject denial feedback as a system message — the user's denial reason is
 	// operational context for the model, not a user utterance. It belongs in the
 	// system domain, not the conversation.
@@ -536,19 +520,17 @@ func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reas
 		}
 		_ = r.storeMessage(msg, denialText)
 	}
-	ch <- false
+	if !r.SendApproval(callID, false) {
+		return false, fmt.Errorf("no pending approval for call %s", callID)
+	}
 	return true, nil
 }
 
 // AnswerQuestion is the resolver for the answerQuestion field.
 func (r *mutationResolver) AnswerQuestion(ctx context.Context, callID string, answer string) (bool, error) {
-	r.pendingApprovalsMu.Lock()
-	ch, ok := r.pendingAnswers[callID]
-	r.pendingApprovalsMu.Unlock()
-	if !ok {
+	if !r.SendAnswer(callID, answer) {
 		return false, fmt.Errorf("no pending question for call %s", callID)
 	}
-	ch <- answer
 	return true, nil
 }
 
@@ -702,9 +684,7 @@ func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, exe
 		return false, err
 	}
 	// Clear plan content — it's been approved and enters the corpus
-	r.planContentMu.Lock()
-	delete(r.planContent, threadID)
-	r.planContentMu.Unlock()
+	r.ClearPlan(threadID)
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: gqlStatus, Mode: gqlMode,
 	})
@@ -721,7 +701,7 @@ func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, exe
 			return false, fmt.Errorf("create runner: %w", err)
 		}
 		autoCtx, autoCancel := context.WithCancel(context.Background())
-		r.runners.SetCancel(threadID, autoCancel)
+		r.Runners.SetCancel(threadID, autoCancel)
 		go func() {
 			defer r.stopRunner(threadID)
 			defer r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
@@ -749,9 +729,7 @@ func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, exe
 // so the PlanPanel closes. The caller is expected to follow up with a
 // sendMessage carrying the feedback so the model revises plan.adoc.
 func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feedback *string) (bool, error) {
-	r.planContentMu.Lock()
-	delete(r.planContent, threadID)
-	r.planContentMu.Unlock()
+	r.ClearPlan(threadID)
 
 	// Status stays Idle — rejectPlan itself doesn't execute a round. The
 	// follow-up sendMessage carrying the feedback is what actually kicks
@@ -793,9 +771,7 @@ func (r *mutationResolver) UpdatePlanSource(ctx context.Context, threadID string
 	if err := os.WriteFile(planPath, []byte(content), 0o644); err != nil {
 		return false, fmt.Errorf("write plan: %w", err)
 	}
-	r.planContentMu.Lock()
-	r.planContent[threadID] = content
-	r.planContentMu.Unlock()
+	r.SetPlan(threadID, content)
 
 	// Re-publish agentState with the fresh plan content. Preserve whatever
 	// status/mode the runner is currently reporting — editing the plan is
@@ -930,14 +906,11 @@ func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *in
 // thread ID (legacy convenience: returns the latest selection on that
 // thread) or a raw event ID.
 func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*pb.SelectionResult, error) {
-	r.mu.RLock()
 	resolvedID := eventID
-	if latestID, ok := r.latestSelection[eventID]; ok {
+	if latestID, ok := r.LatestSelectionID(eventID); ok {
 		resolvedID = latestID
 	}
-	pbResult, ok := r.selectionResults[resolvedID]
-	r.mu.RUnlock()
-	if ok && pbResult != nil {
+	if pbResult, ok := r.GetSelection(resolvedID); ok && pbResult != nil {
 		return pbResult, nil
 	}
 
@@ -1067,11 +1040,9 @@ func (r *queryResolver) AgentState(ctx context.Context, threadID string) (*Agent
 	// on disk stays. Until reject/approve explicitly delete or mark the
 	// artifact, in-memory is the source of UI truth. The model can still
 	// FileRead plan.adoc directly during implementation.
-	r.planContentMu.RLock()
-	if pc, ok := r.planContent[threadID]; ok && pc != "" {
+	if pc := r.GetPlan(threadID); pc != "" {
 		result.PlanContent = &pc
 	}
-	r.planContentMu.RUnlock()
 	return result, nil
 }
 

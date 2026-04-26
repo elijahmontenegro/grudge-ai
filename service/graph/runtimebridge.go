@@ -1,19 +1,19 @@
 package graph
 
 import (
-	"log"
-
 	"github.com/emontenegr/spidey/core/retry"
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	runtimerunner "github.com/emontenegr/spidey/service/runtime/runner"
 )
 
 // runtimeDeps assembles the runtime/runner.Deps bundle for the
-// factory. Cheap to recompute per call — every interface field is
-// a zero-state shim over *Resolver.
+// factory. Substrate fields and runner state come from the embedded
+// Kernel; Pubsub is the only graph-specific implementation because
+// it translates plain runtime structs into gqlgen-generated event
+// types. Approvals / PlanStore / Selections / EmbedEnqueuer are
+// satisfied directly by the Kernel — no shim types needed.
 func (r *Resolver) runtimeDeps() runtimerunner.Deps {
 	return runtimerunner.Deps{
-		Registry:      r.runners,
+		Registry:      r.Runners,
 		DB:            r.DB,
 		Engine:        r.Engine,
 		Config:        r.Config,
@@ -23,10 +23,10 @@ func (r *Resolver) runtimeDeps() runtimerunner.Deps {
 		Skills:        r.Skills,
 		MCPTools:      r.MCPTools,
 		Pubsub:        runtimePubsub{r},
-		Approvals:     runtimeApprovals{r},
-		PlanStore:     runtimePlanStore{r},
-		Selections:    runtimeSelections{r},
-		EmbedEnqueuer: runtimeEmbed{r},
+		Approvals:     r.Kernel,
+		PlanStore:     r.Kernel,
+		Selections:    r.Kernel,
+		EmbedEnqueuer: r.Kernel,
 	}
 }
 
@@ -140,95 +140,5 @@ func toGQLMode(m runtimerunner.AgentMode) AgentMode {
 		return AgentModePlan
 	default:
 		return AgentModeNormal
-	}
-}
-
-// runtimeApprovals adapts the Resolver's pendingApprovals /
-// pendingAnswers maps to the runtime/runner.Approvals interface.
-// Each Register call returns a receive channel and a paired
-// unregister thunk; the factory defers the unregister.
-type runtimeApprovals struct{ r *Resolver }
-
-func (a runtimeApprovals) RegisterApproval(callID, threadID string) (<-chan bool, func()) {
-	ch := make(chan bool, 1)
-	a.r.pendingApprovalsMu.Lock()
-	a.r.pendingApprovals[callID] = ch
-	a.r.pendingThreadIDs[callID] = threadID
-	a.r.pendingApprovalsMu.Unlock()
-	return ch, func() {
-		a.r.pendingApprovalsMu.Lock()
-		delete(a.r.pendingApprovals, callID)
-		delete(a.r.pendingThreadIDs, callID)
-		a.r.pendingApprovalsMu.Unlock()
-	}
-}
-
-func (a runtimeApprovals) RegisterAnswer(callID string) (<-chan string, func()) {
-	ch := make(chan string, 1)
-	a.r.pendingApprovalsMu.Lock()
-	a.r.pendingAnswers[callID] = ch
-	a.r.pendingApprovalsMu.Unlock()
-	return ch, func() {
-		a.r.pendingApprovalsMu.Lock()
-		delete(a.r.pendingAnswers, callID)
-		a.r.pendingApprovalsMu.Unlock()
-	}
-}
-
-// runtimePlanStore adapts the Resolver's per-thread planContent
-// map to the runtime/runner.PlanStore interface. ApprovePlan /
-// RejectPlan continue to access the underlying map directly —
-// the factory only needs Get/Set.
-type runtimePlanStore struct{ r *Resolver }
-
-func (a runtimePlanStore) GetPlan(threadID string) string {
-	a.r.planContentMu.RLock()
-	defer a.r.planContentMu.RUnlock()
-	return a.r.planContent[threadID]
-}
-
-func (a runtimePlanStore) SetPlan(threadID, content string) {
-	a.r.planContentMu.Lock()
-	a.r.planContent[threadID] = content
-	a.r.planContentMu.Unlock()
-}
-
-// runtimeSelections records a selection event in the resolver's
-// in-memory citation map and persists via DB. The map is the hot
-// read path for queryResolver.SelectionResult; persistence is the
-// durable record that survives restart for historical audit.
-type runtimeSelections struct{ r *Resolver }
-
-func (a runtimeSelections) RecordSelection(threadID string, result *pb.SelectionResult) {
-	a.r.mu.Lock()
-	a.r.selectionResults[result.EventId] = result
-	a.r.latestSelection[threadID] = result.EventId
-	for _, sel := range result.Selected {
-		a.r.citationCount[sel.MessageId]++
-	}
-	a.r.mu.Unlock()
-
-	// Event IDs are synthesized as sel-<target_message_id> in the
-	// engine. Strip the prefix to recover the target for the
-	// selections table FK.
-	targetID := result.EventId
-	if len(targetID) > 4 && targetID[:4] == "sel-" {
-		targetID = targetID[4:]
-	}
-	if err := a.r.DB.SaveSelection(result, targetID, threadID); err != nil {
-		log.Printf("SaveSelection(event=%s target=%s): %v", result.EventId, targetID, err)
-	}
-}
-
-// runtimeEmbed delegates to the resolver's atomic-pointer-managed
-// EmbedQueue. Tolerates a nil queue (settings reload may have
-// torn it down) — silent no-op falls back to the startup
-// backfill goroutine and the live-embed path in
-// ChunkOracle.EnsureVector.
-type runtimeEmbed struct{ r *Resolver }
-
-func (a runtimeEmbed) Enqueue(msgID string) {
-	if q := a.r.EmbedQueue(); q != nil {
-		q.Enqueue(msgID)
 	}
 }
