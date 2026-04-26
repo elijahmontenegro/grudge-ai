@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, type RefObject } from 'react'
 import { IconArchive, IconEdit, IconTrash } from '@/components/atoms/icons'
 import type { Thread } from '@/data/types'
+import { usePopover } from '@/hooks/usePopover'
 
 interface Props {
   anchorRef: RefObject<HTMLElement | null>
@@ -26,46 +27,17 @@ export function ThreadActionsMenu({
   onToggleArchive,
   onDelete,
 }: Props) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
-
-  useEffect(() => {
-    function place() {
-      const a = anchorRef.current
-      if (!a) return
-      const r = a.getBoundingClientRect()
-      setPos({ left: r.left, top: r.bottom + 4 })
-    }
-    place()
-    function onDoc(e: MouseEvent) {
-      if (
-        ref.current &&
-        !ref.current.contains(e.target as Node) &&
-        !anchorRef.current?.contains(e.target as Node)
-      ) {
-        onClose()
-      }
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-      document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [anchorRef, onClose])
+  const computePos = useCallback(
+    (r: DOMRect) => ({ left: r.left, top: r.bottom + 4 }),
+    [],
+  )
+  const { popRef, pos } = usePopover(true, anchorRef, onClose, computePos)
 
   if (!pos) return null
   return (
     <div
       className="thread-menu"
-      ref={ref}
+      ref={popRef}
       style={{ position: 'fixed', left: pos.left, top: pos.top }}
       role="menu"
     >

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+import { useCallback, type RefObject } from 'react'
 import { IconSun, IconMoon, IconSettings, IconLayers } from '@/components/atoms/icons'
 import { useMe } from '@/hooks/useMe'
+import { usePopover } from '@/hooks/usePopover'
 
 interface UserMenuProps {
   open: boolean
@@ -29,52 +30,24 @@ export function UserMenu({
   onOpenFirstRun,
   onOpenSettings,
 }: UserMenuProps) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<Pos | null>(null)
   const me = useMe()
 
-  useEffect(() => {
-    if (!open) return
-    function place() {
-      const a = anchorRef.current
-      if (!a) return
-      const r = a.getBoundingClientRect()
+  const computePos = useCallback(
+    (r: DOMRect): Pos => {
       if (placement === 'right') {
-        setPos({ left: r.right + 8, bottom: Math.max(8, window.innerHeight - r.bottom) })
-      } else {
-        const width = Math.max(r.width, 240)
-        setPos({ left: r.left, width, bottom: window.innerHeight - r.top + 6 })
+        return { left: r.right + 8, bottom: Math.max(8, window.innerHeight - r.bottom) }
       }
-    }
-    place()
-    function onDoc(e: MouseEvent) {
-      if (
-        ref.current &&
-        !ref.current.contains(e.target as Node) &&
-        !anchorRef.current?.contains(e.target as Node)
-      ) {
-        onClose()
-      }
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-      document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open, anchorRef, placement, onClose])
+      const width = Math.max(r.width, 240)
+      return { left: r.left, width, bottom: window.innerHeight - r.top + 6 }
+    },
+    [placement],
+  )
+  const { popRef, pos } = usePopover(open, anchorRef, onClose, computePos)
 
   if (!open || !pos) return null
   const style: React.CSSProperties = { position: 'fixed', ...pos }
   return (
-    <div className="user-menu" ref={ref} style={style}>
+    <div className="user-menu" ref={popRef} style={style}>
       <div className="user-menu-head">
         <div className="user-menu-name">{me.name}</div>
         <div className="user-menu-sub">{me.host}</div>

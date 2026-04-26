@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation } from '@apollo/client/react'
 import { UPDATE_THREAD } from '@/graphql/operations'
 import { IconPlus, IconSettings, IconX } from '@/components/atoms/icons'
@@ -6,6 +6,7 @@ import type {
   UpdateThreadMutation,
   UpdateThreadMutationVariables,
 } from '@/graphql/generated/types'
+import { usePopover } from '@/hooks/usePopover'
 
 interface ThreadConfigPopoverProps {
   threadId: string
@@ -24,14 +25,6 @@ export function ThreadConfigPopover({ threadId, workingDirs, sandboxed }: Thread
   const [sbx, setSbx] = useState<boolean>(sandboxed)
   const [newDir, setNewDir] = useState('')
   const anchorRef = useRef<HTMLButtonElement>(null)
-  const popRef = useRef<HTMLDivElement>(null)
-  // Popover uses position:fixed. Anchoring from left works when the
-  // gear lives mid-topbar; once we moved it to the right edge it clipped
-  // off-viewport. Switch to right-anchoring whenever left-anchoring
-  // would overflow the viewport.
-  const [pos, setPos] = useState<
-    { top: number; left?: number; right?: number } | null
-  >(null)
 
   const [updateMut, updateRes] = useMutation<UpdateThreadMutation, UpdateThreadMutationVariables>(
     UPDATE_THREAD,
@@ -48,44 +41,18 @@ export function ThreadConfigPopover({ threadId, workingDirs, sandboxed }: Thread
     setSbx(sandboxed)
   }, [workingDirs, sandboxed])
 
-  useEffect(() => {
-    if (!open) return
-    function place() {
-      const a = anchorRef.current
-      if (!a) return
-      const r = a.getBoundingClientRect()
-      const width = 360 // approx — must exceed minWidth to avoid under-estimating overflow
-      const overflowRight = r.left + width > window.innerWidth - 8
-      if (overflowRight) {
-        setPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) })
-      } else {
-        setPos({ top: r.bottom + 6, left: r.left })
-      }
+  // Anchor the popover below the gear, switching to right-edge
+  // anchoring whenever left-anchoring would overflow the viewport.
+  const computePos = useCallback((r: DOMRect) => {
+    const width = 360 // approx — must exceed minWidth to avoid under-estimating overflow
+    const overflowRight = r.left + width > window.innerWidth - 8
+    if (overflowRight) {
+      return { top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) }
     }
-    place()
-    function onDoc(e: MouseEvent) {
-      if (
-        popRef.current &&
-        !popRef.current.contains(e.target as Node) &&
-        !anchorRef.current?.contains(e.target as Node)
-      ) {
-        setOpen(false)
-      }
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-      document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+    return { top: r.bottom + 6, left: r.left }
+  }, [])
+  const handleClose = useCallback(() => setOpen(false), [])
+  const { popRef, pos } = usePopover(open, anchorRef, handleClose, computePos)
 
   async function save(nextDirs: string[], nextSbx: boolean) {
     await updateMut({
