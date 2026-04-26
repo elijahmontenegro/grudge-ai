@@ -39,32 +39,6 @@ export interface Message {
   attachments?: MessageAttachment[]
 }
 
-export type SelectionSource = 'cross-encoder'
-
-export interface SelectionItem {
-  id: string
-  score: number
-  source: SelectionSource
-  hop: number
-  ce: number
-  temp: number
-  phantom?: boolean
-  crossThread?: boolean
-  threadName?: string
-  snippet?: string
-}
-
-export interface ExclusionItem {
-  id: string
-  reason: string
-  score: number
-}
-
-export interface Selection {
-  selected: SelectionItem[]
-  excluded: ExclusionItem[]
-}
-
 export interface ToolInvocation {
   name: string
   args: string

@@ -5,7 +5,3 @@ export const IS_MAC =
 export function kbdLabel(key: string): string {
   return (IS_MAC ? '⌘' : 'Ctrl+') + key.toUpperCase()
 }
-
-export function fmtScore(n: number): string {
-  return n.toFixed(2).replace(/^0/, '')
-}
