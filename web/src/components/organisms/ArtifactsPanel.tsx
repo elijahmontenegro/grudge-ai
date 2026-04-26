@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { IconChevron, IconPanelRight } from '@/components/atoms/icons'
 import { AsciiDocBody } from '@/components/atoms/AsciiDocBody'
-import { aggregateArtifacts } from '@/data/artifacts'
-import { useLocalStorage } from '@/hooks/useLocalStorage'
-import type { Artifact, ArtifactOp, Message } from '@/data/types'
+import { aggregateArtifacts } from '@/domain/artifacts'
+import { useLocalStorage } from '@/primitives/useLocalStorage'
+import type { Artifact, ArtifactOp, Message } from '@/domain/types'
 
 const WIDTH_STORAGE_KEY = 'spidey.artifactsWidth'
 const DEFAULT_WIDTH = 720

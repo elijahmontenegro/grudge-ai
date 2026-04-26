@@ -4,7 +4,7 @@ import { ThreadConfigPopover } from '@/components/organisms/ThreadConfigPopover'
 import { IconChevron, IconPanelRight } from '@/components/atoms/icons'
 import { ThreadActionsMenu } from '@/components/molecules/ThreadActionsMenu'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
-import type { Thread } from '@/data/types'
+import type { Thread } from '@/domain/types'
 
 interface TopbarProps {
   view: 'home' | 'thread' | 'settings' | 'firstrun' | string

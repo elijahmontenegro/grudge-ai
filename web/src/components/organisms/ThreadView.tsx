@@ -18,7 +18,7 @@ import type { StreamState } from '@/hooks/useSendAndStream'
 import type { LiveSubagent } from '@/hooks/useSubagentProgress'
 import type { LiveToolCall } from '@/hooks/useToolExecutions'
 import type { AttachmentMeta } from '@/hooks/useAttachments'
-import type { Message, Thread } from '@/data/types'
+import type { Message, Thread } from '@/domain/types'
 
 interface ThreadViewProps {
   thread: Thread

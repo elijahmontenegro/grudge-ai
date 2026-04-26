@@ -4,7 +4,7 @@ import { StateDot } from '@/components/atoms/StateDot'
 import { PALETTE_ITEMS } from '@/data/fixtures'
 import { useSearch, type SearchHit } from '@/hooks/useSearch'
 import { useSkills } from '@/hooks/useSkills'
-import type { PaletteItem, Thread } from '@/data/types'
+import type { PaletteItem, Thread } from '@/domain/types'
 
 interface PaletteProps {
   open: boolean

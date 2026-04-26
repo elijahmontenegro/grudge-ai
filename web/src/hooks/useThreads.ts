@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useApolloClient, useQuery, useSubscription } from '@apollo/client/react'
 import { LIST_THREADS, THREAD_STATE_CHANGES } from '@/graphql/operations'
-import { adaptThread } from '@/data/adapters'
+import { adaptThread } from '@/domain/adapters'
 import type {
   ListThreadsQuery,
   ListThreadsQueryVariables,
@@ -9,7 +9,7 @@ import type {
   ThreadStateChangesSubscriptionVariables,
 } from '@/graphql/generated/types'
 import { AgentMode, AgentStatus } from '@/graphql/generated/types'
-import type { Thread, ThreadState } from '@/data/types'
+import type { Thread, ThreadState } from '@/domain/types'
 
 export interface ThreadsResult {
   threads: Thread[]

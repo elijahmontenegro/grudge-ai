@@ -78,7 +78,7 @@ export interface PaletteItem {
 
 export interface ActivityEntry {
   when: string
-  what: React.ReactNode
+  what: string
   threadId?: string
   threadName?: string
 }

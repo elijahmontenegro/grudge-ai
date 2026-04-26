@@ -1,4 +1,4 @@
-import type { PaletteItem, User } from './types'
+import type { PaletteItem, User } from '@/domain/types'
 
 // Fixtures kept only for surfaces the backend doesn't expose:
 // - PALETTE_ITEMS: the command palette's static actions + settings entries.

@@ -16,8 +16,8 @@ import { useThreadMessages } from '@/hooks/useThreadMessages'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
 import { useNeedsSetup } from '@/hooks/useNeedsSetup'
 import { useAgentState } from '@/hooks/useAgentState'
-import { useLocalStorage } from '@/hooks/useLocalStorage'
-import type { Message } from '@/data/types'
+import { useLocalStorage } from '@/primitives/useLocalStorage'
+import type { Message } from '@/domain/types'
 
 // FirstRun and Settings are config-flow pages — lazy-loaded so they don't
 // weigh on the thread-view initial paint.

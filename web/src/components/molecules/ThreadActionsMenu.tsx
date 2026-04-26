@@ -1,7 +1,7 @@
 import { useCallback, type RefObject } from 'react'
 import { IconArchive, IconEdit, IconTrash } from '@/components/atoms/icons'
-import type { Thread } from '@/data/types'
-import { usePopover } from '@/hooks/usePopover'
+import type { Thread } from '@/domain/types'
+import { usePopover } from '@/primitives/usePopover'
 
 interface Props {
   anchorRef: RefObject<HTMLElement | null>

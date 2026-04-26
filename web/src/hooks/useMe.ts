@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useSettings } from './useSettings'
 import { USER as FALLBACK } from '@/data/fixtures'
-import type { User } from '@/data/types'
+import type { User } from '@/domain/types'
 
 /**
  * Reads the current user from settings.preferences.name. Falls back to the

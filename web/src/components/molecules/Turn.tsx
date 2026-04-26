@@ -3,7 +3,7 @@ import { ToolCall } from './ToolCall'
 import { AskQuestionRow } from './AskQuestionRow'
 import { MarkdownBody } from '@/components/atoms/MarkdownBody'
 import { formatSize } from '@/hooks/useAttachments'
-import type { Message, MessageAttachment } from '@/data/types'
+import type { Message, MessageAttachment } from '@/domain/types'
 
 interface TurnProps {
   prompt: Message

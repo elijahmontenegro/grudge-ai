@@ -1,9 +1,9 @@
 import { useMemo } from 'react'
 import { useQuery } from '@apollo/client/react'
 import { GET_THREAD_MESSAGES } from '@/graphql/operations'
-import { adaptMessage } from '@/data/adapters'
+import { adaptMessage } from '@/domain/adapters'
 import type { GetThreadMessagesQuery, GetThreadMessagesQueryVariables } from '@/graphql/generated/types'
-import type { Message, Thread } from '@/data/types'
+import type { Message, Thread } from '@/domain/types'
 
 export interface ThreadMessagesResult {
   thread: (Thread & { workingDirs: string[]; sandboxed: boolean }) | null

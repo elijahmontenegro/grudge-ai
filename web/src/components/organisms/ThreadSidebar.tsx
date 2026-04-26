@@ -6,7 +6,7 @@ import { SidebarSection } from '@/components/molecules/SidebarSection'
 import { UserMenu } from '@/components/molecules/UserMenu'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
 import { useMe } from '@/hooks/useMe'
-import type { Thread } from '@/data/types'
+import type { Thread } from '@/domain/types'
 
 /** Number of most-recently-active non-pinned threads shown in the sidebar.
  *  Everything beyond lives on the Home "all chats" view. Keeps the sidebar

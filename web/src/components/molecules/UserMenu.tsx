@@ -1,7 +1,7 @@
 import { useCallback, type RefObject } from 'react'
 import { IconSun, IconMoon, IconSettings, IconLayers } from '@/components/atoms/icons'
 import { useMe } from '@/hooks/useMe'
-import { usePopover } from '@/hooks/usePopover'
+import { usePopover } from '@/primitives/usePopover'
 
 interface UserMenuProps {
   open: boolean

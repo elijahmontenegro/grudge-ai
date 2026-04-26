@@ -1,4 +1,4 @@
-import type { Thread } from '@/data/types'
+import type { Thread } from '@/domain/types'
 
 interface EmptyThreadProps {
   thread: Thread

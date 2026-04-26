@@ -6,7 +6,7 @@ import type {
   UpdateThreadMutation,
   UpdateThreadMutationVariables,
 } from '@/graphql/generated/types'
-import { usePopover } from '@/hooks/usePopover'
+import { usePopover } from '@/primitives/usePopover'
 
 interface ThreadConfigPopoverProps {
   threadId: string

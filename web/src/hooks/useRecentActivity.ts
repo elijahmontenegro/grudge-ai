@@ -1,12 +1,12 @@
 import { useMemo } from 'react'
 import { useQuery } from '@apollo/client/react'
 import { GET_RECENT_ACTIVITY } from '@/graphql/operations'
-import { adaptActivity } from '@/data/adapters'
+import { adaptActivity } from '@/domain/adapters'
 import type {
   GetRecentActivityQuery,
   GetRecentActivityQueryVariables,
 } from '@/graphql/generated/types'
-import type { ActivityEntry } from '@/data/types'
+import type { ActivityEntry } from '@/domain/types'
 
 export interface ActivityResult {
   items: ActivityEntry[]

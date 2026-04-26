@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useState } from 'react'
 import { IconChevron } from '@/components/atoms/icons'
-import type { ToolInvocation } from '@/data/types'
+import type { ToolInvocation } from '@/domain/types'
 
 interface ToolCallProps {
   t: ToolInvocation

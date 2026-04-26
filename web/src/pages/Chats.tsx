@@ -4,7 +4,7 @@ import { IconSearch, IconX } from '@/components/atoms/icons'
 import { useThreads } from '@/hooks/useThreads'
 import { useRecentActivity } from '@/hooks/useRecentActivity'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
-import type { Thread } from '@/data/types'
+import type { Thread } from '@/domain/types'
 
 type Filter = 'all' | 'starred' | 'archived'
 
