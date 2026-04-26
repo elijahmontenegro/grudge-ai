@@ -1,4 +1,4 @@
-package adkbridge
+package rrc
 
 // Protocol-adherence rule pipeline.
 //
@@ -64,6 +64,16 @@ type Rule func(wire []*pb.LLMMessage, r Resolver) ([]*pb.LLMMessage, error)
 type Resolver interface {
 	BestCandidate(filter func(*pb.Message) bool) (*pb.Message, error)
 	Picks() []ResolverPick
+}
+
+// ResolverPick records one consumption event from a Resolver. The
+// score (rerank-max against the current query) is consulted by Apply
+// when correlating new wire entries to the rule that produced them,
+// so the assembly layer can put rectification inserts on the same
+// score axis as Selected entries for unified budget shed.
+type ResolverPick struct {
+	MsgID string
+	Score float64 // rerank-max against the query
 }
 
 // Apply runs rules in sequence against the wire. Returns the

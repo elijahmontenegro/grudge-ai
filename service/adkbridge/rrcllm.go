@@ -461,10 +461,10 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 				log.Printf("RRC: resolver build failed thread=%s: %v — sending unrectified", r.threadID, rerr)
 			} else {
 				resolver.ExcludeIDs(wireIDs)
-				rectified, scores, aerr := Apply(llmMsgs, resolver,
-					PairToolResultsWithCalls,
-					PairToolCallsWithResults,
-					EnsureUserAnchor,
+				rectified, scores, aerr := rrc.Apply(llmMsgs, resolver,
+					rrc.PairToolResultsWithCalls,
+					rrc.PairToolCallsWithResults,
+					rrc.EnsureUserAnchor,
 				)
 				if aerr != nil {
 					log.Printf("RRC: rectification failed thread=%s: %v — sending pre-rectification wire", r.threadID, aerr)

@@ -23,12 +23,13 @@ import (
 	"sort"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/storage"
 )
 
-// StoreResolver is a Resolver backed by a corpus snapshot and the
-// reranker score cache for a specific (query message, reranker
-// model) pair. Not safe for concurrent use — construct per pass.
+// StoreResolver is the storage-backed implementation of rrc.Resolver
+// for a specific (query message, reranker model) pair. Not safe for
+// concurrent use — construct per pass.
 type StoreResolver struct {
 	// ordered is corpus sorted score-desc with recency tiebreak.
 	// BestCandidate walks this in order.
@@ -44,13 +45,7 @@ type StoreResolver struct {
 	// picks is the chronological log of candidates consumed by
 	// BestCandidate. Caller reads this after Apply to correlate
 	// rectification inserts with their scores.
-	picks []ResolverPick
-}
-
-// ResolverPick records one consumption event.
-type ResolverPick struct {
-	MsgID string
-	Score float64 // rerank-max against the query
+	picks []rrc.ResolverPick
 }
 
 // NewStoreResolver loads scope-appropriate corpus and the query-
@@ -107,7 +102,7 @@ func (r *StoreResolver) Score(msgID string) float64 {
 // Picks returns the chronological list of candidates consumed
 // during this pass. Reset between passes by constructing a fresh
 // resolver.
-func (r *StoreResolver) Picks() []ResolverPick {
+func (r *StoreResolver) Picks() []rrc.ResolverPick {
 	return r.picks
 }
 
@@ -132,7 +127,7 @@ func (r *StoreResolver) BestCandidate(filter func(*pb.Message) bool) (*pb.Messag
 		}
 		if filter(m) {
 			r.used[m.Id] = true
-			r.picks = append(r.picks, ResolverPick{MsgID: m.Id, Score: r.scores[m.Id]})
+			r.picks = append(r.picks, rrc.ResolverPick{MsgID: m.Id, Score: r.scores[m.Id]})
 			return m, nil
 		}
 	}

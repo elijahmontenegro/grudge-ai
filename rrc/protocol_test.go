@@ -1,4 +1,4 @@
-package adkbridge
+package rrc
 
 import (
 	"testing"
