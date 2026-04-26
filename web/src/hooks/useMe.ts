@@ -1,13 +1,7 @@
 import { useMemo } from 'react'
-import { useQuery } from '@apollo/client/react'
-import { GET_SETTINGS } from '@/graphql/operations'
+import { useSettings } from './useSettings'
 import { USER as FALLBACK } from '@/data/fixtures'
-import type { GetSettingsQuery } from '@/graphql/generated/types'
 import type { User } from '@/data/types'
-
-interface Preferences {
-  name?: string
-}
 
 /**
  * Reads the current user from settings.preferences.name. Falls back to the
@@ -15,19 +9,9 @@ interface Preferences {
  * Derives initials from whichever name we end up with.
  */
 export function useMe(): User {
-  const { data } = useQuery<GetSettingsQuery>(GET_SETTINGS)
-
+  const { preferences } = useSettings()
   return useMemo<User>(() => {
-    let name = FALLBACK.name
-    try {
-      if (data?.settings?.preferences) {
-        const parsed = JSON.parse(data.settings.preferences)
-        const prefs: Preferences = parsed ?? {}
-        if (prefs.name && prefs.name.trim()) name = prefs.name.trim()
-      }
-    } catch {
-      // bad JSON — keep fallback
-    }
+    const name = preferences.name?.trim() || FALLBACK.name
     const parts = name.split(/\s+/).filter(Boolean)
     const initials = (parts[0]?.[0] ?? 'U') + (parts[1]?.[0] ?? '')
     return {
@@ -36,7 +20,7 @@ export function useMe(): User {
       initials: initials.toUpperCase(),
       host: FALLBACK.host,
     }
-  }, [data])
+  }, [preferences])
 }
 
 /** Time-of-day greeting — local hour, no backend required. */
