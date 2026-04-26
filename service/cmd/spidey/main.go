@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"embed"
-	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
@@ -18,8 +17,6 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/gorilla/websocket"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/core/adapter/tei"
 	// Blank-imported for side-effect registration with core.NewProvider.
 	// Importing core alone gives an empty registry; each adapter
 	// package wires itself in init() in core/adapter/X/register.go.
@@ -37,8 +34,8 @@ import (
 	"github.com/emontenegr/spidey/service/hooks"
 	"github.com/emontenegr/spidey/service/prompt"
 	"github.com/emontenegr/spidey/service/proxy"
+	"github.com/emontenegr/spidey/service/runtime/substrate"
 	"github.com/emontenegr/spidey/service/sandbox"
-	"github.com/emontenegr/spidey/service/search"
 	skillspkg "github.com/emontenegr/spidey/service/skills"
 	"github.com/emontenegr/spidey/service/storage"
 	"github.com/emontenegr/spidey/service/tray"
@@ -92,65 +89,16 @@ func main() {
 		log.Printf("Sandbox ready: image %s", sandbox.Image)
 	}
 
-	// Build providers from config — nil when not yet configured (first run).
-	// The small-fast completer is gone (it was QUD's extractor, also gone);
-	// RRC's substrate is now classifier (NLI + embed composite) only.
-	var (
-		mainCompleter core.Completer
-		classifier    core.Classifier
-		embedder      core.Embedder
-		providers     []core.Provider
-	)
-
-	if mainCfg, ok := cfg.Settings.Providers["main"]; ok {
-		p, err := core.NewProvider(mainCfg.ToCore())
-		if err != nil {
-			log.Fatalf("main provider: %v", err)
-		}
-		providers = append(providers, p)
-		mainCompleter, err = p.Completer(mainCfg.Model)
-		if err != nil {
-			log.Fatalf("main completer (%s/%s): %v", mainCfg.Adapter, mainCfg.Model, err)
-		}
+	// Construct the runtime substrate (providers + engine + storage
+	// triple, score/edge hydration, score persister wiring, chunk
+	// oracle wiring). Every previous inline construction step is
+	// now in service/runtime/substrate.Build.
+	subs, err := substrate.Build(ctx, cfg, db)
+	if err != nil {
+		log.Fatalf("substrate: %v", err)
 	}
 
-	// Build composite classifier: NLI + embedding similarity, max signal wins.
-	// classifier config points to NLI model, embedder config points to embedding model.
-	var nliURL, embedURL string
-	if clsCfg, ok := cfg.Settings.Providers["classifier"]; ok {
-		nliURL = clsCfg.BaseURL
-	}
-	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
-		embedURL = embCfg.BaseURL
-	}
-	if nliURL != "" || embedURL != "" {
-		classifier = tei.NewCompositeClassifier(nliURL, embedURL)
-		log.Printf("Composite classifier: NLI=%q, embed=%q", nliURL, embedURL)
-	}
-
-	// Embedder for semantic search (separate from classifier)
-	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
-		p, err := core.NewProvider(embCfg.ToCore())
-		if err != nil {
-			log.Fatalf("embedder provider: %v", err)
-		}
-		providers = append(providers, p)
-		embedder, err = p.Embedder(embCfg.Model)
-		if err != nil {
-			log.Fatalf("embedder (%s/%s): %v", embCfg.Adapter, embCfg.Model, err)
-		}
-	}
-
-	// Provider.Close() was dropped in Move D-narrow — it returned nil
-	// in every adapter and held no actual resource. The providers
-	// slice is still kept for symmetry (HTTP clients underneath have
-	// their own connection-pool teardown via Go runtime exit).
-
-	if classifier == nil || mainCompleter == nil {
-		log.Printf("WARNING: providers not fully configured — configure at http://spidey.localhost:8420/settings")
-	}
-
-	// Resolve template directory early — needed by both engine config and prompt assembler
+	// Resolve template directory — needed by the prompt assembler.
 	templateDir := "templates"
 	if exePath, err := os.Executable(); err == nil {
 		for _, c := range []string{
@@ -164,122 +112,6 @@ func main() {
 				break
 			}
 		}
-	}
-
-	// Initialize RRC engine. Classifier is the only dependency now.
-	// Config precedence: if Settings.Engine is the zero struct, nothing was
-	// ever persisted (first run, or legacy config.json with no `engine`
-	// block) — boot on DefaultConfig. Otherwise trust the persisted
-	// snapshot verbatim: zero in an individual field is intentional
-	// (WeightCE=0 → pure-temporal, ScoreFloor=0 → no cutoff, etc), the
-	// same rule the UpdateSettings resolver enforces.
-	rrcCfg := rrc.DefaultConfig()
-	if se := cfg.Settings.Engine; se != (config.EngineConfig{}) {
-		rrcCfg.EdgeThreshold = se.EdgeThreshold
-		rrcCfg.ScoreFloor = se.ScoreFloor
-		rrcCfg.WeightCE = se.WeightCE
-		rrcCfg.WeightTemp = se.WeightTemp
-		rrcCfg.ZScoreThreshold = se.ZScoreThreshold
-		rrcCfg.MinBatchStdDev = se.MinBatchStdDev
-		rrcCfg.RadiusSize = se.RadiusSize
-		rrcCfg.RerankTopK = se.RerankTopK
-		rrcCfg.ContextBudgetTokens = se.ContextBudgetTokens
-		// Preserve DefaultConfig values for the new tunables when the
-		// persisted settings predate them (zero-value means "not set"
-		// only because the Settings UI hadn't exposed them yet).
-		if se.DiversityLambda > 0 {
-			rrcCfg.DiversityLambda = se.DiversityLambda
-		}
-		if se.BudgetHeadroomPct > 0 {
-			rrcCfg.BudgetHeadroomPct = se.BudgetHeadroomPct
-		}
-		if se.PerMsgDelimiterTokens > 0 {
-			rrcCfg.PerMsgDelimiterTokens = se.PerMsgDelimiterTokens
-		}
-		if se.NLIFusionWeight > 0 {
-			rrcCfg.NLIFusionWeight = se.NLIFusionWeight
-		}
-	}
-	engine := rrc.NewEngine(rrcCfg, classifier)
-
-	// Storage chunks via rrc.ChunkText directly (db imports rrc/chunk
-	// types). Override the default ChunkConfig if the engine config
-	// diverged.
-	if rrcCfg.Chunk != (rrc.ChunkConfig{}) {
-		db.SetChunkConfig(rrcCfg.Chunk)
-	}
-
-	// Chunk backfill for pre-existing messages. Messages inserted
-	// before v2 migration have no chunks table rows — they'd be
-	// invisible to RRC scoring. Iterate every chunkless message, run
-	// its text through the chunker, persist. Synchronous on startup
-	// because embeddings backfill below depends on chunks existing
-	// first; the whole thing is a fast walk over blob-decode + local
-	// chunking, no network calls.
-	if err := backfillChunks(db, rrcCfg.Chunk); err != nil {
-		log.Printf("Chunk backfill: %v", err)
-	}
-
-	// Resolve model IDs — used as cache keys for scores (reranker) and
-	// embeddings (embedder). Switching a model in settings shifts the
-	// keys; old rows stay tagged under their original model_id,
-	// harmless.
-	rerankerModelID := ""
-	if clsCfg, ok := cfg.Settings.Providers["classifier"]; ok {
-		rerankerModelID = clsCfg.Model
-	}
-	embedModelID := ""
-	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
-		embedModelID = embCfg.Model
-	}
-
-	// Load persisted state
-	if edges, err := db.AllEdges(); err == nil && len(edges) > 0 {
-		engine.LoadDAG(edges)
-		log.Printf("Loaded %d edges", len(edges))
-	}
-	if rerankerModelID != "" {
-		if scores, err := db.ChunkScoresForModel(rerankerModelID); err == nil && len(scores) > 0 {
-			// Convert storage.ChunkScoreKey → rrc.PersistedScore.
-			converted := make([]rrc.PersistedScore, 0, len(scores))
-			for k, v := range scores {
-				converted = append(converted, rrc.PersistedScore{
-					FromMsgID:    k.FromID,
-					FromChunkIdx: k.FromIdx,
-					ToMsgID:      k.ToID,
-					ToChunkIdx:   k.ToIdx,
-					Score:        v,
-				})
-			}
-			engine.LoadScores(converted)
-			log.Printf("Loaded %d chunk-pair scores (model=%s)", len(scores), rerankerModelID)
-		}
-	}
-
-	// Wire score persistence — every reranker-produced chunk-pair
-	// score writes through to the scores table so restarts and forks
-	// inherit the cache per spec.
-	if rerankerModelID != "" {
-		engine.SetScorePersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
-			if err := db.InsertChunkScore(fromID, fromIdx, toID, toIdx, rerankerModelID, score); err != nil {
-				log.Printf("InsertChunkScore(%s[%d], %s[%d], %s): %v", fromID, fromIdx, toID, toIdx, rerankerModelID, err)
-			}
-		})
-	}
-
-	// Searcher + ChunkOracle share the same embedder and model ID.
-	// Searcher powers the /search query; ChunkOracle feeds RRC rerank.
-	var searcher *search.Searcher
-	var chunkOracle *search.ChunkOracle
-	if embedder != nil && embedModelID != "" {
-		searcher = search.NewSearcher(embedder, embedModelID, db)
-		chunkOracle = search.NewChunkOracle(db, embedder, embedModelID)
-		engine.SetChunkOracle(chunkOracle)
-
-		// Backfill chunk embeddings in the background. Non-blocking —
-		// service accepts requests immediately; OnMessage misses on
-		// not-yet-backfilled chunks just embed live.
-		go chunkOracle.BackfillEmbeddings(context.Background())
 	}
 
 	// Load MCP tools from config
@@ -312,7 +144,7 @@ func main() {
 	}
 
 	// GraphQL
-	resolver := graph.NewResolver(db, engine, cfg, searcher, mainCompleter)
+	resolver := graph.NewResolver(db, subs.Engine, cfg, subs.Searcher, subs.MainCompleter)
 	resolver.Assembler = assembler
 	resolver.Hooks = hookDispatcher
 	resolver.Skills = loadedSkills
@@ -338,7 +170,7 @@ func main() {
 	})
 
 	// Proxy
-	proxyHandler := proxy.NewHandler(classifier, mainCompleter, rrc.DefaultConfig())
+	proxyHandler := proxy.NewHandler(subs.Classifier, subs.MainCompleter, rrc.DefaultConfig())
 
 	// Routes
 	mux := http.NewServeMux()
@@ -428,56 +260,4 @@ func main() {
 	}
 }
 
-// backfillChunks populates the chunks table for every message that
-// has none. Runs synchronously on startup because every other RRC
-// substrate (embeddings, scores) keys off chunks — if they don't
-// exist, the engine can't score anything. Cheap enough to block
-// startup: no network calls, pure text-chunking in Go, hundreds of
-// messages per second.
-func backfillChunks(db *storage.DB, chunkCfg rrc.ChunkConfig) error {
-	ids, err := db.MessagesWithoutChunks()
-	if err != nil {
-		return fmt.Errorf("MessagesWithoutChunks: %w", err)
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	log.Printf("Chunk backfill: processing %d pre-existing messages", len(ids))
-	start := time.Now()
-	var withChunks, withoutText int
-	for _, id := range ids {
-		msg, err := db.GetMessage(id)
-		if err != nil || msg == nil {
-			continue
-		}
-		text := rrc.TextFromBlocks(msg.Content)
-		if text == "" {
-			withoutText++
-			continue
-		}
-		rcs := rrc.ChunkText(text, chunkCfg)
-		if len(rcs) == 0 {
-			withoutText++
-			continue
-		}
-		// Adapt rrc.Chunk → storage.Chunk for InsertChunks.
-		schunks := make([]storage.Chunk, len(rcs))
-		for i, c := range rcs {
-			schunks[i] = storage.Chunk{
-				ChunkIndex: c.Index,
-				Text:       c.Text,
-				ByteStart:  c.ByteStart,
-				ByteEnd:    c.ByteEnd,
-				TokenEst:   c.TokenEst,
-			}
-		}
-		if err := db.InsertChunks(id, schunks); err != nil {
-			log.Printf("Chunk backfill: InsertChunks(%s): %v", id, err)
-			continue
-		}
-		withChunks++
-	}
-	log.Printf("Chunk backfill: chunked %d messages (%d text-only, %d empty) in %v",
-		withChunks, withChunks, withoutText, time.Since(start))
-	return nil
-}
+// (backfillChunks moved to service/runtime/substrate.)
