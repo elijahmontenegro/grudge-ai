@@ -165,7 +165,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-ch
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("%w: googleai returned %d", core.ErrProviderUnavailable, resp.StatusCode)
+		return nil, &httpc.StatusError{Provider: "googleai", StatusCode: resp.StatusCode}
 	}
 
 	ch := make(chan *pb.StreamChunk)

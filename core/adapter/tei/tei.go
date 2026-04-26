@@ -12,7 +12,7 @@ import (
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/internal/httpc"
-	"github.com/emontenegr/spidey/core/resilience"
+	"github.com/emontenegr/spidey/core/retry"
 )
 
 // teiRetryPolicy is the retry shape for a single TEI HTTP call.
@@ -23,8 +23,8 @@ import (
 // a ~6-minute window that accommodates one full restart-and-warmup
 // cycle; beyond that the error propagates and RRC pauses the round
 // per spec.
-func teiRetryPolicy() resilience.Policy {
-	return resilience.Policy{
+func teiRetryPolicy() retry.Policy {
+	return retry.Policy{
 		MaxAttempts: 3,
 		BaseDelay:   1 * time.Second,
 		MaxDelay:    10 * time.Second,
@@ -119,7 +119,7 @@ func (e *embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	}
 
 	var resp [][]float32
-	err = resilience.Do(ctx, teiRetryPolicy(), logRetryEvent("tei embed"), func(ctx context.Context) error {
+	err = retry.Do(ctx, teiRetryPolicy(), logRetryEvent("tei embed"), func(ctx context.Context) error {
 		httpReq, err := http.NewRequest("POST", e.baseURL+"/embed", bytes.NewReader(body))
 		if err != nil {
 			return err
@@ -151,7 +151,7 @@ func (e *embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 	}
 
 	var resp [][]float32
-	err = resilience.Do(ctx, teiRetryPolicy(), logRetryEvent("tei embed-batch"), func(ctx context.Context) error {
+	err = retry.Do(ctx, teiRetryPolicy(), logRetryEvent("tei embed-batch"), func(ctx context.Context) error {
 		httpReq, err := http.NewRequest("POST", e.baseURL+"/embed", bytes.NewReader(body))
 		if err != nil {
 			return err
@@ -176,14 +176,14 @@ func (e *embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 	return resp, nil
 }
 
-// logRetryEvent produces a resilience.Do event handler that surfaces
+// logRetryEvent produces a retry.Do event handler that surfaces
 // TEI retries into the server log. The standard [Retry] prefix lets
 // operators grep a single stream for transient-infrastructure events
 // across all providers. Only retry events (Err != nil, !Final) and
 // terminal failure events are logged — successes are silent to keep
 // log volume sane under healthy load.
-func logRetryEvent(op string) func(resilience.Event) {
-	return func(e resilience.Event) {
+func logRetryEvent(op string) func(retry.Event) {
+	return func(e retry.Event) {
 		if e.Err == nil {
 			return
 		}
@@ -259,7 +259,7 @@ func (c *classifier) Score(ctx context.Context, query string, candidates []strin
 
 // rerankOnce is the single-batch /rerank call. Fills `out` in order
 // aligned to `slice`. Caller ensures len(slice) ≤ rerankBatchSize.
-// Wrapped in resilience.Do so a transient TEI slowness or a
+// Wrapped in retry.Do so a transient TEI slowness or a
 // restart-in-progress container (triggered by the docker-compose
 // healthcheck's canary /rerank probe) is retried rather than propagated
 // as a classifier error that would pause the whole round.
@@ -273,7 +273,7 @@ func (c *classifier) scoreOnce(ctx context.Context, query string, slice []string
 	if err != nil {
 		return err
 	}
-	return resilience.Do(ctx, teiRetryPolicy(), logRetryEvent("tei rerank"), func(ctx context.Context) error {
+	return retry.Do(ctx, teiRetryPolicy(), logRetryEvent("tei rerank"), func(ctx context.Context) error {
 		httpReq, err := http.NewRequest("POST", c.baseURL+"/rerank", bytes.NewReader(body))
 		if err != nil {
 			return err
@@ -379,7 +379,7 @@ func (en *entailer) scoreOnce(ctx context.Context, premise string, slice []strin
 	if err != nil {
 		return err
 	}
-	return resilience.Do(ctx, teiRetryPolicy(), logRetryEvent("tei predict"), func(ctx context.Context) error {
+	return retry.Do(ctx, teiRetryPolicy(), logRetryEvent("tei predict"), func(ctx context.Context) error {
 		httpReq, err := http.NewRequest("POST", en.baseURL+"/predict", bytes.NewReader(body))
 		if err != nil {
 			return err

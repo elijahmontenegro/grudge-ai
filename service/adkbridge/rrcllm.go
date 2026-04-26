@@ -7,7 +7,6 @@ import (
 	"iter"
 	"log"
 	"math"
-	"strings"
 
 	"github.com/emontenegr/spidey/core"
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
@@ -266,7 +265,7 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			if sendErr == nil {
 				return
 			}
-			if !isContextOverflow(sendErr) {
+			if !core.IsContextOverflow(sendErr) {
 				yield(nil, sendErr)
 				return
 			}
@@ -421,35 +420,6 @@ func estimateToolSchemaTokens(tools []*pb.ToolDeclaration) int {
 	return total
 }
 
-// isContextOverflow recognizes provider errors that indicate the
-// request payload exceeded the model's context-window ceiling.
-// Distinguishing these from other failures lets the assembly layer
-// shed lowest-score Selected entries and retry with a smaller
-// payload, rather than surfacing the error terminally.
-func isContextOverflow(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	patterns := []string{
-		"context window exceeds limit", // ollama (minimax upstream)
-		"context length exceeded",      // OpenAI-family
-		"maximum context length",       // OpenAI-family alt wording
-		"context_length_exceeded",      // OpenAI error code
-		"prompt is too long",           // Anthropic
-		"input is too long",            // Anthropic alt
-		"requested tokens",             // generic "exceeds" wording
-		"exceeds the maximum",          // generic
-		"too many tokens",              // generic
-		"context window",               // last-resort catch
-	}
-	for _, p := range patterns {
-		if strings.Contains(msg, p) {
-			return true
-		}
-	}
-	return false
-}
 
 // tryComplete sends a non-streaming request. The initial error is
 // returned to the caller without yielding, so a context-overflow

@@ -80,9 +80,15 @@ func NewStreaming(authFn func(*http.Request)) *Client {
 	}
 }
 
-// Do executes an HTTP request with auth applied. It maps HTTP errors to
-// core sentinel errors: 401/403 → ErrAuth, 429 → ErrRateLimited,
-// connection failures → ErrProviderUnavailable.
+// Do executes an HTTP request with auth applied. It maps HTTP
+// errors to typed StatusError values: 401/403/429 are recognized
+// here so authentication and rate-limit handling don't depend on
+// every adapter checking the same status codes. Other non-2xx
+// responses pass through unchanged — adapters typically need to
+// read the body for diagnostic output and produce their own
+// StatusError after that.
+//
+// Connection-level failures wrap core.ErrProviderUnavailable.
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	req = req.WithContext(ctx)
 	if c.authFn != nil {
@@ -97,10 +103,10 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 	switch resp.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		resp.Body.Close()
-		return nil, core.ErrAuth
+		return nil, &StatusError{StatusCode: resp.StatusCode}
 	case http.StatusTooManyRequests:
 		resp.Body.Close()
-		return nil, core.ErrRateLimited
+		return nil, &StatusError{StatusCode: resp.StatusCode}
 	}
 
 	return resp, nil

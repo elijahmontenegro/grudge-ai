@@ -3,6 +3,7 @@ package adkbridge
 import (
 	"testing"
 
+	"github.com/emontenegr/spidey/core"
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/rrc/tiktoken"
@@ -60,7 +61,7 @@ func TestIsContextOverflow_KnownPatterns(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if !isContextOverflow(tc.err) {
+			if !core.IsContextOverflow(tc.err) {
 				t.Fatalf("should match known pattern: %q", tc.err.Error())
 			}
 		})
@@ -78,7 +79,7 @@ func TestIsContextOverflow_UnrelatedErrors(t *testing.T) {
 		nil,
 	}
 	for _, e := range cases {
-		if isContextOverflow(e) {
+		if core.IsContextOverflow(e) {
 			if e == nil {
 				t.Fatalf("nil should not match overflow")
 			}

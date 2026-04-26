@@ -12,7 +12,8 @@ import (
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/adapter/tei"
-	"github.com/emontenegr/spidey/core/resilience"
+	completerretry "github.com/emontenegr/spidey/core/completer/retry"
+	"github.com/emontenegr/spidey/core/retry"
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/adoc"
@@ -609,10 +610,10 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 	// Wrap the main completer with retry. The retry wrapper closes over
 	// threadID so transient failures surface as RetryStatus events on
 	// THIS thread's AgentState subscription — the UI renders the
-	// indicator contextually. Principled retry per resilience package:
+	// indicator contextually. Principled retry per the retry package:
 	// bounded attempts, exponential backoff, auth/4xx errors surface
 	// immediately without consuming retry budget.
-	mainWithRetry := resilience.NewRetryingCompleter(r.Main, resilience.DefaultPolicy(), func(ev resilience.Event) {
+	mainWithRetry := completerretry.New(r.Main, retry.DefaultPolicy(), func(ev retry.Event) {
 		r.publishRetryStatus(threadID, ev)
 	})
 	rerankerModelID := ""
@@ -870,7 +871,7 @@ func (r *Resolver) publishAgentState(threadID string, state *AgentState) {
 // the frontend's view of status/mode/round_count. When ev.Final is
 // true AND ev.Err is nil it's a success clear — publish with retry=nil
 // so the UI hides the retry indicator.
-func (r *Resolver) publishRetryStatus(threadID string, ev resilience.Event) {
+func (r *Resolver) publishRetryStatus(threadID string, ev retry.Event) {
 	// Log every retry event server-side so "why is this happening" has
 	// an actual answer in spidey.log instead of being stuck in the UI's
 	// retry subscription buffer. Final+no-error = success clear; Final

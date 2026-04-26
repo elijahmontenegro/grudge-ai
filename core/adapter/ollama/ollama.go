@@ -288,7 +288,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-ch
 		if resp.StatusCode >= 500 {
 			dumpFailingRequestOnce(body)
 		}
-		return nil, fmt.Errorf("%w: ollama returned %d: %s", core.ErrProviderUnavailable, resp.StatusCode, strings.TrimSpace(string(b)))
+		return nil, &httpc.StatusError{Provider: "ollama", StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
 
 	ch := make(chan *pb.StreamChunk)

@@ -170,7 +170,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-ch
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("%w: anthropic returned %d", core.ErrProviderUnavailable, resp.StatusCode)
+		return nil, &httpc.StatusError{Provider: "anthropic", StatusCode: resp.StatusCode}
 	}
 
 	ch := make(chan *pb.StreamChunk)
