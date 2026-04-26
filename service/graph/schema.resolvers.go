@@ -1179,61 +1179,36 @@ func (r *selectionResultResolver) Scope(ctx context.Context, obj *pb.SelectionRe
 
 // MessageStream is the resolver for the messageStream field.
 func (r *subscriptionResolver) MessageStream(ctx context.Context, threadID string) (<-chan *StreamEvent, error) {
-	ch := r.subscribeStream(threadID)
-	unsubscribeOnDone(ctx, func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.streamSubs[threadID] = removeChan(r.streamSubs[threadID], ch)
-		close(ch)
-	})
+	ch := r.streams.Subscribe(threadID)
+	unsubscribeOnDone(ctx, func() { r.streams.Unsubscribe(threadID, ch) })
 	return ch, nil
 }
 
 // AgentState is the resolver for the agentState field.
 func (r *subscriptionResolver) AgentState(ctx context.Context, threadID string) (<-chan *AgentState, error) {
-	ch := r.subscribeAgentState(threadID)
-	unsubscribeOnDone(ctx, func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.agentSubs[threadID] = removeChan(r.agentSubs[threadID], ch)
-		close(ch)
-	})
+	ch := r.agents.Subscribe(threadID)
+	unsubscribeOnDone(ctx, func() { r.agents.Unsubscribe(threadID, ch) })
 	return ch, nil
 }
 
 // ToolExecution is the resolver for the toolExecution field.
 func (r *subscriptionResolver) ToolExecution(ctx context.Context, threadID string) (<-chan *ToolExecution, error) {
-	ch := r.subscribeToolExec(threadID)
-	unsubscribeOnDone(ctx, func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.toolSubs[threadID] = removeChan(r.toolSubs[threadID], ch)
-		close(ch)
-	})
+	ch := r.tools.Subscribe(threadID)
+	unsubscribeOnDone(ctx, func() { r.tools.Unsubscribe(threadID, ch) })
 	return ch, nil
 }
 
 // SubagentProgress is the resolver for the subagentProgress field.
 func (r *subscriptionResolver) SubagentProgress(ctx context.Context, threadID string) (<-chan *SubagentProgress, error) {
-	ch := r.subscribeSubagent(threadID)
-	unsubscribeOnDone(ctx, func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.subagentSubs[threadID] = removeChan(r.subagentSubs[threadID], ch)
-		close(ch)
-	})
+	ch := r.subagents.Subscribe(threadID)
+	unsubscribeOnDone(ctx, func() { r.subagents.Unsubscribe(threadID, ch) })
 	return ch, nil
 }
 
 // ThreadStateChanges is the resolver for the threadStateChanges field.
 func (r *subscriptionResolver) ThreadStateChanges(ctx context.Context) (<-chan *ThreadStateEvent, error) {
-	ch := r.subscribeThreadState()
-	unsubscribeOnDone(ctx, func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.threadSubs = removeChan(r.threadSubs, ch)
-		close(ch)
-	})
+	ch := r.threads.Subscribe()
+	unsubscribeOnDone(ctx, func() { r.threads.Unsubscribe(ch) })
 	return ch, nil
 }
 

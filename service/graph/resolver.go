@@ -23,6 +23,7 @@ import (
 	"github.com/emontenegr/spidey/service/prompt"
 	"github.com/emontenegr/spidey/service/sandbox"
 	"github.com/emontenegr/spidey/service/search"
+	"github.com/emontenegr/spidey/service/runtime/pubsub"
 	"github.com/emontenegr/spidey/service/skills"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/adk/tool"
@@ -103,13 +104,16 @@ type Resolver struct {
 	runners   map[string]*runnerEntry
 	runnersMu sync.Mutex
 
-	// Per-thread subscription channels
-	streamSubs   map[string][]chan *StreamEvent
-	agentSubs    map[string][]chan *AgentState
-	toolSubs     map[string][]chan *ToolExecution
-	subagentSubs map[string][]chan *SubagentProgress
-	threadSubs   []chan *ThreadStateEvent
-	mu           sync.RWMutex
+	// Per-thread fan-out topics for UI subscriptions. Each is a
+	// thin instance of pubsub.Topic / pubsub.Broadcast — the five
+	// near-identical sub/pub maps that used to live here are now
+	// one generic primitive parameterized per event shape.
+	streams   *pubsub.Topic[*StreamEvent]
+	agents    *pubsub.Topic[*AgentState]
+	tools     *pubsub.Topic[*ToolExecution]
+	subagents *pubsub.Topic[*SubagentProgress]
+	threads   *pubsub.Broadcast[*ThreadStateEvent]
+	mu        sync.RWMutex
 }
 
 // NewResolver creates a resolver with all dependencies.
@@ -134,10 +138,11 @@ func NewResolver(db *storage.DB, engine *rrc.Engine, cfg *config.Config, searche
 		pendingAnswers:   make(map[string]chan string),
 		pendingThreadIDs: make(map[string]string),
 		runners:          make(map[string]*runnerEntry),
-		streamSubs:       make(map[string][]chan *StreamEvent),
-		agentSubs:        make(map[string][]chan *AgentState),
-		toolSubs:         make(map[string][]chan *ToolExecution),
-		subagentSubs:     make(map[string][]chan *SubagentProgress),
+		streams:          pubsub.NewTopic[*StreamEvent](),
+		agents:           pubsub.NewTopic[*AgentState](),
+		tools:            pubsub.NewTopic[*ToolExecution](),
+		subagents:        pubsub.NewTopic[*SubagentProgress](),
+		threads:          pubsub.NewBroadcast[*ThreadStateEvent](),
 	}
 	if searcher != nil {
 		// 4 workers: conservative for a single consumer-class GPU
@@ -817,53 +822,23 @@ func unsubscribeOnDone(ctx context.Context, cleanup func()) {
 	}()
 }
 
-// removeChan removes ch from a channel slice. Does NOT lock — caller must hold the lock.
-func removeChan[T comparable](subs []chan T, ch chan T) []chan T {
-	for i, s := range subs {
-		if s == ch {
-			return append(subs[:i], subs[i+1:]...)
-		}
-	}
-	return subs
-}
-
-// subscribe/publish helpers for subscriptions
+// subscribe/publish thin delegates to the per-shape pubsub topics.
+// Resolver methods stay in this package so the GraphQL resolver
+// boilerplate doesn't need to know about pubsub.
 func (r *Resolver) subscribeStream(threadID string) chan *StreamEvent {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	ch := make(chan *StreamEvent, 16)
-	r.streamSubs[threadID] = append(r.streamSubs[threadID], ch)
-	return ch
+	return r.streams.Subscribe(threadID)
 }
 
 func (r *Resolver) publishStream(threadID string, event *StreamEvent) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, ch := range r.streamSubs[threadID] {
-		select {
-		case ch <- event:
-		default:
-		}
-	}
+	r.streams.Publish(threadID, event)
 }
 
 func (r *Resolver) subscribeAgentState(threadID string) chan *AgentState {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	ch := make(chan *AgentState, 16)
-	r.agentSubs[threadID] = append(r.agentSubs[threadID], ch)
-	return ch
+	return r.agents.Subscribe(threadID)
 }
 
 func (r *Resolver) publishAgentState(threadID string, state *AgentState) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, ch := range r.agentSubs[threadID] {
-		select {
-		case ch <- state:
-		default:
-		}
-	}
+	r.agents.Publish(threadID, state)
 }
 
 // publishRetryStatus emits an AgentState with the retry field filled
@@ -933,58 +908,25 @@ func (r *Resolver) publishRetryStatus(threadID string, ev retry.Event) {
 }
 
 func (r *Resolver) subscribeToolExec(threadID string) chan *ToolExecution {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	ch := make(chan *ToolExecution, 16)
-	r.toolSubs[threadID] = append(r.toolSubs[threadID], ch)
-	return ch
+	return r.tools.Subscribe(threadID)
 }
 
 func (r *Resolver) publishToolExec(threadID string, event *ToolExecution) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, ch := range r.toolSubs[threadID] {
-		select {
-		case ch <- event:
-		default:
-		}
-	}
-}
-
-func (r *Resolver) publishSubagent(threadID string, event *SubagentProgress) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, ch := range r.subagentSubs[threadID] {
-		select {
-		case ch <- event:
-		default:
-		}
-	}
+	r.tools.Publish(threadID, event)
 }
 
 func (r *Resolver) subscribeSubagent(threadID string) chan *SubagentProgress {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	ch := make(chan *SubagentProgress, 16)
-	r.subagentSubs[threadID] = append(r.subagentSubs[threadID], ch)
-	return ch
+	return r.subagents.Subscribe(threadID)
+}
+
+func (r *Resolver) publishSubagent(threadID string, event *SubagentProgress) {
+	r.subagents.Publish(threadID, event)
 }
 
 func (r *Resolver) subscribeThreadState() chan *ThreadStateEvent {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	ch := make(chan *ThreadStateEvent, 16)
-	r.threadSubs = append(r.threadSubs, ch)
-	return ch
+	return r.threads.Subscribe()
 }
 
 func (r *Resolver) publishThreadState(event *ThreadStateEvent) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, ch := range r.threadSubs {
-		select {
-		case ch <- event:
-		default:
-		}
-	}
+	r.threads.Publish(event)
 }
