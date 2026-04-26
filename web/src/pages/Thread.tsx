@@ -16,7 +16,6 @@ import { useStartAutonomous } from '@/hooks/useStartAutonomous'
 import { useToolExecutions } from '@/hooks/useToolExecutions'
 import { useEditMessage } from '@/hooks/useEditMessage'
 import { useAgentControls } from '@/hooks/useAgentControls'
-import { useCreateThread } from '@/hooks/useCreateThread'
 import { AgentMode, AgentStatus } from '@/graphql/generated/types'
 interface ThreadPageProps {
   mode: ComposerMode
@@ -39,13 +38,10 @@ export function ThreadPage({
   artifactsCollapsed,
   onToggleArtifacts,
 }: ThreadPageProps) {
-  const { id: rawId = '' } = useParams<{ id: string }>()
-  // "/thread/new" is a DRAFT — no DB row yet. The thread is materialised
-  // on first send so clicking New doesn't litter the DB with empty rows
-  // the user never actually used. All id-keyed hooks get an empty id
-  // while drafting so their subscriptions/queries skip.
-  const isDraft = rawId === 'new'
-  const id = isDraft ? '' : rawId
+  const { id = '' } = useParams<{ id: string }>()
+  // /thread/new redirects to "/" at the route level (App.tsx) — Home
+  // owns the composer for unmaterialised threads, so by the time this
+  // component mounts the id is always a real thread id.
   const navigate = useNavigate()
   const location = useLocation() as {
     state?: {
@@ -67,7 +63,6 @@ export function ThreadPage({
   const { send, streaming, stream } = useSendAndStream(id, scope, {
     externalStreaming: agentRunning,
   })
-  const { create: createThread } = useCreateThread()
 
   // Reset key bumped each time streaming transitions false→true so live
   // tool-call and subagent-progress lists start fresh for the new turn
@@ -155,71 +150,6 @@ export function ThreadPage({
       if (mode !== 'autonomous') setMode('autonomous')
     }
   }, [agent.mode, mode, setMode])
-
-  // Draft thread: no DB row, render a minimal shell with the composer
-  // active. Hitting send / start-autonomous actually creates the row
-  // and navigates to the real thread URL — until then, closing the tab
-  // leaves nothing behind.
-  if (isDraft) {
-    const placeholderThread = {
-      id: 'new',
-      name: 'New thread',
-      state: 'idle' as const,
-      lastActive: '—',
-      msgCount: 0,
-      workingDirs: [] as string[],
-      sandboxed: true,
-      corpus: [] as typeof messages,
-    }
-    return (
-      <ThreadView
-        thread={placeholderThread}
-        parentName={null}
-        streaming={false}
-        stream={stream}
-        subagents={[]}
-        liveTools={[]}
-        onSend={async (text) => {
-          const newId = await createThread()
-          if (!newId) return
-          navigate(`/thread/${newId}`, { state: { initialMessage: text } })
-        }}
-        onStartAutonomous={async (text, duration) => {
-          const newId = await createThread()
-          if (!newId) return
-          navigate(`/thread/${newId}`, {
-            state: { startAutonomous: { text, duration } },
-          })
-        }}
-        scope={scope}
-        setScope={setScope}
-        mode={mode}
-        setMode={setMode}
-        duration={duration}
-        setDuration={setDuration}
-        focusMessageId={undefined}
-        onEditTurn={undefined}
-        editInFlight={false}
-        artifactsCollapsed={artifactsCollapsed}
-        onToggleArtifacts={onToggleArtifacts}
-        livePlanContent={null}
-        agentMode={AgentMode.Normal}
-        planApproving={false}
-        planRejecting={false}
-        planEditing={false}
-        onApprovePlan={() => {}}
-        onRejectPlan={() => {}}
-        onEditPlan={() => {}}
-        agentStatus={AgentStatus.Idle}
-        agentIsAutonomous={false}
-        agentElapsed={null}
-        onPauseAgent={() => {}}
-        onResumeAgent={() => {}}
-        onStopAgent={() => {}}
-        agentControlsPending={false}
-      />
-    )
-  }
 
   if (loading && !thread) {
     return (
