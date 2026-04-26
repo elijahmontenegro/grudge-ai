@@ -1,16 +1,30 @@
 import { useCallback } from 'react'
 import { useMutation } from '@apollo/client/react'
-import { PAUSE_AGENT, RESUME_AGENT, STOP_AGENT } from '@/graphql/operations'
+import {
+  PAUSE_AGENT,
+  RESUME_AGENT,
+  START_AUTONOMOUS,
+  STOP_AGENT,
+} from '@/graphql/operations'
 import type {
   PauseAgentMutation,
   PauseAgentMutationVariables,
   ResumeAgentMutation,
   ResumeAgentMutationVariables,
+  StartAutonomousMutation,
+  StartAutonomousMutationVariables,
   StopAgentMutation,
   StopAgentMutationVariables,
 } from '@/graphql/generated/types'
+import type { AttachmentMeta } from './useAttachments'
 
 export interface AgentControls {
+  start: (
+    threadId: string,
+    prompt: string,
+    duration: string,
+    attachments?: AttachmentMeta[],
+  ) => Promise<void>
   stop: (threadId: string) => Promise<void>
   pause: (threadId: string) => Promise<void>
   resume: (threadId: string, correction?: string) => Promise<void>
@@ -19,6 +33,10 @@ export interface AgentControls {
 }
 
 export function useAgentControls(): AgentControls {
+  const [startMut, startRes] = useMutation<
+    StartAutonomousMutation,
+    StartAutonomousMutationVariables
+  >(START_AUTONOMOUS, { refetchQueries: ['GetAgentState'] })
   const [stopMut, stopRes] = useMutation<StopAgentMutation, StopAgentMutationVariables>(
     STOP_AGENT,
     { refetchQueries: ['GetAgentState'] },
@@ -32,6 +50,17 @@ export function useAgentControls(): AgentControls {
     { refetchQueries: ['GetAgentState'] },
   )
 
+  const start = useCallback(
+    async (
+      threadId: string,
+      prompt: string,
+      duration: string,
+      attachments?: AttachmentMeta[],
+    ) => {
+      await startMut({ variables: { threadId, prompt, duration, attachments } })
+    },
+    [startMut],
+  )
   const stop = useCallback(async (threadId: string) => {
     await stopMut({ variables: { threadId } })
   }, [stopMut])
@@ -46,10 +75,20 @@ export function useAgentControls(): AgentControls {
   )
 
   return {
+    start,
     stop,
     pause,
     resume,
-    pending: stopRes.loading || pauseRes.loading || resumeRes.loading,
-    error: stopRes.error?.message ?? pauseRes.error?.message ?? resumeRes.error?.message ?? null,
+    pending:
+      startRes.loading ||
+      stopRes.loading ||
+      pauseRes.loading ||
+      resumeRes.loading,
+    error:
+      startRes.error?.message ??
+      stopRes.error?.message ??
+      pauseRes.error?.message ??
+      resumeRes.error?.message ??
+      null,
   }
 }

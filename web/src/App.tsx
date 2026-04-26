@@ -13,7 +13,7 @@ import { Home } from '@/pages/Home'
 import { ThreadPage } from '@/pages/Thread'
 import { useThreads } from '@/hooks/useThreads'
 import { useThreadMessages } from '@/hooks/useThreadMessages'
-import { useCreateThread } from '@/hooks/useCreateThread'
+import { useThreadMutations } from '@/hooks/useThreadMutations'
 import { useNeedsSetup } from '@/hooks/useNeedsSetup'
 import { useAgentState } from '@/hooks/useAgentState'
 import { useLocalStorage } from '@/hooks/useLocalStorage'
@@ -63,7 +63,7 @@ export default function App() {
   const navigate = useNavigate()
   const { view, threadId } = useRouteView()
   const { threads } = useThreads()
-  const { create: createThread } = useCreateThread()
+  const { create: createThread } = useThreadMutations()
   const { needsSetup } = useNeedsSetup()
 
   // Single object keeps the persisted UI surface in one localStorage key

@@ -12,9 +12,8 @@ import { useSendAndStream } from '@/hooks/useSendAndStream'
 import { useAgentState } from '@/hooks/useAgentState'
 import { useSubagentProgress } from '@/hooks/useSubagentProgress'
 import { usePlanMode } from '@/hooks/usePlanMode'
-import { useStartAutonomous } from '@/hooks/useStartAutonomous'
 import { useToolExecutions } from '@/hooks/useToolExecutions'
-import { useEditMessage } from '@/hooks/useEditMessage'
+import { useThreadMutations } from '@/hooks/useThreadMutations'
 import { useAgentControls } from '@/hooks/useAgentControls'
 import { AgentMode, AgentStatus } from '@/graphql/generated/types'
 interface ThreadPageProps {
@@ -76,20 +75,19 @@ export function ThreadPage({
 
   const subagents = useSubagentProgress(id, turnSeq)
   const plan = usePlanMode()
-  const autonomous = useStartAutonomous()
   // Single TOOL_EXECUTION subscription for this thread — exposes pending
   // approvals, AskUserQuestion prompts, and a live-call list all from one
   // stream (previously two separate subscriptions for the same events).
   const tools = useToolExecutions(id, turnSeq)
   const liveTools = tools.live
   const approvals = tools
-  const editMsg = useEditMessage()
+  const threadMuts = useThreadMutations()
   const agentControls = useAgentControls()
 
   // Shared edit handler for every Turn in the thread. Navigates to the new
   // branched thread the backend returns.
   const onEditTurn = async (position: number, newContent: string) => {
-    const newId = await editMsg.edit(id, position, newContent)
+    const newId = await threadMuts.editMessage(id, position, newContent)
     if (newId && newId !== id) navigate(`/thread/${newId}`)
     return newId
   }
@@ -119,7 +117,7 @@ export function ThreadPage({
     if (startAutonomousOnMount) {
       autoSentRef.current = true
       navigate(`/thread/${id}`, { replace: true, state: null })
-      void autonomous.start(id, startAutonomousOnMount.text, startAutonomousOnMount.duration)
+      void agentControls.start(id, startAutonomousOnMount.text, startAutonomousOnMount.duration)
       return
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,7 +207,7 @@ export function ThreadPage({
         void send(text, attachments)
       }}
       onStartAutonomous={(text, d, attachments) => {
-        void autonomous.start(id, text, d, attachments)
+        void agentControls.start(id, text, d, attachments)
       }}
       scope={scope}
       setScope={setScope}
@@ -219,7 +217,7 @@ export function ThreadPage({
       setDuration={setDuration}
       focusMessageId={focusMessageId}
       onEditTurn={onEditTurn}
-      editInFlight={editMsg.loading}
+      editInFlight={threadMuts.pending}
       artifactsCollapsed={artifactsCollapsed}
       onToggleArtifacts={onToggleArtifacts}
       livePlanContent={agent.planContent}
