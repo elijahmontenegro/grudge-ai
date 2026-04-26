@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router'
 import { ThreadSidebar } from '@/components/organisms/ThreadSidebar'
 import { ArtifactsPanel } from '@/components/organisms/ArtifactsPanel'
@@ -16,6 +16,7 @@ import { useThreadMessages } from '@/hooks/useThreadMessages'
 import { useCreateThread } from '@/hooks/useCreateThread'
 import { useNeedsSetup } from '@/hooks/useNeedsSetup'
 import { useAgentState } from '@/hooks/useAgentState'
+import { useLocalStorage } from '@/hooks/useLocalStorage'
 import type { Message } from '@/data/types'
 
 // FirstRun and Settings are config-flow pages — lazy-loaded so they don't
@@ -27,20 +28,21 @@ const Chats = lazy(() => import('@/pages/Chats').then((m) => ({ default: m.Chats
 type Theme = 'light' | 'dark'
 
 interface PersistedUI {
-  sidebarCollapsed?: boolean
-  artifactsCollapsed?: boolean
-  theme?: Theme
-  composerMode?: ComposerMode
-  composerScope?: ComposerScope
-  composerDuration?: AutonomousDuration
+  sidebarCollapsed: boolean
+  artifactsCollapsed: boolean
+  theme: Theme
+  composerMode: ComposerMode
+  composerScope: ComposerScope
+  composerDuration: AutonomousDuration
 }
 
-function loadPersisted(): PersistedUI {
-  try {
-    return JSON.parse(localStorage.getItem('spidey.ui') || '{}') as PersistedUI
-  } catch {
-    return {}
-  }
+const DEFAULT_UI: PersistedUI = {
+  sidebarCollapsed: false,
+  artifactsCollapsed: true,
+  theme: 'light',
+  composerMode: 'normal',
+  composerScope: 'thread',
+  composerDuration: '1h',
 }
 
 type View = 'home' | 'thread' | 'settings' | 'firstrun' | 'chats'
@@ -58,29 +60,76 @@ function useRouteView(): { view: View; threadId?: string } {
 }
 
 export default function App() {
-  const persisted = useMemo(() => loadPersisted(), [])
   const navigate = useNavigate()
   const { view, threadId } = useRouteView()
   const { threads } = useThreads()
   const { create: createThread } = useCreateThread()
   const { needsSetup } = useNeedsSetup()
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(persisted.sidebarCollapsed || false)
-  const [artifactsCollapsed, setArtifactsCollapsed] = useState(persisted.artifactsCollapsed ?? true)
-  const [theme, setTheme] = useState<Theme>(persisted.theme ?? 'light')
-  const [paletteOpen, setPaletteOpen] = useState(false)
+  // Single object keeps the persisted UI surface in one localStorage key
+  // — six per-key effects firing on every UI tick would be wasteful for
+  // state that only changes on explicit user action.
+  const [ui, setUi] = useLocalStorage<PersistedUI>('spidey.ui', DEFAULT_UI)
+  const setSidebarCollapsed = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) =>
+      setUi((p) => ({
+        ...p,
+        sidebarCollapsed:
+          typeof next === 'function' ? next(p.sidebarCollapsed) : next,
+      })),
+    [setUi],
+  )
+  const setArtifactsCollapsed = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) =>
+      setUi((p) => ({
+        ...p,
+        artifactsCollapsed:
+          typeof next === 'function' ? next(p.artifactsCollapsed) : next,
+      })),
+    [setUi],
+  )
+  const setTheme = useCallback(
+    (next: Theme | ((prev: Theme) => Theme)) =>
+      setUi((p) => ({
+        ...p,
+        theme: typeof next === 'function' ? next(p.theme) : next,
+      })),
+    [setUi],
+  )
+  const setComposerMode = useCallback(
+    (next: ComposerMode | ((prev: ComposerMode) => ComposerMode)) =>
+      setUi((p) => ({
+        ...p,
+        composerMode: typeof next === 'function' ? next(p.composerMode) : next,
+      })),
+    [setUi],
+  )
+  const setComposerScope = useCallback(
+    (next: ComposerScope | ((prev: ComposerScope) => ComposerScope)) =>
+      setUi((p) => ({
+        ...p,
+        composerScope:
+          typeof next === 'function' ? next(p.composerScope) : next,
+      })),
+    [setUi],
+  )
+  const setComposerDuration = useCallback(
+    (next: AutonomousDuration | ((prev: AutonomousDuration) => AutonomousDuration)) =>
+      setUi((p) => ({
+        ...p,
+        composerDuration:
+          typeof next === 'function' ? next(p.composerDuration) : next,
+      })),
+    [setUi],
+  )
+  const sidebarCollapsed = ui.sidebarCollapsed
+  const artifactsCollapsed = ui.artifactsCollapsed
+  const theme = ui.theme
+  const composerMode = ui.composerMode
+  const composerScope = ui.composerScope
+  const composerDuration = ui.composerDuration
 
-  // Composer state lifted to App so mode/scope persist across thread navigation
-  // (matching the prototype) and the CommandPalette can toggle them.
-  const [composerMode, setComposerMode] = useState<ComposerMode>(
-    persisted.composerMode ?? 'normal',
-  )
-  const [composerScope, setComposerScope] = useState<ComposerScope>(
-    persisted.composerScope ?? 'thread',
-  )
-  const [composerDuration, setComposerDuration] = useState<AutonomousDuration>(
-    persisted.composerDuration ?? '1h',
-  )
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   // Active-thread messages hoisted to app level so the ArtifactsPanel
   // (sibling of the topbar in the main grid) can share the same
@@ -106,20 +155,6 @@ export default function App() {
   const newThread = useCallback(() => {
     navigate('/', { state: { freshAt: Date.now() } })
   }, [navigate])
-
-  useEffect(() => {
-    localStorage.setItem(
-      'spidey.ui',
-      JSON.stringify({
-        sidebarCollapsed,
-        artifactsCollapsed,
-        theme,
-        composerMode,
-        composerScope,
-        composerDuration,
-      }),
-    )
-  }, [sidebarCollapsed, artifactsCollapsed, theme, composerMode, composerScope, composerDuration])
 
   useEffect(() => {
     const root = document.documentElement

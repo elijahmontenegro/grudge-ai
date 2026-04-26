@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { IconChevron, IconPanelRight } from '@/components/atoms/icons'
 import { AsciiDocBody } from '@/components/atoms/AsciiDocBody'
 import { aggregateArtifacts } from '@/data/artifacts'
+import { useLocalStorage } from '@/hooks/useLocalStorage'
 import type { Artifact, ArtifactOp, Message } from '@/data/types'
 
 const WIDTH_STORAGE_KEY = 'spidey.artifactsWidth'
@@ -9,16 +10,13 @@ const DEFAULT_WIDTH = 720
 const MIN_WIDTH = 320
 const MAX_WIDTH = 1200
 
-function loadWidth(): number {
-  try {
-    const raw = localStorage.getItem(WIDTH_STORAGE_KEY)
-    if (!raw) return DEFAULT_WIDTH
+const widthCodec = {
+  serialize: (n: number) => String(n),
+  parse: (raw: string) => {
     const n = parseInt(raw, 10)
     if (!Number.isFinite(n)) return DEFAULT_WIDTH
     return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, n))
-  } catch {
-    return DEFAULT_WIDTH
-  }
+  },
 }
 
 interface ArtifactsPanelProps {
@@ -49,17 +47,13 @@ export function ArtifactsPanel({
   onClose,
 }: ArtifactsPanelProps) {
   const artifacts = useMemo(() => aggregateArtifacts(corpus), [corpus])
-  const [width, setWidth] = useState<number>(() => loadWidth())
+  const [width, setWidth] = useLocalStorage<number>(
+    WIDTH_STORAGE_KEY,
+    DEFAULT_WIDTH,
+    widthCodec,
+  )
   const [resizing, setResizing] = useState(false)
   const panelRef = useRef<HTMLElement>(null)
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(WIDTH_STORAGE_KEY, String(width))
-    } catch {
-      // storage quota / private mode — drop silently
-    }
-  }, [width])
 
   function onHandlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     e.preventDefault()
