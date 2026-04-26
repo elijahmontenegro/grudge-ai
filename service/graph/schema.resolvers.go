@@ -353,11 +353,9 @@ func (r *mutationResolver) StopAgent(ctx context.Context, threadID string) (bool
 
 // PauseAgent is the resolver for the pauseAgent field.
 func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (bool, error) {
-	r.runnersMu.Lock()
-	if entry, ok := r.runners[threadID]; ok {
-		entry.runner.PauseAutonomous()
+	if entry, ok := r.runners.Get(threadID); ok {
+		entry.Runner.PauseAutonomous()
 	}
-	r.runnersMu.Unlock()
 	st, err := r.DB.GetAgentState(threadID)
 	if err != nil {
 		return false, fmt.Errorf("load state: %w", err)
@@ -407,12 +405,10 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 	//       kick a fresh RunAutonomous goroutine so the UX doesn't lie.
 	//       Previously this case silently no-op'd, leaving the UI
 	//       showing "running" forever while no goroutine was alive.
-	r.runnersMu.Lock()
-	entry, haveEntry := r.runners[threadID]
-	r.runnersMu.Unlock()
+	entry, haveEntry := r.runners.Get(threadID)
 	restartedAutonomous := false
-	if haveEntry && entry.runner.IsAutonomousActive() {
-		entry.runner.ResumeAutonomous()
+	if haveEntry && entry.Runner.IsAutonomousActive() {
+		entry.Runner.ResumeAutonomous()
 	} else if st.Mode == storage.AgentModeAutonomous {
 		remaining, perr := remainingAutonomousDuration(st)
 		if perr == nil && remaining > 0 {
@@ -421,11 +417,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 				return false, fmt.Errorf("restart runner: %w", rerr)
 			}
 			autoCtx, autoCancel := context.WithCancel(context.Background())
-			r.runnersMu.Lock()
-			if e, ok := r.runners[threadID]; ok {
-				e.cancel = autoCancel
-			}
-			r.runnersMu.Unlock()
+			r.runners.SetCancel(threadID, autoCancel)
 			// Continuation prompt — non-empty so the model gets a
 			// clear directive rather than inferring from RRC alone.
 			// If the caller supplied a correction it's already been
@@ -485,11 +477,7 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 		return false, fmt.Errorf("create runner: %w", err)
 	}
 	autoCtx, autoCancel := context.WithCancel(context.Background())
-	r.runnersMu.Lock()
-	if entry, ok := r.runners[threadID]; ok {
-		entry.cancel = autoCancel
-	}
-	r.runnersMu.Unlock()
+	r.runners.SetCancel(threadID, autoCancel)
 
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: AgentStatusRunning, Mode: AgentModeAutonomous,
@@ -732,11 +720,7 @@ func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, exe
 			return false, fmt.Errorf("create runner: %w", err)
 		}
 		autoCtx, autoCancel := context.WithCancel(context.Background())
-		r.runnersMu.Lock()
-		if entry, ok := r.runners[threadID]; ok {
-			entry.cancel = autoCancel
-		}
-		r.runnersMu.Unlock()
+		r.runners.SetCancel(threadID, autoCancel)
 		go func() {
 			defer r.stopRunner(threadID)
 			defer r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)

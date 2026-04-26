@@ -24,6 +24,7 @@ import (
 	"github.com/emontenegr/spidey/service/sandbox"
 	"github.com/emontenegr/spidey/service/search"
 	"github.com/emontenegr/spidey/service/runtime/pubsub"
+	runtimerunner "github.com/emontenegr/spidey/service/runtime/runner"
 	"github.com/emontenegr/spidey/service/skills"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/adk/tool"
@@ -100,9 +101,12 @@ type Resolver struct {
 	// (Engine is goroutine-safe via its own internal RWMutex; the
 	// resolver no longer owns or passes a shared lock.)
 
-	// Active runners per thread — for autonomous/plan mode
-	runners   map[string]*runnerEntry
-	runnersMu sync.Mutex
+	// Active runners per thread — for autonomous/plan mode.
+	// Lifecycle (insert / lookup / delete / iterate) lives on the
+	// Registry; the resolver still owns the side-effects around
+	// stop (subagent merge, pubsub) since they reach into other
+	// kernel surfaces.
+	runners *runtimerunner.Registry
 
 	// Per-thread fan-out topics for UI subscriptions. Each is a
 	// thin instance of pubsub.Topic / pubsub.Broadcast — the five
@@ -137,7 +141,7 @@ func NewResolver(db *storage.DB, engine *rrc.Engine, cfg *config.Config, searche
 		pendingApprovals: make(map[string]chan bool),
 		pendingAnswers:   make(map[string]chan string),
 		pendingThreadIDs: make(map[string]string),
-		runners:          make(map[string]*runnerEntry),
+		runners:          runtimerunner.NewRegistry(),
 		streams:          pubsub.NewTopic[*StreamEvent](),
 		agents:           pubsub.NewTopic[*AgentState](),
 		tools:            pubsub.NewTopic[*ToolExecution](),
@@ -285,37 +289,21 @@ func (r *Resolver) ReloadProviders() error {
 
 	// Kill all existing runners — they hold references to old providers.
 	// Next getOrCreateRunner call builds a fresh runner with the new config.
-	r.runnersMu.Lock()
-	for tid := range r.runners {
-		entry := r.runners[tid]
-		if entry.cancel != nil {
-			entry.cancel()
-		}
-		if entry.askCh != nil {
-			close(entry.askCh)
-		}
-		delete(r.runners, tid)
-	}
-	r.runnersMu.Unlock()
+	r.runners.StopAll()
 
 	return nil
 }
 
-// runnerEntry tracks an active runner and its cancellation.
-type runnerEntry struct {
-	runner         *agent.Runner
-	cancel         context.CancelFunc
-	parentThreadID string              // non-empty for subagent forks — merge on stop
-	askCh          chan agent.AskRequest // closed on stop to terminate the ask goroutine
-}
+// runnerEntry is the graph-package alias for the registry's
+// Entry type. Kept as a local alias so existing call sites in
+// this package remain readable; the canonical type lives in
+// runtime/runner.
+type runnerEntry = runtimerunner.Entry
 
 // getOrCreateRunner returns the active runner for a thread, creating one if needed.
 func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
-	r.runnersMu.Lock()
-	defer r.runnersMu.Unlock()
-
-	if entry, ok := r.runners[threadID]; ok {
-		return entry.runner, nil
+	if entry, ok := r.runners.Get(threadID); ok {
+		return entry.Runner, nil
 	}
 
 	thread, err := r.DB.GetThread(threadID)
@@ -450,18 +438,18 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 		},
 		PlanDir: filepath.Join(r.Config.DataDir, "plans"),
 		SpawnAgent: func(ctx context.Context, task, forkID string) (string, error) {
-			entry, ok := r.runners[threadID]
+			entry, ok := r.runners.Get(threadID)
 			if !ok {
 				return "", fmt.Errorf("no runner for thread %s", threadID)
 			}
-			fork, err := entry.runner.SpawnSubagent(ctx, task, forkID)
+			fork, err := entry.Runner.SpawnSubagent(ctx, task, forkID)
 			if err != nil {
 				return "", err
 			}
-			r.runners[forkID] = &runnerEntry{
-				runner:         fork,
-				parentThreadID: threadID,
-			}
+			r.runners.Set(forkID, &runnerEntry{
+				Runner:         fork,
+				ParentThreadID: threadID,
+			})
 			r.publishSubagent(threadID, &SubagentProgress{
 				ThreadID: threadID, ForkThreadID: forkID,
 				Task: task, Status: "running", RoundCount: 0,
@@ -469,19 +457,19 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 			return "Subagent started: " + forkID, nil
 		},
 		SendToAgent: func(ctx context.Context, agentID, message string) (string, error) {
-			entry, ok := r.runners[agentID]
+			entry, ok := r.runners.Get(agentID)
 			if !ok {
 				return "", fmt.Errorf("no runner for agent %s", agentID)
 			}
-			resp, err := entry.runner.SendMessage(ctx, message, pb.SelectionScope_SELECTION_SCOPE_THREAD)
+			resp, err := entry.Runner.SendMessage(ctx, message, pb.SelectionScope_SELECTION_SCOPE_THREAD)
 			if err != nil {
 				return "", err
 			}
 			// Incremental merge after each subagent interaction — edges and scores
 			// accumulate in the parent. Merge is idempotent (scores use INSERT OR REPLACE).
-			if entry.parentThreadID != "" {
-				if parentEntry, pOk := r.runners[entry.parentThreadID]; pOk {
-					parentEntry.runner.MergeSubagent(entry.runner)
+			if entry.ParentThreadID != "" {
+				if parentEntry, pOk := r.runners.Get(entry.ParentThreadID); pOk {
+					parentEntry.Runner.MergeSubagent(entry.Runner)
 				}
 			}
 			return fmt.Sprintf("Response from %s: %d blocks", agentID, len(resp.Content)), nil
@@ -755,7 +743,7 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 		})
 	}
 
-	r.runners[threadID] = &runnerEntry{runner: runner, askCh: askCh}
+	r.runners.Set(threadID, &runnerEntry{Runner: runner, AskCh: askCh})
 	return runner, nil
 }
 
@@ -778,40 +766,38 @@ func (r *Resolver) storeMessage(msg *pb.Message, _text string) error {
 // stopRunner stops and removes a thread's runner.
 // For subagent forks, merges edges and scores back into the parent before cleanup.
 func (r *Resolver) stopRunner(threadID string) {
-	r.runnersMu.Lock()
-	defer r.runnersMu.Unlock()
-	entry, ok := r.runners[threadID]
+	entry, ok := r.runners.Get(threadID)
 	if !ok {
 		return
 	}
 	// Merge subagent fork back into parent
-	if entry.parentThreadID != "" {
-		if parentEntry, pOk := r.runners[entry.parentThreadID]; pOk {
-			if err := parentEntry.runner.MergeSubagent(entry.runner); err != nil {
-				log.Printf("Subagent merge %s → %s: %v", threadID, entry.parentThreadID, err)
+	if entry.ParentThreadID != "" {
+		if parentEntry, pOk := r.runners.Get(entry.ParentThreadID); pOk {
+			if err := parentEntry.Runner.MergeSubagent(entry.Runner); err != nil {
+				log.Printf("Subagent merge %s → %s: %v", threadID, entry.ParentThreadID, err)
 			}
 		}
-		r.publishSubagent(entry.parentThreadID, &SubagentProgress{
-			ThreadID: entry.parentThreadID, ForkThreadID: threadID,
+		r.publishSubagent(entry.ParentThreadID, &SubagentProgress{
+			ThreadID: entry.ParentThreadID, ForkThreadID: threadID,
 			Status: "completed",
 		})
 	}
 	// Cancel the in-flight turn (if any) before cancelling the
 	// autonomous-loop ctx. The turn's ctx is a child of whatever
-	// caller ctx ADK is running under; entry.cancel is the
+	// caller ctx ADK is running under; entry.Cancel is the
 	// autonomous outer loop's ctx. A non-autonomous streaming send
-	// has no entry.cancel — the turn-cancel is the only lever that
+	// has no entry.Cancel — the turn-cancel is the only lever that
 	// reaches it.
-	if entry.runner != nil {
-		entry.runner.CancelTurn()
+	if entry.Runner != nil {
+		entry.Runner.CancelTurn()
 	}
-	if entry.cancel != nil {
-		entry.cancel()
+	if entry.Cancel != nil {
+		entry.Cancel()
 	}
-	if entry.askCh != nil {
-		close(entry.askCh)
+	if entry.AskCh != nil {
+		close(entry.AskCh)
 	}
-	delete(r.runners, threadID)
+	r.runners.Delete(threadID)
 }
 
 // unsubscribeOnDone waits for ctx.Done, then calls cleanup under the lock.

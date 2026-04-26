@@ -93,11 +93,7 @@ func (r *Resolver) reconcileRow(ctx context.Context, st *storage.AgentState) str
 	}
 
 	autoCtx, autoCancel := context.WithCancel(context.Background())
-	r.runnersMu.Lock()
-	if e, ok := r.runners[st.ThreadID]; ok {
-		e.cancel = autoCancel
-	}
-	r.runnersMu.Unlock()
+	r.runners.SetCancel(st.ThreadID, autoCancel)
 
 	// Keep the DB row's Running/Autonomous status intact — the
 	// resumed goroutine will maintain it. Publish to subscribers so
