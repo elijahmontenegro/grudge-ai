@@ -26,14 +26,6 @@ func TextToProto(text string) []*pb.ContentBlock {
 	}
 }
 
-// MessageToLLM converts a corpus Message to an LLMMessage (wire format).
-func MessageToLLM(msg *pb.Message) *pb.LLMMessage {
-	return &pb.LLMMessage{
-		Role:    msg.Role,
-		Content: msg.Content,
-	}
-}
-
 // --- genai <-> proto conversions ---
 
 // GenaiContentToProto converts a single genai.Content to proto LLMMessage.
