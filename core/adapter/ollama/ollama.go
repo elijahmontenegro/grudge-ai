@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"log"
 	"net/http"
 	"os"
@@ -237,82 +238,69 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 	}, nil
 }
 
-func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-chan *pb.StreamChunk, error) {
-	cr := chatRequest{
-		Model:    c.model,
-		Messages: toLlamaMsgs(req.Messages),
-		Stream:   true,
-		Options:  providerOpts(req),
-		Tools:    toOllamaTools(req.Tools),
-	}
-	body, err := json.Marshal(cr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Always log the wire size — without this, a 5xx from the upstream
-	// comes back as "provider endpoint unreachable" and no one knows
-	// whether we sent 2KB or 2MB. The 503s we investigated on 2026-04-23
-	// correlated with a particular assembly size; having the bytes in
-	// the log per-request is the only way to confirm or rule that out
-	// in the moment.
-	log.Printf("[Ollama] Stream request: %d msgs, %d tools, %d bytes", len(cr.Messages), len(cr.Tools), len(body))
-
-	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/chat", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.streamClient.Do(ctx, httpReq)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		// Read the body so the error message from Ollama/Ollama Cloud
-		// makes it into the log. Silently dropping it meant every
-		// upstream failure showed up as a bare "ollama returned 500"
-		// with no way to know why. Bounded read so a huge error page
-		// doesn't eat memory.
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
-		resp.Body.Close()
-		log.Printf("[Ollama] Stream error %d: %d msgs, %d tools, body %d bytes, response: %s",
-			resp.StatusCode, len(cr.Messages), len(cr.Tools), len(body), strings.TrimSpace(string(b)))
-		// Dump the failing request body to disk once per process so
-		// it can be replayed outside spidey. Only when the server
-		// signalled 5xx (genuine upstream rejection rather than
-		// client-side 4xx which has its own specific error body).
-		// One-shot via sync.Once — the retry loop sends the same
-		// bytes repeatedly; dumping per-attempt would overwrite
-		// without adding info.
-		if resp.StatusCode >= 500 {
-			dumpFailingRequestOnce(body)
+func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
+	return func(yield func(*pb.StreamChunk, error) bool) {
+		cr := chatRequest{
+			Model:    c.model,
+			Messages: toLlamaMsgs(req.Messages),
+			Stream:   true,
+			Options:  providerOpts(req),
+			Tools:    toOllamaTools(req.Tools),
 		}
-		return nil, &httpc.StatusError{Provider: "ollama", StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(b))}
-	}
+		body, err := json.Marshal(cr)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
 
-	ch := make(chan *pb.StreamChunk)
-	go func() {
-		defer close(ch)
+		log.Printf("[Ollama] Stream request: %d msgs, %d tools, %d bytes", len(cr.Messages), len(cr.Tools), len(body))
+
+		httpReq, err := http.NewRequest("POST", c.baseURL+"/api/chat", bytes.NewReader(body))
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err := c.streamClient.Do(ctx, httpReq)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
+			resp.Body.Close()
+			log.Printf("[Ollama] Stream error %d: %d msgs, %d tools, body %d bytes, response: %s",
+				resp.StatusCode, len(cr.Messages), len(cr.Tools), len(body), strings.TrimSpace(string(b)))
+			if resp.StatusCode >= 500 {
+				dumpFailingRequestOnce(body)
+			}
+			yield(nil, &httpc.StatusError{Provider: "ollama", StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(b))})
+			return
+		}
 		defer resp.Body.Close()
+
 		dec := json.NewDecoder(resp.Body)
 		for {
 			var chunk chatResponse
 			if err := dec.Decode(&chunk); err != nil {
 				if err != io.EOF {
-					ch <- &pb.StreamChunk{Done: true, Error: ptr(err.Error())}
+					yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
 				}
 				return
 			}
-			// Emit content from this chunk: thinking, text, tool calls.
 			if chunk.Message.Thinking != "" {
-				ch <- &pb.StreamChunk{
+				if !yield(&pb.StreamChunk{
 					Delta: &pb.StreamChunk_Thinking{Thinking: &pb.ThinkingContent{Text: chunk.Message.Thinking}},
+				}, nil) {
+					return
 				}
 			}
 			if chunk.Message.Content != "" {
-				ch <- &pb.StreamChunk{
+				if !yield(&pb.StreamChunk{
 					Delta: &pb.StreamChunk_Text{Text: &pb.TextContent{Text: chunk.Message.Content}},
+				}, nil) {
+					return
 				}
 			}
 			for _, tc := range chunk.Message.ToolCalls {
@@ -320,27 +308,28 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-ch
 				if len(tc.Function.Arguments) > 0 {
 					argsStr = string(tc.Function.Arguments)
 				}
-				ch <- &pb.StreamChunk{
+				if !yield(&pb.StreamChunk{
 					Delta: &pb.StreamChunk_ToolCall{ToolCall: &pb.ToolCallContent{
 						Id:        tc.ID,
 						Name:      tc.Function.Name,
 						Arguments: argsStr,
 					}},
+				}, nil) {
+					return
 				}
 			}
 			if chunk.Done {
-				ch <- &pb.StreamChunk{
+				yield(&pb.StreamChunk{
 					Done: true,
 					Usage: &pb.Usage{
 						PromptTokens:     int32(chunk.PromptEval),
 						CompletionTokens: int32(chunk.EvalCount),
 					},
-				}
+				}, nil)
 				return
 			}
 		}
-	}()
-	return ch, nil
+	}
 }
 
 // --- Embedder ---

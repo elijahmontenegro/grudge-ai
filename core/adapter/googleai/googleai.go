@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"net/http"
 	"strings"
 
@@ -145,32 +146,32 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 	}, nil
 }
 
-func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-chan *pb.StreamChunk, error) {
-	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s", baseURL, c.model, c.apiKey)
+func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
+	return func(yield func(*pb.StreamChunk, error) bool) {
+		url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s", baseURL, c.model, c.apiKey)
 
-	body, err := json.Marshal(toGenerateRequest(req))
-	if err != nil {
-		return nil, err
-	}
+		body, err := json.Marshal(toGenerateRequest(req))
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
 
-	httpReq, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.streamClient.Do(ctx, httpReq)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, &httpc.StatusError{Provider: "googleai", StatusCode: resp.StatusCode}
-	}
-
-	ch := make(chan *pb.StreamChunk)
-	go func() {
-		defer close(ch)
+		resp, err := c.streamClient.Do(ctx, httpReq)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			yield(nil, &httpc.StatusError{Provider: "googleai", StatusCode: resp.StatusCode})
+			return
+		}
 		defer resp.Body.Close()
 
 		scanner := bufio.NewScanner(resp.Body)
@@ -183,36 +184,37 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-ch
 
 			var chunk generateResponse
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				ch <- &pb.StreamChunk{Done: true, Error: ptr(err.Error())}
+				yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
 				return
 			}
 
 			if len(chunk.Candidates) > 0 {
 				for _, p := range chunk.Candidates[0].Content.Parts {
 					if p.Text != "" {
-						ch <- &pb.StreamChunk{
+						if !yield(&pb.StreamChunk{
 							Delta: &pb.StreamChunk_Text{Text: &pb.TextContent{Text: p.Text}},
+						}, nil) {
+							return
 						}
 					}
 				}
 			}
 
 			if chunk.UsageMeta.PromptTokenCount > 0 {
-				ch <- &pb.StreamChunk{
+				yield(&pb.StreamChunk{
 					Done: true,
 					Usage: &pb.Usage{
 						PromptTokens:     chunk.UsageMeta.PromptTokenCount,
 						CompletionTokens: chunk.UsageMeta.CandidatesTokenCount,
 					},
-				}
+				}, nil)
 				return
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			ch <- &pb.StreamChunk{Done: true, Error: ptr(err.Error())}
+			yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
 		}
-	}()
-	return ch, nil
+	}
 }
 
 // --- Embedder ---

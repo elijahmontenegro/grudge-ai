@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"net/http"
 	"strings"
 
@@ -150,33 +151,33 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 	}, nil
 }
 
-func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-chan *pb.StreamChunk, error) {
-	apiReq := toAPIRequest(c.model, req, true)
+func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
+	return func(yield func(*pb.StreamChunk, error) bool) {
+		apiReq := toAPIRequest(c.model, req, true)
+		body, err := json.Marshal(apiReq)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		httpReq, err := http.NewRequest("POST", c.baseURL+"/v1/messages", bytes.NewReader(body))
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
 
-	body, err := json.Marshal(apiReq)
-	if err != nil {
-		return nil, err
-	}
-
-	httpReq, err := http.NewRequest("POST", c.baseURL+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.streamClient.Do(ctx, httpReq)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, &httpc.StatusError{Provider: "anthropic", StatusCode: resp.StatusCode}
-	}
-
-	ch := make(chan *pb.StreamChunk)
-	go func() {
-		defer close(ch)
+		resp, err := c.streamClient.Do(ctx, httpReq)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			yield(nil, &httpc.StatusError{Provider: "anthropic", StatusCode: resp.StatusCode})
+			return
+		}
 		defer resp.Body.Close()
+
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -190,40 +191,43 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-ch
 
 			var event sseEvent
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				ch <- &pb.StreamChunk{Done: true, Error: ptr(err.Error())}
+				yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
 				return
 			}
 
 			switch event.Type {
 			case "content_block_delta":
 				if event.Delta.Type == "text_delta" {
-					ch <- &pb.StreamChunk{
+					if !yield(&pb.StreamChunk{
 						Delta: &pb.StreamChunk_Text{Text: &pb.TextContent{Text: event.Delta.Text}},
+					}, nil) {
+						return
 					}
 				} else if event.Delta.Type == "thinking_delta" {
-					ch <- &pb.StreamChunk{
+					if !yield(&pb.StreamChunk{
 						Delta: &pb.StreamChunk_Thinking{Thinking: &pb.ThinkingContent{Text: event.Delta.Thinking}},
+					}, nil) {
+						return
 					}
 				}
 			case "message_delta":
-				ch <- &pb.StreamChunk{
+				yield(&pb.StreamChunk{
 					Done: true,
 					Usage: &pb.Usage{
 						PromptTokens:     event.Usage.InputTokens,
 						CompletionTokens: event.Usage.OutputTokens,
 					},
-				}
+				}, nil)
 				return
 			case "error":
-				ch <- &pb.StreamChunk{Done: true, Error: ptr(event.Error.Message)}
+				yield(&pb.StreamChunk{Done: true, Error: ptr(event.Error.Message)}, nil)
 				return
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			ch <- &pb.StreamChunk{Done: true, Error: ptr(err.Error())}
+			yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
 		}
-	}()
-	return ch, nil
+	}
 }
 
 type sseEvent struct {

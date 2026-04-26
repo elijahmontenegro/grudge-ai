@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"net/http"
 	"strings"
 
@@ -162,30 +163,30 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 	}, nil
 }
 
-func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-chan *pb.StreamChunk, error) {
-	body, err := json.Marshal(toChatRequest(c.model, req, true))
-	if err != nil {
-		return nil, err
-	}
+func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
+	return func(yield func(*pb.StreamChunk, error) bool) {
+		body, err := json.Marshal(toChatRequest(c.model, req, true))
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		httpReq, err := http.NewRequest("POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
 
-	httpReq, err := http.NewRequest("POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.streamClient.Do(ctx, httpReq)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, &httpc.StatusError{Provider: "openai", StatusCode: resp.StatusCode}
-	}
-
-	ch := make(chan *pb.StreamChunk)
-	go func() {
-		defer close(ch)
+		resp, err := c.streamClient.Do(ctx, httpReq)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			yield(nil, &httpc.StatusError{Provider: "openai", StatusCode: resp.StatusCode})
+			return
+		}
 		defer resp.Body.Close()
 
 		var totalUsage *pb.Usage
@@ -197,13 +198,13 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-ch
 			}
 			data := line[6:]
 			if data == "[DONE]" {
-				ch <- &pb.StreamChunk{Done: true, Usage: totalUsage}
+				yield(&pb.StreamChunk{Done: true, Usage: totalUsage}, nil)
 				return
 			}
 
 			var chunk chatResponse
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				ch <- &pb.StreamChunk{Done: true, Error: ptr(err.Error())}
+				yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
 				return
 			}
 
@@ -221,25 +222,28 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) (<-ch
 			delta := chunk.Choices[0].Delta
 			content, _ := delta.Content.(string)
 			if content != "" {
-				ch <- &pb.StreamChunk{
+				if !yield(&pb.StreamChunk{
 					Delta: &pb.StreamChunk_Text{Text: &pb.TextContent{Text: content}},
+				}, nil) {
+					return
 				}
 			}
 			for _, tc := range delta.ToolCalls {
-				ch <- &pb.StreamChunk{
+				if !yield(&pb.StreamChunk{
 					Delta: &pb.StreamChunk_ToolCall{ToolCall: &pb.ToolCallContent{
 						Id:        tc.ID,
 						Name:      tc.Function.Name,
 						Arguments: tc.Function.Arguments,
 					}},
+				}, nil) {
+					return
 				}
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			ch <- &pb.StreamChunk{Done: true, Error: ptr(err.Error())}
+			yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
 		}
-	}()
-	return ch, nil
+	}
 }
 
 // --- Embedder ---

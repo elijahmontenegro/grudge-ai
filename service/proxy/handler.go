@@ -103,18 +103,23 @@ func (h *Handler) completeThrough(ctx context.Context, w http.ResponseWriter, co
 }
 
 func (h *Handler) streamThrough(ctx context.Context, w http.ResponseWriter, codec core.Codec, req *pb.CompletionRequest) {
-	ch, err := h.completer.Stream(ctx, req)
-	if err != nil {
-		writeProxyError(w, err)
-		return
-	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	flusher, _ := w.(http.Flusher)
-	for chunk := range ch {
-		bytes, err := codec.EncodeChunk(chunk)
+	headersSent := false
+	for chunk, err := range h.completer.Stream(ctx, req) {
 		if err != nil {
+			if !headersSent {
+				writeProxyError(w, err)
+				return
+			}
 			fmt.Fprintf(w, "data: {\"error\":%q}\n\n", err.Error())
+			return
+		}
+		headersSent = true
+		bytes, encErr := codec.EncodeChunk(chunk)
+		if encErr != nil {
+			fmt.Fprintf(w, "data: {\"error\":%q}\n\n", encErr.Error())
 			return
 		}
 		w.Write(bytes)

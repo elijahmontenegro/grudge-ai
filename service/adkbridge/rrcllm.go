@@ -438,25 +438,49 @@ func (r *RRCLLM) tryComplete(ctx context.Context, protoReq *pb.CompletionRequest
 	return nil
 }
 
-// tryStream opens a streaming request and returns the initial error
-// (if any) without yielding it — so the shed loop can observe a
-// context-overflow and retry. Once the stream begins yielding chunks,
-// further errors are yielded to ADK through the iterator (no retry
-// possible past that point, the turn is committed).
+// tryStream opens a streaming request and returns the initial
+// error (if any) without yielding it — so the shed loop can
+// observe a context-overflow and retry. Once the stream begins
+// yielding chunks, further errors are yielded to ADK through the
+// iterator (no retry possible past that point, the turn is
+// committed).
+//
+// iter.Pull2 lets us inspect the first emission before committing
+// to the ADK iterator: a handshake error appears as (nil, err) on
+// pull #1, and we return it for the outer shed loop. Anything
+// else means the stream has begun and we're past the retry
+// window.
 func (r *RRCLLM) tryStream(ctx context.Context, protoReq *pb.CompletionRequest, yield func(*model.LLMResponse, error) bool) error {
-	ch, err := r.completer.Stream(ctx, protoReq)
+	next, stop := iter.Pull2(r.completer.Stream(ctx, protoReq))
+	defer stop()
+
+	chunk, err, ok := next()
+	if !ok {
+		yield(&model.LLMResponse{
+			TurnComplete: true,
+			Content: &genai.Content{
+				Role:  "model",
+				Parts: []*genai.Part{{Text: ""}},
+			},
+		}, nil)
+		if r.OnStream != nil {
+			r.OnStream("", "", true)
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 
-	// Track function calls seen during the stream. ADK checks the LAST event
-	// to decide whether to continue the tool loop (IsFinalResponse checks
-	// hasFunctionCalls). If the last event is an empty Done signal, ADK exits
-	// the loop and never executes the tool. The Done response must carry any
-	// pending function calls so ADK sees them and continues.
+	// Track function calls seen during the stream. ADK checks the
+	// LAST event to decide whether to continue the tool loop
+	// (IsFinalResponse checks hasFunctionCalls). If the last event
+	// is an empty Done signal, ADK exits the loop and never
+	// executes the tool. The Done response must carry any pending
+	// function calls so ADK sees them and continues.
 	var pendingCalls []*genai.Part
 
-	for chunk := range ch {
+	for {
 		resp := &model.LLMResponse{Partial: true}
 		if t := chunk.GetText(); t != nil {
 			resp.Content = &genai.Content{
@@ -516,18 +540,31 @@ func (r *RRCLLM) tryStream(ctx context.Context, protoReq *pb.CompletionRequest, 
 		if !yield(resp, nil) {
 			return nil
 		}
+
+		chunk, err, ok = next()
+		if !ok {
+			yield(&model.LLMResponse{
+				TurnComplete: true,
+				Content: &genai.Content{
+					Role:  "model",
+					Parts: []*genai.Part{{Text: ""}},
+				},
+			}, nil)
+			if r.OnStream != nil {
+				r.OnStream("", "", true)
+			}
+			return nil
+		}
+		if err != nil {
+			// Mid-stream error after first chunk delivered — yield
+			// to ADK, can't retry.
+			yield(&model.LLMResponse{
+				TurnComplete: true,
+				ErrorMessage: err.Error(),
+			}, nil)
+			return nil
+		}
 	}
-	yield(&model.LLMResponse{
-		TurnComplete: true,
-		Content: &genai.Content{
-			Role:  "model",
-			Parts: []*genai.Part{{Text: ""}},
-		},
-	}, nil)
-	if r.OnStream != nil {
-		r.OnStream("", "", true)
-	}
-	return nil
 }
 
 // parseToolArgs converts a JSON arguments string to map[string]any for genai.FunctionCall.
