@@ -19,6 +19,7 @@ import (
 	"github.com/emontenegr/spidey/service/adkbridge"
 	"github.com/emontenegr/spidey/service/adoc"
 	"github.com/emontenegr/spidey/service/config"
+	runtimerunner "github.com/emontenegr/spidey/service/runtime/runner"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -781,7 +782,7 @@ func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feed
 // re-renders with the edited version. The model will see the new content on
 // its next FileRead of plan.adoc.
 func (r *mutationResolver) UpdatePlanSource(ctx context.Context, threadID string, content string) (bool, error) {
-	planDir, err := planDirForThread(r.Config.DataDir, threadID)
+	planDir, err := runtimerunner.PlanDirForThread(r.Config.DataDir, threadID)
 	if err != nil {
 		return false, err
 	}

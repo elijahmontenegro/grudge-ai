@@ -2,59 +2,28 @@ package graph
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/adapter/tei"
-	completerretry "github.com/emontenegr/spidey/core/completer/retry"
 	"github.com/emontenegr/spidey/core/retry"
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/service/adoc"
 	"github.com/emontenegr/spidey/service/agent"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/hooks"
 	"github.com/emontenegr/spidey/service/prompt"
-	"github.com/emontenegr/spidey/service/sandbox"
-	"github.com/emontenegr/spidey/service/search"
 	"github.com/emontenegr/spidey/service/runtime/pubsub"
 	runtimerunner "github.com/emontenegr/spidey/service/runtime/runner"
+	"github.com/emontenegr/spidey/service/search"
 	"github.com/emontenegr/spidey/service/skills"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/adk/tool"
 )
-
-// parseAnswerPayload interprets the raw answer string the frontend sent
-// to answerQuestion. For multi-question tool calls the frontend sends a
-// JSON object keyed by question text; for a single question it may send
-// either a JSON map or a plain string, so both shapes are accepted.
-// Missing questions resolve to empty strings so the model sees a
-// complete map.
-func parseAnswerPayload(raw string, questions []agent.AskUserQuestion) map[string]string {
-	var asMap map[string]string
-	if err := json.Unmarshal([]byte(raw), &asMap); err == nil && asMap != nil {
-		out := make(map[string]string, len(questions))
-		for _, q := range questions {
-			out[q.Question] = asMap[q.Question]
-		}
-		return out
-	}
-	out := make(map[string]string, len(questions))
-	for i, q := range questions {
-		if i == 0 {
-			out[q.Question] = raw
-		} else {
-			out[q.Question] = ""
-		}
-	}
-	return out
-}
 
 // Resolver is the root resolver, holding all service dependencies.
 type Resolver struct {
@@ -294,457 +263,23 @@ func (r *Resolver) ReloadProviders() error {
 	return nil
 }
 
-// runnerEntry is the graph-package alias for the registry's
-// Entry type. Kept as a local alias so existing call sites in
-// this package remain readable; the canonical type lives in
-// runtime/runner.
-type runnerEntry = runtimerunner.Entry
-
-// getOrCreateRunner returns the active runner for a thread, creating one if needed.
+// getOrCreateRunner returns the active runner for a thread, creating
+// one via the runtime/runner factory if no entry exists. The factory
+// owns every concern previously inlined here — askCh goroutine,
+// ToolDeps construction, prompt assembly, retry wrapping, callback
+// wiring. The resolver supplies the bridge interfaces (Pubsub /
+// Approvals / PlanStore / Selections / EmbedEnqueuer) via runtimeDeps;
+// see runtimebridge.go for the implementations.
 func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 	if entry, ok := r.runners.Get(threadID); ok {
 		return entry.Runner, nil
 	}
-
-	thread, err := r.DB.GetThread(threadID)
+	entry, err := runtimerunner.Build(threadID, r.runtimeDeps())
 	if err != nil {
-		return nil, fmt.Errorf("get thread %s: %w", threadID, err)
+		return nil, fmt.Errorf("build runner %s: %w", threadID, err)
 	}
-	workingDirs := thread.WorkingDirs
-
-	// Per-thread sandbox workspace. Created lazily on first runner
-	// construction; layout mirrors plans/plan-{tid}/ so the two
-	// thread-local resources sit side by side in the data dir.
-	// Cheap to compute even when the thread isn't sandboxed — the
-	// directory just stays empty.
-	workspace, err := sandbox.WorkspaceDir(r.Config.DataDir, threadID)
-	if err != nil {
-		return nil, fmt.Errorf("workspace dir: %w", err)
-	}
-
-	// AskUserQuestion channel — goroutine reads from it, stopRunner closes it.
-	// Each request carries structured args (questions / headers / options /
-	// multiSelect). The payload published to the frontend IS the
-	// JSON-marshaled args so the UI has everything it needs to render
-	// option lists without a second round-trip. The frontend answers via
-	// answerQuestion(callId, answer) where `answer` is JSON of the
-	// question→answer map (or plain text when there's only one question).
-	askCh := make(chan agent.AskRequest, 1)
-	go func() {
-		for req := range askCh {
-			callID := fmt.Sprintf("ask-%d", time.Now().UnixNano())
-			argsJSON, err := json.Marshal(req.Args)
-			if err != nil {
-				// Shouldn't happen — Args is a plain struct. Fall back to
-				// empty-object so the frontend still renders something.
-				argsJSON = []byte(`{"questions":[]}`)
-			}
-			r.publishToolExec(threadID, &ToolExecution{
-				ThreadID: threadID, CallID: callID, ToolName: "AskUserQuestion",
-				Arguments: string(argsJSON), Status: "waiting_for_user",
-			})
-			respCh := make(chan string, 1)
-			r.pendingApprovalsMu.Lock()
-			r.pendingAnswers[callID] = respCh
-			r.pendingApprovalsMu.Unlock()
-
-			timer := time.NewTimer(5 * time.Minute)
-			var answers map[string]string
-			select {
-			case <-timer.C:
-				answers = map[string]string{}
-			case raw := <-respCh:
-				answers = parseAnswerPayload(raw, req.Args.Questions)
-			}
-			timer.Stop()
-
-			req.RespCh <- answers
-
-			r.publishToolExec(threadID, &ToolExecution{
-				ThreadID: threadID, CallID: callID, ToolName: "AskUserQuestion",
-				Arguments: string(argsJSON), Status: "completed",
-			})
-			r.pendingApprovalsMu.Lock()
-			delete(r.pendingAnswers, callID)
-			r.pendingApprovalsMu.Unlock()
-		}
-	}()
-
-	// Convert loaded skills to agent.SkillDef
-	var skillDefs []agent.SkillDef
-	for _, s := range r.Skills {
-		skillDefs = append(skillDefs, agent.SkillDef{Name: s.Name, Content: s.Content})
-	}
-
-	// Search provider URL from settings (SearXNG or compatible)
-	searchURL := ""
-	if searchCfg, ok := r.Config.Settings.Providers["search"]; ok {
-		searchURL = searchCfg.BaseURL
-	}
-
-	tools, err := agent.BuildTools(agent.ToolDeps{
-		Sandboxed:   thread.Sandboxed,
-		Workspace:   workspace,
-		WorkingDirs: workingDirs,
-		Tasks:       agent.NewTaskStore(),
-		ThreadID:    threadID,
-		Skills:      skillDefs,
-		SearchURL:   searchURL,
-		IsPlanMode: func() bool {
-			st, _ := r.DB.GetAgentState(threadID)
-			return st != nil && st.Mode == storage.AgentModePlan
-		},
-		AgentState: func(mode string) error {
-			var m storage.AgentMode
-			switch mode {
-			case "plan":
-				m = storage.AgentModePlan
-			case "autonomous":
-				m = storage.AgentModeAutonomous
-			}
-			// Narrow UPDATE so an EnterPlan/ExitPlan call during an
-			// autonomous run doesn't wipe StartedAt/DurationLimit/RoundCount
-			// (the in-memory loop would keep running, but GetAgentState
-			// readers would see stale metadata).
-			if err := r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusRunning, m); err != nil {
-				return err
-			}
-			gqlMode := AgentModeNormal
-			if m == storage.AgentModeAutonomous {
-				gqlMode = AgentModeAutonomous
-			} else if m == storage.AgentModePlan {
-				gqlMode = AgentModePlan
-			}
-			// Preserve current planContent across publishes. ExitPlan fires
-			// OnPlanContent then AgentState("normal") in sequence — without
-			// this, the second publish's nil planContent clobbers the first,
-			// and the frontend PlanPanel never renders because the last
-			// subscription event it sees has no plan.
-			r.planContentMu.RLock()
-			var planPtr *string
-			if pc, ok := r.planContent[threadID]; ok && pc != "" {
-				copied := pc
-				planPtr = &copied
-			}
-			r.planContentMu.RUnlock()
-			r.publishAgentState(threadID, &AgentState{
-				ThreadID: threadID, Status: AgentStatusRunning, Mode: gqlMode,
-				PlanContent: planPtr,
-			})
-			return nil
-		},
-		CompileAdoc: func(path string) (string, error) {
-			return adoc.Compile(path)
-		},
-		PlanDir: filepath.Join(r.Config.DataDir, "plans"),
-		SpawnAgent: func(ctx context.Context, task, forkID string) (string, error) {
-			entry, ok := r.runners.Get(threadID)
-			if !ok {
-				return "", fmt.Errorf("no runner for thread %s", threadID)
-			}
-			fork, err := entry.Runner.SpawnSubagent(ctx, task, forkID)
-			if err != nil {
-				return "", err
-			}
-			r.runners.Set(forkID, &runnerEntry{
-				Runner:         fork,
-				ParentThreadID: threadID,
-			})
-			r.publishSubagent(threadID, &SubagentProgress{
-				ThreadID: threadID, ForkThreadID: forkID,
-				Task: task, Status: "running", RoundCount: 0,
-			})
-			return "Subagent started: " + forkID, nil
-		},
-		SendToAgent: func(ctx context.Context, agentID, message string) (string, error) {
-			entry, ok := r.runners.Get(agentID)
-			if !ok {
-				return "", fmt.Errorf("no runner for agent %s", agentID)
-			}
-			resp, err := entry.Runner.SendMessage(ctx, message, pb.SelectionScope_SELECTION_SCOPE_THREAD)
-			if err != nil {
-				return "", err
-			}
-			// Incremental merge after each subagent interaction — edges and scores
-			// accumulate in the parent. Merge is idempotent (scores use INSERT OR REPLACE).
-			if entry.ParentThreadID != "" {
-				if parentEntry, pOk := r.runners.Get(entry.ParentThreadID); pOk {
-					parentEntry.Runner.MergeSubagent(entry.Runner)
-				}
-			}
-			return fmt.Sprintf("Response from %s: %d blocks", agentID, len(resp.Content)), nil
-		},
-		ApprovalFn: func(ctx context.Context, callID, toolName, args string) (bool, error) {
-			// Publish pending tool execution to frontend
-			r.publishToolExec(threadID, &ToolExecution{
-				ThreadID: threadID, CallID: callID, ToolName: toolName,
-				Arguments: args, Status: "pending",
-			})
-			// Create approval channel and wait (5 minute timeout to prevent goroutine leak)
-			ch := make(chan bool, 1)
-			r.pendingApprovalsMu.Lock()
-			r.pendingApprovals[callID] = ch
-			r.pendingThreadIDs[callID] = threadID
-			r.pendingApprovalsMu.Unlock()
-			defer func() {
-				r.pendingApprovalsMu.Lock()
-				delete(r.pendingApprovals, callID)
-				delete(r.pendingThreadIDs, callID)
-				r.pendingApprovalsMu.Unlock()
-			}()
-			timer := time.NewTimer(5 * time.Minute)
-			defer timer.Stop()
-			select {
-			case <-ctx.Done():
-				r.publishToolExec(threadID, &ToolExecution{
-					ThreadID: threadID, CallID: callID, ToolName: toolName,
-					Arguments: args, Status: "cancelled",
-				})
-				return false, ctx.Err()
-			case <-timer.C:
-				r.publishToolExec(threadID, &ToolExecution{
-					ThreadID: threadID, CallID: callID, ToolName: toolName,
-					Arguments: args, Status: "timeout",
-				})
-				return false, fmt.Errorf("tool approval timed out after 5 minutes")
-			case approved := <-ch:
-				status := "approved"
-				if !approved {
-					status = "denied"
-				}
-				r.publishToolExec(threadID, &ToolExecution{
-					ThreadID: threadID, CallID: callID, ToolName: toolName,
-					Arguments: args, Status: status,
-				})
-				return approved, nil
-			}
-		},
-		HookFn: func(ctx context.Context, event, toolName string) error {
-			if r.Hooks == nil {
-				return nil
-			}
-			result, err := r.Hooks.Fire(ctx, event, toolName)
-			if err != nil {
-				return err
-			}
-			if result != nil && result.Blocked {
-				return fmt.Errorf("hook blocked %s on %s: %s", event, toolName, result.Output)
-			}
-			return nil
-		},
-		Permissions: r.Config.Settings.Permissions,
-		AskCh: askCh,
-		OnPlanContent: func(content string) {
-			r.planContentMu.Lock()
-			r.planContent[threadID] = content
-			r.planContentMu.Unlock()
-			// Publish updated agent state with plan content. Mode stays
-			// Plan — ExitPlan used to flip to Normal here but now it just
-			// surfaces the plan. The user flips mode explicitly via
-			// approvePlan (to Normal/Autonomous) or keeps iterating (stays
-			// Plan). Status stays Idle since the model's turn is either
-			// about to end naturally or the runner is between rounds.
-			pc := content
-			r.publishAgentState(threadID, &AgentState{
-				ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModePlan,
-				PlanContent: &pc,
-			})
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build tools: %w", err)
-	}
-
-	// Append MCP tools
-	tools = append(tools, r.MCPTools...)
-	modelName := ""
-	if mainCfg, ok := r.Config.Settings.Providers["main"]; ok {
-		modelName = mainCfg.Model
-	}
-
-	// Assemble system prompt from templates
-	instruction := ""
-	if r.Assembler != nil {
-		threadName := thread.Name
-		st, _ := r.DB.GetAgentState(threadID)
-		mode := "normal"
-		if st != nil {
-			switch st.Mode {
-			case storage.AgentModeAutonomous:
-				mode = "autonomous"
-			case storage.AgentModePlan:
-				mode = "plan"
-			}
-		}
-		spideyMD := prompt.LoadSpideyMD(workingDirs)
-		planDir, err := planDirForThread(r.Config.DataDir, threadID)
-		if err != nil {
-			return nil, fmt.Errorf("plan dir: %w", err)
-		}
-		assembled, err := r.Assembler.Assemble(prompt.TemplateData{
-			UserName:    r.Config.Settings.GetUserName(),
-			ThreadName:  threadName,
-			Sandboxed:   thread.Sandboxed,
-			WorkingDirs: workingDirs,
-			SpideyMD:    spideyMD,
-			PlanDir:     planDir,
-			CurrentTime: time.Now().Format(time.RFC3339),
-			Mode:        mode,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("assemble prompt: %w", err)
-		} else {
-			instruction = assembled
-		}
-	} else {
-		return nil, fmt.Errorf("prompt assembler not initialized — templates directory missing")
-	}
-
-	// Wrap the main completer with retry. The retry wrapper closes over
-	// threadID so transient failures surface as RetryStatus events on
-	// THIS thread's AgentState subscription — the UI renders the
-	// indicator contextually. Principled retry per the retry package:
-	// bounded attempts, exponential backoff, auth/4xx errors surface
-	// immediately without consuming retry budget.
-	mainWithRetry := completerretry.New(r.Main, retry.DefaultPolicy(), func(ev retry.Event) {
-		r.publishRetryStatus(threadID, ev)
-	})
-	rerankerModelID := ""
-	if r.Config != nil {
-		if cls, ok := r.Config.Settings.Providers["classifier"]; ok {
-			rerankerModelID = cls.Model
-		}
-	}
-	runner, err := agent.NewRunner(r.Engine, mainWithRetry, r.DB, threadID, tools, modelName, instruction, rerankerModelID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Wire streaming deltas to GraphQL subscriptions
-	runner.SetStreamCallback(func(delta, thinking string, done bool) {
-		event := &StreamEvent{MessageID: threadID, Done: done}
-		if delta != "" {
-			event.Delta = &delta
-		}
-		if thinking != "" {
-			event.Thinking = &thinking
-		}
-		r.publishStream(threadID, event)
-	})
-
-	// Wire selection results for introspection + outbound citation tracking.
-	// The in-memory map remains the hot-path read; persistence is the
-	// durable record that survives restart so historical turns can be
-	// audited. Write-through on every callback — same semantics as the
-	// score-cache persister hook.
-	runner.SetSelectionCallback(func(result *pb.SelectionResult) {
-		r.mu.Lock()
-		r.selectionResults[result.EventId] = result
-		r.latestSelection[threadID] = result.EventId
-		for _, sel := range result.Selected {
-			r.citationCount[sel.MessageId]++
-		}
-		r.mu.Unlock()
-
-		// Event IDs are synthesized as sel-<target_message_id> in the
-		// engine. Strip the prefix to recover the target for the
-		// selections table FK.
-		targetID := result.EventId
-		if len(targetID) > 4 && targetID[:4] == "sel-" {
-			targetID = targetID[4:]
-		}
-		if err := r.DB.SaveSelection(result, targetID, threadID); err != nil {
-			log.Printf("SaveSelection(event=%s target=%s): %v", result.EventId, targetID, err)
-		}
-	})
-
-	// Wire round callback for autonomous mode
-	runner.SetRoundCallback(func(round int, elapsed time.Duration) {
-		elapsedStr := elapsed.Truncate(time.Second).String()
-		durLimit := ""
-		if st, _ := r.DB.GetAgentState(threadID); st != nil {
-			durLimit = st.DurationLimit
-		}
-		r.publishAgentState(threadID, &AgentState{
-			ThreadID: threadID, Status: AgentStatusRunning, Mode: AgentModeAutonomous,
-			RoundCount: round, ElapsedTime: &elapsedStr, DurationLimit: &durLimit,
-		})
-		// Round 93 fix: narrow UPDATE so we don't wipe StartedAt/DurationLimit
-		// set by StartAutonomous at the beginning of the run.
-		r.DB.SetAgentRoundCount(threadID, round)
-	})
-
-	// Wire tool call/result events to GraphQL subscriptions
-	runner.OnToolCall = func(callID, toolName, args string) {
-		r.publishToolExec(threadID, &ToolExecution{
-			ThreadID: threadID, CallID: callID, ToolName: toolName,
-			Arguments: args, Status: "running",
-		})
-	}
-	runner.OnToolResult = func(callID, toolName, result string, isError bool) {
-		status := "completed"
-		if isError {
-			status = "failed"
-		}
-		r.publishToolExec(threadID, &ToolExecution{
-			ThreadID: threadID, CallID: callID, ToolName: toolName,
-			Arguments: "", Status: status, Result: &result, IsError: &isError,
-		})
-	}
-
-	// Embed-on-arrival for search indexing. Each message's chunks get
-	// embedded as soon as it's stored so RRC's cosine prefilter has
-	// vectors ready by the time the next OnMessage call fires.
-	// Routes through the bounded EmbedQueue — see the EmbedQueue
-	// doc comment for why the raw `go searcher.EmbedMessageChunks`
-	// pattern was insufficient. Reads via r.EmbedQueue() which is
-	// atomic so a settings reload can swap the queue without racing
-	// the hot path.
-	runner.OnMessageStored = func(msgID, _text string) {
-		if q := r.EmbedQueue(); q != nil {
-			q.Enqueue(msgID)
-		}
-	}
-
-	// Per spec (spec/web/MANIFEST.adoc:187): autonomous errors pause the
-	// run rather than exit it. Handler writes the error as a system
-	// message so it's visible in-thread, pauses the autoState so the
-	// loop blocks at the next waitIfPaused, and publishes Paused to the
-	// UI. Resume (with optional correction) picks up from there.
-	runner.OnAutonomousError = func(err error) {
-		// Previously this wrote the error as a SYSTEM-role pb.Message
-		// into the thread corpus so the UI would see it. That was
-		// double-wrong:
-		//  1. UX — an error banner landing in the conversation stream
-		//     as if it were a chat message conflates transient
-		//     operational state with durable dialog content.
-		//  2. Corpus pollution — permanent. The error message becomes
-		//     a Selection candidate for future rounds; the reranker
-		//     scores it similarly to other "something broke" material
-		//     and surfaces it as a phantom prereq. Once in the corpus,
-		//     it never leaves, and its noise compounds across future
-		//     queries.
-		//
-		// Correct path: publish the error through the AgentState
-		// subscription as a retry-final event. The UI already renders
-		// RetryStatus{Final:true, Error:...} as a pause banner with
-		// the error text — no corpus write needed.
-		log.Printf("[Autonomous] mid-run error on %s: %v — pausing", threadID, err)
-		runner.PauseAutonomous()
-		_ = r.DB.SetAgentStatus(threadID, storage.AgentStatusPaused)
-		errMsg := err.Error()
-		r.publishAgentState(threadID, &AgentState{
-			ThreadID: threadID, Status: AgentStatusPaused, Mode: AgentModeAutonomous,
-			Retry: &RetryStatus{
-				Attempt: 1, MaxAttempts: 1,
-				Error: &errMsg,
-				Final: true,
-			},
-		})
-	}
-
-	r.runners.Set(threadID, &runnerEntry{Runner: runner, AskCh: askCh})
-	return runner, nil
+	r.runners.Set(threadID, entry)
+	return entry.Runner, nil
 }
 
 // storeMessage inserts a message (which cascades into chunk creation
