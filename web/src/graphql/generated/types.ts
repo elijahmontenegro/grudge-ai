@@ -785,15 +785,3 @@ export type ThreadStateChangesSubscriptionVariables = Exact<{ [key: string]: nev
 
 
 export type ThreadStateChangesSubscription = { __typename?: 'Subscription', threadStateChanges: { __typename?: 'ThreadStateEvent', threadId: string, status: AgentStatus, mode: AgentMode, warmth: number, name: string } };
-
-export type FirstRunGetSettingsQueryVariables = Exact<{ [key: string]: never; }>;
-
-
-export type FirstRunGetSettingsQuery = { __typename?: 'Query', settings: { __typename?: 'Settings', providers: string, preferences: string } };
-
-export type FirstRunSaveSettingsMutationVariables = Exact<{
-  input: SettingsInput;
-}>;
-
-
-export type FirstRunSaveSettingsMutation = { __typename?: 'Mutation', updateSettings: { __typename?: 'Settings', providers: string, preferences: string } };

@@ -1,24 +1,11 @@
 import { useEffect, useState } from 'react'
-import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
-
-const FIRSTRUN_GET_SETTINGS = gql`
-  query FirstRunGetSettings {
-    settings {
-      providers
-      preferences
-    }
-  }
-`
-
-const FIRSTRUN_SAVE_SETTINGS = gql`
-  mutation FirstRunSaveSettings($input: SettingsInput!) {
-    updateSettings(input: $input) {
-      providers
-      preferences
-    }
-  }
-`
+import { GET_SETTINGS, UPDATE_SETTINGS } from '@/graphql/operations'
+import type {
+  GetSettingsQuery,
+  UpdateSettingsMutation,
+  UpdateSettingsMutationVariables,
+} from '@/graphql/generated/types'
 
 interface ProviderConfig {
   adapter: string
@@ -52,10 +39,11 @@ function parse<T>(raw: string | undefined | null, fallback: T): T {
 // later in Settings. They are NOT auto-probed — the backend only
 // initializes providers that appear in config.Settings.Providers.
 export function FirstRun({ onComplete }: { onComplete: () => void }) {
-  const { data } = useQuery<{ settings: { providers: string; preferences: string } }>(
-    FIRSTRUN_GET_SETTINGS,
-  )
-  const [save, { loading: saving, error: saveError }] = useMutation(FIRSTRUN_SAVE_SETTINGS)
+  const { data } = useQuery<GetSettingsQuery>(GET_SETTINGS)
+  const [save, { loading: saving, error: saveError }] = useMutation<
+    UpdateSettingsMutation,
+    UpdateSettingsMutationVariables
+  >(UPDATE_SETTINGS)
 
   const [name, setName] = useState('')
   // Seed with sensible defaults for local Ollama; user overrides as needed.
