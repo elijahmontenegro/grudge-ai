@@ -9,7 +9,6 @@ package v1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	structpb "google.golang.org/protobuf/types/known/structpb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -21,6 +20,64 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+// ToolChoiceMode controls whether and which tool the model is
+// expected to invoke. Default (UNSPECIFIED) maps to AUTO. Each
+// adapter translates to its provider's wire vocabulary.
+type ToolChoiceMode int32
+
+const (
+	ToolChoiceMode_TOOL_CHOICE_MODE_UNSPECIFIED ToolChoiceMode = 0
+	ToolChoiceMode_TOOL_CHOICE_MODE_AUTO        ToolChoiceMode = 1 // model chooses freely
+	ToolChoiceMode_TOOL_CHOICE_MODE_NONE        ToolChoiceMode = 2 // disallow tool calls
+	ToolChoiceMode_TOOL_CHOICE_MODE_REQUIRED    ToolChoiceMode = 3 // require any tool call
+	ToolChoiceMode_TOOL_CHOICE_MODE_NAMED       ToolChoiceMode = 4 // require the named tool
+)
+
+// Enum value maps for ToolChoiceMode.
+var (
+	ToolChoiceMode_name = map[int32]string{
+		0: "TOOL_CHOICE_MODE_UNSPECIFIED",
+		1: "TOOL_CHOICE_MODE_AUTO",
+		2: "TOOL_CHOICE_MODE_NONE",
+		3: "TOOL_CHOICE_MODE_REQUIRED",
+		4: "TOOL_CHOICE_MODE_NAMED",
+	}
+	ToolChoiceMode_value = map[string]int32{
+		"TOOL_CHOICE_MODE_UNSPECIFIED": 0,
+		"TOOL_CHOICE_MODE_AUTO":        1,
+		"TOOL_CHOICE_MODE_NONE":        2,
+		"TOOL_CHOICE_MODE_REQUIRED":    3,
+		"TOOL_CHOICE_MODE_NAMED":       4,
+	}
+)
+
+func (x ToolChoiceMode) Enum() *ToolChoiceMode {
+	p := new(ToolChoiceMode)
+	*p = x
+	return p
+}
+
+func (x ToolChoiceMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ToolChoiceMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_spidey_v1_llm_proto_enumTypes[0].Descriptor()
+}
+
+func (ToolChoiceMode) Type() protoreflect.EnumType {
+	return &file_spidey_v1_llm_proto_enumTypes[0]
+}
+
+func (x ToolChoiceMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ToolChoiceMode.Descriptor instead.
+func (ToolChoiceMode) EnumDescriptor() ([]byte, []int) {
+	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{0}
+}
 
 type LLMMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -136,6 +193,60 @@ func (x *ToolDeclaration) GetParametersJson() string {
 	return ""
 }
 
+// ToolChoice constrains the model's tool invocation. named_tool is
+// only consulted when mode == TOOL_CHOICE_MODE_NAMED.
+type ToolChoice struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mode          ToolChoiceMode         `protobuf:"varint,1,opt,name=mode,proto3,enum=spidey.v1.ToolChoiceMode" json:"mode,omitempty"`
+	NamedTool     string                 `protobuf:"bytes,2,opt,name=named_tool,json=namedTool,proto3" json:"named_tool,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolChoice) Reset() {
+	*x = ToolChoice{}
+	mi := &file_spidey_v1_llm_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolChoice) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolChoice) ProtoMessage() {}
+
+func (x *ToolChoice) ProtoReflect() protoreflect.Message {
+	mi := &file_spidey_v1_llm_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolChoice.ProtoReflect.Descriptor instead.
+func (*ToolChoice) Descriptor() ([]byte, []int) {
+	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ToolChoice) GetMode() ToolChoiceMode {
+	if x != nil {
+		return x.Mode
+	}
+	return ToolChoiceMode_TOOL_CHOICE_MODE_UNSPECIFIED
+}
+
+func (x *ToolChoice) GetNamedTool() string {
+	if x != nil {
+		return x.NamedTool
+	}
+	return ""
+}
+
 type CompletionRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Messages    []*LLMMessage          `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
@@ -145,19 +256,17 @@ type CompletionRequest struct {
 	TopP        *float32               `protobuf:"fixed32,5,opt,name=top_p,json=topP,proto3,oneof" json:"top_p,omitempty"`
 	Stop        []string               `protobuf:"bytes,6,rep,name=stop,proto3" json:"stop,omitempty"`
 	Stream      bool                   `protobuf:"varint,7,opt,name=stream,proto3" json:"stream,omitempty"`
-	// Provider-specific parameters. Passed through to the upstream API.
-	// Avoids leaking the abstraction when a provider supports options
-	// we don't model explicitly.
-	ProviderOptions *structpb.Struct `protobuf:"bytes,8,opt,name=provider_options,json=providerOptions,proto3" json:"provider_options,omitempty"`
 	// Tool declarations — functions the model can call.
-	Tools         []*ToolDeclaration `protobuf:"bytes,9,rep,name=tools,proto3" json:"tools,omitempty"`
+	Tools []*ToolDeclaration `protobuf:"bytes,9,rep,name=tools,proto3" json:"tools,omitempty"`
+	// Tool-choice constraint. Optional — unset means model decides.
+	ToolChoice    *ToolChoice `protobuf:"bytes,10,opt,name=tool_choice,json=toolChoice,proto3" json:"tool_choice,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CompletionRequest) Reset() {
 	*x = CompletionRequest{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[2]
+	mi := &file_spidey_v1_llm_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -169,7 +278,7 @@ func (x *CompletionRequest) String() string {
 func (*CompletionRequest) ProtoMessage() {}
 
 func (x *CompletionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[2]
+	mi := &file_spidey_v1_llm_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -182,7 +291,7 @@ func (x *CompletionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompletionRequest.ProtoReflect.Descriptor instead.
 func (*CompletionRequest) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{2}
+	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *CompletionRequest) GetMessages() []*LLMMessage {
@@ -234,13 +343,6 @@ func (x *CompletionRequest) GetStream() bool {
 	return false
 }
 
-func (x *CompletionRequest) GetProviderOptions() *structpb.Struct {
-	if x != nil {
-		return x.ProviderOptions
-	}
-	return nil
-}
-
 func (x *CompletionRequest) GetTools() []*ToolDeclaration {
 	if x != nil {
 		return x.Tools
@@ -248,19 +350,30 @@ func (x *CompletionRequest) GetTools() []*ToolDeclaration {
 	return nil
 }
 
+func (x *CompletionRequest) GetToolChoice() *ToolChoice {
+	if x != nil {
+		return x.ToolChoice
+	}
+	return nil
+}
+
 type CompletionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Message       *LLMMessage            `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	Usage         *Usage                 `protobuf:"bytes,3,opt,name=usage,proto3" json:"usage,omitempty"`
-	Model         string                 `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Id      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Message *LLMMessage            `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	Usage   *Usage                 `protobuf:"bytes,3,opt,name=usage,proto3" json:"usage,omitempty"`
+	Model   string                 `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
+	// Why generation stopped. Provider-specific strings, normalized
+	// by the adapter to: "stop", "length", "tool_calls",
+	// "content_filter", or empty.
+	FinishReason  string `protobuf:"bytes,5,opt,name=finish_reason,json=finishReason,proto3" json:"finish_reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CompletionResponse) Reset() {
 	*x = CompletionResponse{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[3]
+	mi := &file_spidey_v1_llm_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -272,7 +385,7 @@ func (x *CompletionResponse) String() string {
 func (*CompletionResponse) ProtoMessage() {}
 
 func (x *CompletionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[3]
+	mi := &file_spidey_v1_llm_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -285,7 +398,7 @@ func (x *CompletionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompletionResponse.ProtoReflect.Descriptor instead.
 func (*CompletionResponse) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{3}
+	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CompletionResponse) GetId() string {
@@ -316,6 +429,13 @@ func (x *CompletionResponse) GetModel() string {
 	return ""
 }
 
+func (x *CompletionResponse) GetFinishReason() string {
+	if x != nil {
+		return x.FinishReason
+	}
+	return ""
+}
+
 type Usage struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	PromptTokens     int32                  `protobuf:"varint,1,opt,name=prompt_tokens,json=promptTokens,proto3" json:"prompt_tokens,omitempty"`
@@ -326,7 +446,7 @@ type Usage struct {
 
 func (x *Usage) Reset() {
 	*x = Usage{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[4]
+	mi := &file_spidey_v1_llm_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -338,7 +458,7 @@ func (x *Usage) String() string {
 func (*Usage) ProtoMessage() {}
 
 func (x *Usage) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[4]
+	mi := &file_spidey_v1_llm_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -351,7 +471,7 @@ func (x *Usage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Usage.ProtoReflect.Descriptor instead.
 func (*Usage) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{4}
+	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Usage) GetPromptTokens() int32 {
@@ -375,17 +495,26 @@ type StreamChunk struct {
 	//	*StreamChunk_Text
 	//	*StreamChunk_Thinking
 	//	*StreamChunk_ToolCall
-	Delta         isStreamChunk_Delta `protobuf_oneof:"delta"`
-	Done          bool                `protobuf:"varint,4,opt,name=done,proto3" json:"done,omitempty"`
-	Usage         *Usage              `protobuf:"bytes,5,opt,name=usage,proto3,oneof" json:"usage,omitempty"`
-	Error         *string             `protobuf:"bytes,6,opt,name=error,proto3,oneof" json:"error,omitempty"` // Set on stream failure (done=true + error = failure)
+	//	*StreamChunk_ToolResult
+	Delta isStreamChunk_Delta `protobuf_oneof:"delta"`
+	Done  bool                `protobuf:"varint,4,opt,name=done,proto3" json:"done,omitempty"`
+	Usage *Usage              `protobuf:"bytes,5,opt,name=usage,proto3,oneof" json:"usage,omitempty"`
+	Error *string             `protobuf:"bytes,6,opt,name=error,proto3,oneof" json:"error,omitempty"` // Set on stream failure (done=true + error = failure)
+	// Provider-specific finish reason on the final chunk. Empty when
+	// generation has not stopped (intermediate chunks) or the
+	// provider didn't supply one.
+	FinishReason string `protobuf:"bytes,8,opt,name=finish_reason,json=finishReason,proto3" json:"finish_reason,omitempty"`
+	// Choice index for providers that emit multiple parallel
+	// completions (OpenAI's `n` parameter). Default 0 — single-choice
+	// path.
+	ChoiceIndex   int32 `protobuf:"varint,9,opt,name=choice_index,json=choiceIndex,proto3" json:"choice_index,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StreamChunk) Reset() {
 	*x = StreamChunk{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[5]
+	mi := &file_spidey_v1_llm_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -397,7 +526,7 @@ func (x *StreamChunk) String() string {
 func (*StreamChunk) ProtoMessage() {}
 
 func (x *StreamChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[5]
+	mi := &file_spidey_v1_llm_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -410,7 +539,7 @@ func (x *StreamChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamChunk.ProtoReflect.Descriptor instead.
 func (*StreamChunk) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{5}
+	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *StreamChunk) GetDelta() isStreamChunk_Delta {
@@ -447,6 +576,15 @@ func (x *StreamChunk) GetToolCall() *ToolCallContent {
 	return nil
 }
 
+func (x *StreamChunk) GetToolResult() *ToolResultContent {
+	if x != nil {
+		if x, ok := x.Delta.(*StreamChunk_ToolResult); ok {
+			return x.ToolResult
+		}
+	}
+	return nil
+}
+
 func (x *StreamChunk) GetDone() bool {
 	if x != nil {
 		return x.Done
@@ -468,6 +606,20 @@ func (x *StreamChunk) GetError() string {
 	return ""
 }
 
+func (x *StreamChunk) GetFinishReason() string {
+	if x != nil {
+		return x.FinishReason
+	}
+	return ""
+}
+
+func (x *StreamChunk) GetChoiceIndex() int32 {
+	if x != nil {
+		return x.ChoiceIndex
+	}
+	return 0
+}
+
 type isStreamChunk_Delta interface {
 	isStreamChunk_Delta()
 }
@@ -484,17 +636,23 @@ type StreamChunk_ToolCall struct {
 	ToolCall *ToolCallContent `protobuf:"bytes,3,opt,name=tool_call,json=toolCall,proto3,oneof"`
 }
 
+type StreamChunk_ToolResult struct {
+	ToolResult *ToolResultContent `protobuf:"bytes,7,opt,name=tool_result,json=toolResult,proto3,oneof"`
+}
+
 func (*StreamChunk_Text) isStreamChunk_Delta() {}
 
 func (*StreamChunk_Thinking) isStreamChunk_Delta() {}
 
 func (*StreamChunk_ToolCall) isStreamChunk_Delta() {}
 
+func (*StreamChunk_ToolResult) isStreamChunk_Delta() {}
+
 var File_spidey_v1_llm_proto protoreflect.FileDescriptor
 
 const file_spidey_v1_llm_proto_rawDesc = "" +
 	"\n" +
-	"\x13spidey/v1/llm.proto\x12\tspidey.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16spidey/v1/thread.proto\"d\n" +
+	"\x13spidey/v1/llm.proto\x12\tspidey.v1\x1a\x16spidey/v1/thread.proto\"d\n" +
 	"\n" +
 	"LLMMessage\x12#\n" +
 	"\x04role\x18\x01 \x01(\x0e2\x0f.spidey.v1.RoleR\x04role\x121\n" +
@@ -502,7 +660,12 @@ const file_spidey_v1_llm_proto_rawDesc = "" +
 	"\x0fToolDeclaration\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12'\n" +
-	"\x0fparameters_json\x18\x03 \x01(\tR\x0eparametersJson\"\x8c\x03\n" +
+	"\x0fparameters_json\x18\x03 \x01(\tR\x0eparametersJson\"Z\n" +
+	"\n" +
+	"ToolChoice\x12-\n" +
+	"\x04mode\x18\x01 \x01(\x0e2\x19.spidey.v1.ToolChoiceModeR\x04mode\x12\x1d\n" +
+	"\n" +
+	"named_tool\x18\x02 \x01(\tR\tnamedTool\"\x80\x03\n" +
 	"\x11CompletionRequest\x121\n" +
 	"\bmessages\x18\x01 \x03(\v2\x15.spidey.v1.LLMMessageR\bmessages\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\"\n" +
@@ -511,30 +674,43 @@ const file_spidey_v1_llm_proto_rawDesc = "" +
 	"\vtemperature\x18\x04 \x01(\x02H\x01R\vtemperature\x88\x01\x01\x12\x18\n" +
 	"\x05top_p\x18\x05 \x01(\x02H\x02R\x04topP\x88\x01\x01\x12\x12\n" +
 	"\x04stop\x18\x06 \x03(\tR\x04stop\x12\x16\n" +
-	"\x06stream\x18\a \x01(\bR\x06stream\x12B\n" +
-	"\x10provider_options\x18\b \x01(\v2\x17.google.protobuf.StructR\x0fproviderOptions\x120\n" +
-	"\x05tools\x18\t \x03(\v2\x1a.spidey.v1.ToolDeclarationR\x05toolsB\r\n" +
+	"\x06stream\x18\a \x01(\bR\x06stream\x120\n" +
+	"\x05tools\x18\t \x03(\v2\x1a.spidey.v1.ToolDeclarationR\x05tools\x126\n" +
+	"\vtool_choice\x18\n" +
+	" \x01(\v2\x15.spidey.v1.ToolChoiceR\n" +
+	"toolChoiceB\r\n" +
 	"\v_max_tokensB\x0e\n" +
 	"\f_temperatureB\b\n" +
-	"\x06_top_p\"\x93\x01\n" +
+	"\x06_top_p\"\xb8\x01\n" +
 	"\x12CompletionResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12/\n" +
 	"\amessage\x18\x02 \x01(\v2\x15.spidey.v1.LLMMessageR\amessage\x12&\n" +
 	"\x05usage\x18\x03 \x01(\v2\x10.spidey.v1.UsageR\x05usage\x12\x14\n" +
-	"\x05model\x18\x04 \x01(\tR\x05model\"Y\n" +
+	"\x05model\x18\x04 \x01(\tR\x05model\x12#\n" +
+	"\rfinish_reason\x18\x05 \x01(\tR\ffinishReason\"Y\n" +
 	"\x05Usage\x12#\n" +
 	"\rprompt_tokens\x18\x01 \x01(\x05R\fpromptTokens\x12+\n" +
-	"\x11completion_tokens\x18\x02 \x01(\x05R\x10completionTokens\"\xa9\x02\n" +
+	"\x11completion_tokens\x18\x02 \x01(\x05R\x10completionTokens\"\xb2\x03\n" +
 	"\vStreamChunk\x12,\n" +
 	"\x04text\x18\x01 \x01(\v2\x16.spidey.v1.TextContentH\x00R\x04text\x128\n" +
 	"\bthinking\x18\x02 \x01(\v2\x1a.spidey.v1.ThinkingContentH\x00R\bthinking\x129\n" +
-	"\ttool_call\x18\x03 \x01(\v2\x1a.spidey.v1.ToolCallContentH\x00R\btoolCall\x12\x12\n" +
+	"\ttool_call\x18\x03 \x01(\v2\x1a.spidey.v1.ToolCallContentH\x00R\btoolCall\x12?\n" +
+	"\vtool_result\x18\a \x01(\v2\x1c.spidey.v1.ToolResultContentH\x00R\n" +
+	"toolResult\x12\x12\n" +
 	"\x04done\x18\x04 \x01(\bR\x04done\x12+\n" +
 	"\x05usage\x18\x05 \x01(\v2\x10.spidey.v1.UsageH\x01R\x05usage\x88\x01\x01\x12\x19\n" +
-	"\x05error\x18\x06 \x01(\tH\x02R\x05error\x88\x01\x01B\a\n" +
+	"\x05error\x18\x06 \x01(\tH\x02R\x05error\x88\x01\x01\x12#\n" +
+	"\rfinish_reason\x18\b \x01(\tR\ffinishReason\x12!\n" +
+	"\fchoice_index\x18\t \x01(\x05R\vchoiceIndexB\a\n" +
 	"\x05deltaB\b\n" +
 	"\x06_usageB\b\n" +
-	"\x06_errorB\x8d\x01\n" +
+	"\x06_error*\xa3\x01\n" +
+	"\x0eToolChoiceMode\x12 \n" +
+	"\x1cTOOL_CHOICE_MODE_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15TOOL_CHOICE_MODE_AUTO\x10\x01\x12\x19\n" +
+	"\x15TOOL_CHOICE_MODE_NONE\x10\x02\x12\x1d\n" +
+	"\x19TOOL_CHOICE_MODE_REQUIRED\x10\x03\x12\x1a\n" +
+	"\x16TOOL_CHOICE_MODE_NAMED\x10\x04B\x8d\x01\n" +
 	"\rcom.spidey.v1B\bLlmProtoP\x01Z-github.com/emontenegr/spidey/gen/go/spidey/v1\xa2\x02\x03SXX\xaa\x02\tSpidey.V1\xca\x02\tSpidey\\V1\xe2\x02\x15Spidey\\V1\\GPBMetadata\xea\x02\n" +
 	"Spidey::V1b\x06proto3"
 
@@ -550,38 +726,43 @@ func file_spidey_v1_llm_proto_rawDescGZIP() []byte {
 	return file_spidey_v1_llm_proto_rawDescData
 }
 
-var file_spidey_v1_llm_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_spidey_v1_llm_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_spidey_v1_llm_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_spidey_v1_llm_proto_goTypes = []any{
-	(*LLMMessage)(nil),         // 0: spidey.v1.LLMMessage
-	(*ToolDeclaration)(nil),    // 1: spidey.v1.ToolDeclaration
-	(*CompletionRequest)(nil),  // 2: spidey.v1.CompletionRequest
-	(*CompletionResponse)(nil), // 3: spidey.v1.CompletionResponse
-	(*Usage)(nil),              // 4: spidey.v1.Usage
-	(*StreamChunk)(nil),        // 5: spidey.v1.StreamChunk
-	(Role)(0),                  // 6: spidey.v1.Role
-	(*ContentBlock)(nil),       // 7: spidey.v1.ContentBlock
-	(*structpb.Struct)(nil),    // 8: google.protobuf.Struct
-	(*TextContent)(nil),        // 9: spidey.v1.TextContent
-	(*ThinkingContent)(nil),    // 10: spidey.v1.ThinkingContent
-	(*ToolCallContent)(nil),    // 11: spidey.v1.ToolCallContent
+	(ToolChoiceMode)(0),        // 0: spidey.v1.ToolChoiceMode
+	(*LLMMessage)(nil),         // 1: spidey.v1.LLMMessage
+	(*ToolDeclaration)(nil),    // 2: spidey.v1.ToolDeclaration
+	(*ToolChoice)(nil),         // 3: spidey.v1.ToolChoice
+	(*CompletionRequest)(nil),  // 4: spidey.v1.CompletionRequest
+	(*CompletionResponse)(nil), // 5: spidey.v1.CompletionResponse
+	(*Usage)(nil),              // 6: spidey.v1.Usage
+	(*StreamChunk)(nil),        // 7: spidey.v1.StreamChunk
+	(Role)(0),                  // 8: spidey.v1.Role
+	(*ContentBlock)(nil),       // 9: spidey.v1.ContentBlock
+	(*TextContent)(nil),        // 10: spidey.v1.TextContent
+	(*ThinkingContent)(nil),    // 11: spidey.v1.ThinkingContent
+	(*ToolCallContent)(nil),    // 12: spidey.v1.ToolCallContent
+	(*ToolResultContent)(nil),  // 13: spidey.v1.ToolResultContent
 }
 var file_spidey_v1_llm_proto_depIdxs = []int32{
-	6,  // 0: spidey.v1.LLMMessage.role:type_name -> spidey.v1.Role
-	7,  // 1: spidey.v1.LLMMessage.content:type_name -> spidey.v1.ContentBlock
-	0,  // 2: spidey.v1.CompletionRequest.messages:type_name -> spidey.v1.LLMMessage
-	8,  // 3: spidey.v1.CompletionRequest.provider_options:type_name -> google.protobuf.Struct
-	1,  // 4: spidey.v1.CompletionRequest.tools:type_name -> spidey.v1.ToolDeclaration
-	0,  // 5: spidey.v1.CompletionResponse.message:type_name -> spidey.v1.LLMMessage
-	4,  // 6: spidey.v1.CompletionResponse.usage:type_name -> spidey.v1.Usage
-	9,  // 7: spidey.v1.StreamChunk.text:type_name -> spidey.v1.TextContent
-	10, // 8: spidey.v1.StreamChunk.thinking:type_name -> spidey.v1.ThinkingContent
-	11, // 9: spidey.v1.StreamChunk.tool_call:type_name -> spidey.v1.ToolCallContent
-	4,  // 10: spidey.v1.StreamChunk.usage:type_name -> spidey.v1.Usage
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	8,  // 0: spidey.v1.LLMMessage.role:type_name -> spidey.v1.Role
+	9,  // 1: spidey.v1.LLMMessage.content:type_name -> spidey.v1.ContentBlock
+	0,  // 2: spidey.v1.ToolChoice.mode:type_name -> spidey.v1.ToolChoiceMode
+	1,  // 3: spidey.v1.CompletionRequest.messages:type_name -> spidey.v1.LLMMessage
+	2,  // 4: spidey.v1.CompletionRequest.tools:type_name -> spidey.v1.ToolDeclaration
+	3,  // 5: spidey.v1.CompletionRequest.tool_choice:type_name -> spidey.v1.ToolChoice
+	1,  // 6: spidey.v1.CompletionResponse.message:type_name -> spidey.v1.LLMMessage
+	6,  // 7: spidey.v1.CompletionResponse.usage:type_name -> spidey.v1.Usage
+	10, // 8: spidey.v1.StreamChunk.text:type_name -> spidey.v1.TextContent
+	11, // 9: spidey.v1.StreamChunk.thinking:type_name -> spidey.v1.ThinkingContent
+	12, // 10: spidey.v1.StreamChunk.tool_call:type_name -> spidey.v1.ToolCallContent
+	13, // 11: spidey.v1.StreamChunk.tool_result:type_name -> spidey.v1.ToolResultContent
+	6,  // 12: spidey.v1.StreamChunk.usage:type_name -> spidey.v1.Usage
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_spidey_v1_llm_proto_init() }
@@ -590,24 +771,26 @@ func file_spidey_v1_llm_proto_init() {
 		return
 	}
 	file_spidey_v1_thread_proto_init()
-	file_spidey_v1_llm_proto_msgTypes[2].OneofWrappers = []any{}
-	file_spidey_v1_llm_proto_msgTypes[5].OneofWrappers = []any{
+	file_spidey_v1_llm_proto_msgTypes[3].OneofWrappers = []any{}
+	file_spidey_v1_llm_proto_msgTypes[6].OneofWrappers = []any{
 		(*StreamChunk_Text)(nil),
 		(*StreamChunk_Thinking)(nil),
 		(*StreamChunk_ToolCall)(nil),
+		(*StreamChunk_ToolResult)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_spidey_v1_llm_proto_rawDesc), len(file_spidey_v1_llm_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   6,
+			NumEnums:      1,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_spidey_v1_llm_proto_goTypes,
 		DependencyIndexes: file_spidey_v1_llm_proto_depIdxs,
+		EnumInfos:         file_spidey_v1_llm_proto_enumTypes,
 		MessageInfos:      file_spidey_v1_llm_proto_msgTypes,
 	}.Build()
 	File_spidey_v1_llm_proto = out.File
