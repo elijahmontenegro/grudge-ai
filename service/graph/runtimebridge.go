@@ -15,7 +15,7 @@ func (r *Resolver) runtimeDeps() runtimerunner.Deps {
 	return runtimerunner.Deps{
 		Registry:      r.Runners,
 		DB:            r.DB,
-		Engine:        r.Engine,
+		Engine:        r.Engine(),
 		Config:        r.Config,
 		Main:          r.Main,
 		Assembler:     r.Assembler,

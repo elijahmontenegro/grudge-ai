@@ -20,6 +20,14 @@
 // tiktoken, storage open + thread-name backfill, sandbox preflight,
 // substrate.Build, MCP toolset loading, prompt assembler, hooks
 // dispatcher, skills loading. main.go shrinks to a thin wrapper.
+//
+// Engine atomicity. The engine is held as an atomic.Pointer; reads
+// go through the Engine() accessor. ReloadProviders and
+// UpdateEngineConfig build a fresh engine via substrate.Build, then
+// store the new pointer in one atomic write. There is no mutation
+// surface on rrc.Engine — the previous setter-with-externally-held-
+// lock antipattern (engineMu plumbed from resolver → runner →
+// rrcllm) is gone.
 package kernel
 
 import (
@@ -33,7 +41,6 @@ import (
 	"time"
 
 	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/core/adapter/tei"
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/rrc/tiktoken"
@@ -53,12 +60,18 @@ import (
 
 // Kernel is the runtime substrate plus the per-thread runtime
 // state. Embedded into graph.Resolver so resolvers reach common
-// fields (DB, Engine, Config, Main) directly via promotion;
+// fields (DB, Config, Main, Runners) directly via promotion;
 // graph-specific concerns (pubsub topics) live on the resolver.
+//
+// Engine() is a method, not a field — the underlying pointer is
+// rotated atomically on settings changes. Callers must invoke
+// Engine() at the point of use; capturing the pointer for a long-
+// lived operation (e.g. agent.Runner) is acceptable when paired
+// with Runners.StopAll on reload, since stopped runners rebuild
+// against the new pointer.
 type Kernel struct {
 	Config     *config.Config
 	DB         *storage.DB
-	Engine     *rrc.Engine
 	Main       core.Completer
 	Classifier core.Classifier
 	Searcher   *search.Searcher
@@ -71,6 +84,10 @@ type Kernel struct {
 	// factory owns construction; lifecycle (cancel/close on stop,
 	// merge on subagent exit) is orchestrated by the consumer.
 	Runners *runtimerunner.Registry
+
+	// engine is rotated by ReloadProviders / UpdateEngineConfig.
+	// All callers read via Engine().
+	engine atomic.Pointer[rrc.Engine]
 
 	// embedQueue is atomic.Pointer so ReloadProviders can swap it
 	// during a settings change without racing against the hot
@@ -98,6 +115,12 @@ type Kernel struct {
 	pendingAnswers   map[string]chan string
 	pendingThreadIDs map[string]string
 	pendingMu        sync.Mutex
+
+	// reloadMu serializes ReloadProviders / UpdateEngineConfig so
+	// two concurrent settings saves can't interleave their
+	// substrate builds and produce an engine pointing at half-fresh,
+	// half-stale providers.
+	reloadMu sync.Mutex
 }
 
 // Bootstrap wires the runtime kernel from a loaded config. Returns
@@ -175,7 +198,6 @@ func Bootstrap(ctx context.Context, cfg *config.Config) (*Kernel, error) {
 	k := &Kernel{
 		Config:     cfg,
 		DB:         db,
-		Engine:     subs.Engine,
 		Main:       subs.MainCompleter,
 		Classifier: subs.Classifier,
 		Searcher:   subs.Searcher,
@@ -194,6 +216,7 @@ func Bootstrap(ctx context.Context, cfg *config.Config) (*Kernel, error) {
 		pendingAnswers:   make(map[string]chan string),
 		pendingThreadIDs: make(map[string]string),
 	}
+	k.engine.Store(subs.Engine)
 
 	if subs.Searcher != nil {
 		// 4 workers / 64-job buffer / 2m timeout — see EmbedQueue
@@ -210,6 +233,15 @@ func Bootstrap(ctx context.Context, cfg *config.Config) (*Kernel, error) {
 // if they want clean drain semantics.
 func (k *Kernel) Shutdown() error {
 	return k.DB.Close()
+}
+
+// Engine returns the currently-active RRC engine. The pointer is
+// stable for the duration of a single operation; if a settings
+// change races with a long-running call, both the old and new
+// engines remain functional — old in-flight ops complete on the
+// engine they captured, new ops land on the new engine.
+func (k *Kernel) Engine() *rrc.Engine {
+	return k.engine.Load()
 }
 
 // resolveTemplateDir walks the candidate paths (next to the
@@ -253,115 +285,100 @@ func (k *Kernel) setEmbedQueue(q *search.EmbedQueue) *search.EmbedQueue {
 	return k.embedQueue.Swap(q)
 }
 
-// ReloadProviders re-creates all providers from the current
-// config. Called after settings save. Updates the engine's
-// classifier and completer, rebuilds the main completer, and kills
-// stale runners so they pick up new providers on next
-// getOrCreateRunner.
-func (k *Kernel) ReloadProviders() error {
-	cfg := k.Config
+// ReloadProviders rebuilds the substrate from the current config
+// and atomically swaps in a fresh engine. Existing runners are
+// stopped — they captured the old engine pointer at construction;
+// next getOrCreateRunner builds against the new pointer. The old
+// embed queue is closed off the hot path.
+//
+// Concurrency: serialized by reloadMu so two simultaneous
+// settings saves cannot interleave substrate builds. Inside the
+// lock, the substrate is built first (failure here leaves the
+// kernel state untouched), then the engine is swapped in one
+// atomic write.
+func (k *Kernel) ReloadProviders(ctx context.Context) error {
+	k.reloadMu.Lock()
+	defer k.reloadMu.Unlock()
 
-	// Main completer.
-	if mainCfg, ok := cfg.Settings.Providers["main"]; ok && mainCfg.Adapter != "" {
-		p, err := core.NewProvider(mainCfg.ToCore())
-		if err != nil {
-			return fmt.Errorf("main provider: %w", err)
-		}
-		completer, err := p.Completer(mainCfg.Model)
-		if err != nil {
-			return fmt.Errorf("main completer %s/%s: %w", mainCfg.Adapter, mainCfg.Model, err)
-		}
-		k.Main = completer
+	subs, err := substrate.Build(ctx, k.Config, k.DB)
+	if err != nil {
+		return fmt.Errorf("rebuild substrate: %w", err)
 	}
 
-	// Classifier + vector provider. Both are keyed by model ID so
-	// a model change doesn't silently corrupt old cached rows
-	// (readers filter by the current model; old rows stay under
-	// their old key and never conflict). Rewiring the persister
-	// here is what makes settings changes take effect for scoring
-	// without a restart.
-	var nliURL, embedURL, entailerURL, nliModelID, embedModelID string
-	if clsCfg, ok := cfg.Settings.Providers["classifier"]; ok {
-		nliURL = clsCfg.BaseURL
-		nliModelID = clsCfg.Model
+	// Engine swap is the only field mutation that needs to be
+	// atomic from a hot-reader's perspective; everything else
+	// (Main, Classifier, Searcher) is read off the cooler resolver
+	// path.
+	k.engine.Store(subs.Engine)
+
+	if subs.MainCompleter != nil {
+		k.Main = subs.MainCompleter
 	}
-	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
-		embedURL = embCfg.BaseURL
-		embedModelID = embCfg.Model
-	}
-	if enCfg, ok := cfg.Settings.Providers["entailer"]; ok {
-		entailerURL = enCfg.BaseURL
-	}
-	if nliURL != "" || embedURL != "" || entailerURL != "" {
-		classifier := tei.NewCompositeClassifier(nliURL, embedURL)
-		k.Engine.Lock()
-		k.Engine.SetClassifier(classifier)
-
-		// Wire (or un-wire) the entailer atomically under the
-		// engine lock so OnMessage doesn't observe a half-swapped
-		// state.
-		if ent := tei.NewEntailer(entailerURL); ent != nil {
-			k.Engine.SetEntailer(ent)
-			log.Printf("[Providers] entailer wired: url=%s", entailerURL)
-		} else {
-			k.Engine.SetEntailer(nil)
-		}
-
-		// Re-install the score persister with the (possibly new)
-		// model ID. nil-clears first so a model change doesn't
-		// keep writing under the old key if the new config has no
-		// classifier.
-		k.Engine.SetScorePersister(nil)
-		if nliModelID != "" {
-			db := k.DB
-			modelID := nliModelID
-			k.Engine.SetScorePersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
-				if err := db.InsertChunkScore(fromID, fromIdx, toID, toIdx, modelID, score); err != nil {
-					log.Printf("InsertChunkScore(%s[%d], %s[%d], %s): %v", fromID, fromIdx, toID, toIdx, modelID, err)
-				}
-			})
-		}
-
-		// Re-wire the chunk oracle. If the embedder changed, this
-		// uses the new embedder/model. Its own embed-live path
-		// writes through under the new model_id; old rows stay.
-		if classifier.Embedder() != nil && embedModelID != "" {
-			co := search.NewChunkOracle(k.DB, classifier.Embedder(), embedModelID)
-			k.Engine.SetChunkOracle(co)
-			go co.BackfillEmbeddings(context.Background())
-		} else {
-			k.Engine.SetChunkOracle(nil)
-		}
-		k.Engine.Unlock()
-
-		// Rebuild Searcher + EmbedQueue to point at the new
-		// embedder. Without this, the post-insert embed path keeps
-		// calling the old embedder forever — embeds silently go to
-		// the previous endpoint with the previous model ID. The
-		// old queue is Close()'d off the hot path so its workers
-		// drain cleanly rather than leaking.
-		var oldQueue *search.EmbedQueue
-		if classifier.Embedder() != nil && embedModelID != "" {
-			newSearcher := search.NewSearcher(classifier.Embedder(), embedModelID, k.DB)
-			k.Searcher = newSearcher
-			oldQueue = k.setEmbedQueue(search.NewEmbedQueue(newSearcher, 4, 64, 2*time.Minute))
-		} else {
-			// Embedder removed from config — tear down search/embed
-			// path entirely rather than leave it pointing at stale
-			// state.
-			k.Searcher = nil
-			oldQueue = k.setEmbedQueue(nil)
-		}
-		if oldQueue != nil {
-			go oldQueue.Close()
-		}
+	if subs.Classifier != nil {
+		k.Classifier = subs.Classifier
 	}
 
-	// Kill all existing runners — they hold references to old
-	// providers. Next getOrCreateRunner call builds a fresh runner
-	// against the new config.
+	// Searcher / EmbedQueue follow the embedder. Close the old
+	// queue off the hot path so its workers drain rather than leak.
+	var oldQueue *search.EmbedQueue
+	if subs.Searcher != nil {
+		k.Searcher = subs.Searcher
+		oldQueue = k.setEmbedQueue(search.NewEmbedQueue(subs.Searcher, 4, 64, 2*time.Minute))
+	} else {
+		k.Searcher = nil
+		oldQueue = k.setEmbedQueue(nil)
+	}
+	if oldQueue != nil {
+		go oldQueue.Close()
+	}
+
+	// Stop all runners. Each holds its old engine + completer at
+	// construction; next getOrCreateRunner picks up the fresh
+	// pointers from the kernel.
 	k.Runners.StopAll()
 
+	return nil
+}
+
+// UpdateEngineConfig swaps in a fresh engine that reuses the
+// current providers but with a different EngineConfig. The path
+// for settings-only edits that don't touch provider URLs / models
+// (threshold tweak, MMR lambda, radius size).
+//
+// Same swap semantics as ReloadProviders: build new from the same
+// substrate snapshot (loaded edges + scores from disk, current
+// classifier / oracle / persister), atomic Store, stop runners.
+func (k *Kernel) UpdateEngineConfig(ctx context.Context, cfg rrc.EngineConfig) error {
+	k.reloadMu.Lock()
+	defer k.reloadMu.Unlock()
+
+	// Reuse substrate.Build to get a fresh engine wired to the
+	// current providers. The new EngineConfig is applied via the
+	// config-snapshot path — write into Settings.Engine, then
+	// substrate.Build reads it on rebuild.
+	old := k.Config.Settings.Engine
+	k.Config.Settings.Engine = config.EngineConfig{
+		EdgeThreshold:         cfg.EdgeThreshold,
+		ScoreFloor:            cfg.ScoreFloor,
+		WeightCE:              cfg.WeightCE,
+		WeightTemp:            cfg.WeightTemp,
+		ZScoreThreshold:       cfg.ZScoreThreshold,
+		MinBatchStdDev:        cfg.MinBatchStdDev,
+		RadiusSize:            cfg.RadiusSize,
+		RerankTopK:            cfg.RerankTopK,
+		ContextBudgetTokens:   cfg.ContextBudgetTokens,
+		DiversityLambda:       cfg.DiversityLambda,
+		BudgetHeadroomPct:     cfg.BudgetHeadroomPct,
+		PerMsgDelimiterTokens: cfg.PerMsgDelimiterTokens,
+		NLIFusionWeight:       cfg.NLIFusionWeight,
+	}
+	subs, err := substrate.Build(ctx, k.Config, k.DB)
+	if err != nil {
+		k.Config.Settings.Engine = old
+		return fmt.Errorf("rebuild substrate: %w", err)
+	}
+	k.engine.Store(subs.Engine)
+	k.Runners.StopAll()
 	return nil
 }
 

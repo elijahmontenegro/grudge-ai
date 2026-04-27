@@ -16,10 +16,7 @@ import (
 // are either immutable after NewRunner or have their own synchronization
 // (engine owns its own lock; db internally).
 func (r *Runner) SpawnSubagent(ctx context.Context, task string, forkThreadID string) (*Runner, error) {
-	forkedEngine, err := r.engine.Fork(r.threadID)
-	if err != nil {
-		return nil, fmt.Errorf("fork engine: %w", err)
-	}
+	forkedEngine := r.engine.Fork()
 
 	fork, err := NewRunner(forkedEngine, r.completer, r.db, forkThreadID, r.tools, r.modelName, r.instruction, r.rerankerModelID)
 	if err != nil {
@@ -37,6 +34,6 @@ func (r *Runner) SpawnSubagent(ctx context.Context, task string, forkThreadID st
 // Same no-r.mu rule as SpawnSubagent — called from Agent tool context.
 // r.engine.Merge uses the engine's own lock internally.
 func (r *Runner) MergeSubagent(fork *Runner) error {
-	return r.engine.Merge(fork.engine, r.threadID)
+	return r.engine.Merge(fork.engine)
 }
 

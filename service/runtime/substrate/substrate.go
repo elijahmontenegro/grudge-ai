@@ -192,7 +192,6 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB) (*Substrate,
 			rrcCfg.NLIFusionWeight = se.NLIFusionWeight
 		}
 	}
-	s.Engine = rrc.NewEngine(rrcCfg, s.Classifier)
 	if rrcCfg.Chunk != (rrc.ChunkConfig{}) {
 		db.SetChunkConfig(rrcCfg.Chunk)
 	}
@@ -206,9 +205,23 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB) (*Substrate,
 		log.Printf("Chunk backfill: %v", err)
 	}
 
-	// Hydrate persisted state.
+	// Searcher + ChunkOracle share the same embedder and model id.
+	// Construct before the engine so the oracle can flow in as an
+	// engine option.
+	if s.Embedder != nil && s.EmbedModelID != "" {
+		s.Searcher = search.NewSearcher(s.Embedder, s.EmbedModelID, db)
+		s.ChunkOracle = search.NewChunkOracle(db, s.Embedder, s.EmbedModelID)
+	}
+
+	// Engine constructed in one shot with everything wired:
+	//   - hydrated DAG / score cache (loaded from DB)
+	//   - chunk oracle
+	//   - score persister (write-through to DB on every new chunk-pair score)
+	// The engine has no public mutation surface — settings changes
+	// rebuild it via kernel.UpdateEngineConfig / ReloadProviders.
+	opts := []rrc.Option{}
 	if edges, err := db.AllEdges(); err == nil && len(edges) > 0 {
-		s.Engine.LoadDAG(edges)
+		opts = append(opts, rrc.WithLoadedEdges(edges))
 		log.Printf("Loaded %d edges", len(edges))
 	}
 	if s.RerankerModelID != "" {
@@ -223,29 +236,22 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB) (*Substrate,
 					Score:        v,
 				})
 			}
-			s.Engine.LoadScores(converted)
+			opts = append(opts, rrc.WithLoadedScores(converted))
 			log.Printf("Loaded %d chunk-pair scores (model=%s)", len(scores), s.RerankerModelID)
 		}
-	}
-
-	// Wire score persistence — every reranker-produced chunk-pair
-	// score writes through to the scores table so restarts and forks
-	// inherit the cache.
-	if s.RerankerModelID != "" {
 		modelID := s.RerankerModelID
-		s.Engine.SetScorePersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
+		opts = append(opts, rrc.WithScorePersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
 			if err := db.InsertChunkScore(fromID, fromIdx, toID, toIdx, modelID, score); err != nil {
 				log.Printf("InsertChunkScore(%s[%d], %s[%d], %s): %v", fromID, fromIdx, toID, toIdx, modelID, err)
 			}
-		})
+		}))
 	}
+	if s.ChunkOracle != nil {
+		opts = append(opts, rrc.WithChunkOracle(s.ChunkOracle))
+	}
+	s.Engine = rrc.NewEngine(rrcCfg, s.Classifier, opts...)
 
-	// Searcher + ChunkOracle share the same embedder and model id.
-	if s.Embedder != nil && s.EmbedModelID != "" {
-		s.Searcher = search.NewSearcher(s.Embedder, s.EmbedModelID, db)
-		s.ChunkOracle = search.NewChunkOracle(db, s.Embedder, s.EmbedModelID)
-		s.Engine.SetChunkOracle(s.ChunkOracle)
-
+	if s.ChunkOracle != nil {
 		// Backfill chunk embeddings in the background. Non-blocking —
 		// service accepts requests immediately; OnMessage misses on
 		// not-yet-backfilled chunks just embed live.

@@ -14,9 +14,11 @@ import (
 )
 
 // Engine implements the RRC algorithm. Goroutine-safe at the level
-// of one operation per call: callers that need to serialize multi-
-// call sequences (e.g., OnMessage followed atomically by Select)
-// take Engine.Lock / Engine.Unlock around the whole sequence.
+// of one assemble per engine: Assemble holds an internal write lock
+// for the duration of OnMessage+Select+MMR, and Fork / Merge serialize
+// against it. Settings changes go through atomic engine replacement
+// (see service/runtime/kernel.UpdateEngineConfig) — there is no
+// in-place mutation surface and no externally-held lock.
 //
 // Scoring substrate: chunks (paragraph-sized slices of a message),
 // resolved via a ChunkOracle. Each chunk carries an embedding vector
@@ -31,7 +33,7 @@ import (
 // so re-chunking or chunk-reordering is a no-op at the cache boundary.
 // Messages are immutable → cached scores never become stale.
 type Engine struct {
-	mu         sync.RWMutex
+	mu         sync.Mutex
 	classifier Classifier
 	entailer   Entailer    // optional — composite NLI stage layered on top of classifier
 	dag        *DAG
@@ -68,76 +70,80 @@ type ChunkOracle interface {
 	EnsureVector(ctx context.Context, ref ChunkRef) ([]float32, error)
 }
 
-// NewEngine creates an RRC engine. The classifier is the only
-// required external dependency. Use SetEntailer / SetChunkOracle /
-// SetScorePersister to wire the optional substrate before
-// running OnMessage.
-func NewEngine(cfg EngineConfig, classifier Classifier) *Engine {
-	return &Engine{
+// Option configures an Engine at construction. Pass options to
+// NewEngine; the engine is fully formed when NewEngine returns and
+// has no public mutation surface.
+type Option func(*Engine)
+
+// WithEntailer wires the optional NLI second stage. Passing nil is
+// equivalent to omitting the option.
+func WithEntailer(en Entailer) Option {
+	return func(e *Engine) { e.entailer = en }
+}
+
+// WithChunkOracle wires the chunk + vector resolver. Required for
+// OnMessage to score; absent oracle ⇒ OnMessage returns
+// ErrClassifierUnavailable wrapping "no chunk oracle".
+func WithChunkOracle(o ChunkOracle) Option {
+	return func(e *Engine) { e.oracle = o }
+}
+
+// WithScorePersister installs the write-through hook fired on every
+// new chunk-pair score. The service wires it to storage; nil disables
+// persistence (test path).
+func WithScorePersister(p ScorePersister) Option {
+	return func(e *Engine) {
+		if e.scores != nil {
+			e.scores.setPersister(p)
+		}
+	}
+}
+
+// WithLoadedEdges hydrates the DAG with edges previously persisted.
+// The kernel uses this on Bootstrap and on every engine swap so the
+// new engine's in-memory DAG matches what's on disk.
+func WithLoadedEdges(edges []*pb.Edge) Option {
+	return func(e *Engine) {
+		for _, edge := range edges {
+			e.dag.AddEdge(edge)
+		}
+	}
+}
+
+// WithLoadedScores hydrates the chunk-pair score cache. Silent path:
+// no write-back to the persister.
+func WithLoadedScores(scores []PersistedScore) Option {
+	return func(e *Engine) {
+		for _, ps := range scores {
+			e.scores.loadSilent(scoreKey{
+				FromMsgID:    ps.FromMsgID,
+				FromChunkIdx: ps.FromChunkIdx,
+				ToMsgID:      ps.ToMsgID,
+				ToChunkIdx:   ps.ToChunkIdx,
+			}, ps.Score)
+		}
+	}
+}
+
+// NewEngine constructs an RRC engine. The classifier is the only
+// required external dependency; everything else (entailer, oracle,
+// persister, hydrated DAG / scores) flows in via Option. The engine
+// is immutable post-construction — any setting change rebuilds.
+func NewEngine(cfg EngineConfig, classifier Classifier, opts ...Option) *Engine {
+	e := &Engine{
 		classifier: classifier,
 		dag:        newDAG(),
 		scores:     newScoreCache(),
 		cfg:        cfg,
 	}
-}
-
-// Lock / Unlock / RLock / RUnlock expose the engine's internal
-// RWMutex. Callers serialize multi-call sequences by holding Lock
-// around the whole sequence. Single-call entry points (OnMessage,
-// Select, ApplyMMR, Snapshot) acquire the lock internally — the
-// public Lock methods exist for the agent runner's atomic
-// "OnMessage(query); Select(query.Id)" sequence inside one round.
-func (e *Engine) Lock()    { e.mu.Lock() }
-func (e *Engine) Unlock()  { e.mu.Unlock() }
-func (e *Engine) RLock()   { e.mu.RLock() }
-func (e *Engine) RUnlock() { e.mu.RUnlock() }
-
-// SetClassifier replaces the classifier. Caller must hold Lock().
-func (e *Engine) SetClassifier(c Classifier) { e.classifier = c }
-
-// SetEntailer wires the optional NLI stage. Passing nil disables it.
-// When set, OnMessage fuses NLI entailment probability into each
-// rerank score via NLIFusionWeight α:
-//
-//	fused_raw = α · bge_rerank + (1-α) · nli_entail
-//
-// Caller must hold Lock().
-func (e *Engine) SetEntailer(en Entailer) { e.entailer = en }
-
-// SetChunkOracle wires the chunk+vector provider. Caller must hold Lock().
-func (e *Engine) SetChunkOracle(o ChunkOracle) { e.oracle = o }
-
-// SetScorePersister installs the write-through hook fired on every
-// new chunk-pair score. The service wires it to storage at boot;
-// passing nil disables persistence (test path). Caller must hold Lock().
-func (e *Engine) SetScorePersister(p ScorePersister) {
-	if e.scores != nil {
-		e.scores.setPersister(p)
+	for _, opt := range opts {
+		opt(e)
 	}
+	return e
 }
 
-// RadiusSize is the protocol §2 Radius window — the count of most-recent
-// thread messages the Network Regime (§3.3) inserts between Selected
-// and Current Turn.
-func (e *Engine) RadiusSize() int { return e.cfg.RadiusSize }
-
-// Config returns a copy of the current engine configuration.
+// Config returns a copy of the engine configuration.
 func (e *Engine) Config() EngineConfig { return e.cfg }
-
-// UpdateConfig swaps the engine's configuration atomically. The DAG
-// is unchanged — the stored edges retain their raw score components
-// (reranker CE, temporal proximity) and are re-projected under the
-// new config at walk time via edgeScoreUnderConfig. This means
-// config changes take effect on the next Select call, retroactively,
-// with no rebuild step. Threshold tightening immediately hides
-// edges that no longer qualify; threshold loosening restores them;
-// weight changes recompute fused scores. All without re-invoking
-// the reranker.
-//
-// Future OnMessage calls will use the new config for scoring new
-// edges. The score cache is config-independent (stores raw reranker
-// outputs), so cached chunk-pair scores remain valid.
-func (e *Engine) UpdateConfig(cfg EngineConfig) { e.cfg = cfg }
 
 // OnMessage scores a new message against its predecessors in the
 // corpus and creates edges above EdgeThreshold. Hot path:
@@ -156,6 +162,10 @@ func (e *Engine) UpdateConfig(cfg EngineConfig) { e.cfg = cfg }
 //
 // If the classifier is unavailable, returns a wrapped error — the
 // service MUST log this; a silent no-op leaves RRC dark.
+//
+// Caller must not call OnMessage concurrently with itself, Select,
+// ApplyMMR, Fork, or Merge on the same engine. Assemble holds the
+// engine mutex around its OnMessage→Select→MMR sequence.
 func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Message) ([]*pb.Edge, error) {
 	if len(corpus) == 0 {
 		return nil, nil
@@ -223,8 +233,8 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 	// source message and its chunk-ref with vector (if any). We keep
 	// one flat list per new-chunk so rerank-set membership is per-pair.
 	type priorChunk struct {
-		msgIdx  int // index into priors[]
-		chunk   ChunkRef
+		msgIdx int // index into priors[]
+		chunk  ChunkRef
 	}
 	var priorChunks []priorChunk
 	for pi, p := range priors {
@@ -250,9 +260,9 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 	for _, nc := range newChunks {
 		// Cache lookup per prior chunk.
 		type pairState struct {
-			cached    bool
-			score     float64
-			localIdx  int // into priorChunks
+			cached   bool
+			score    float64
+			localIdx int // into priorChunks
 		}
 		pairStates := make([]pairState, len(priorChunks))
 		var unscoredIdx []int
@@ -724,29 +734,43 @@ func (e *Engine) ApplyMMR(ctx context.Context, selected []*pb.SelectedMessage, l
 	return out, nil
 }
 
-// Fork creates an ephemeral engine for a forked thread. Inherits a
-// snapshot of the parent's DAG and score cache.
-func (e *Engine) Fork(_ string) (*Engine, error) {
+// Fork creates an ephemeral engine for a subagent thread. Inherits a
+// snapshot of the parent's DAG and score cache; same classifier,
+// entailer, oracle, and config. The parent's persister is reused so
+// any new edges the fork emits write through to the same storage.
+//
+// Internal lock around the snapshot read so a concurrent OnMessage
+// in the parent doesn't yield a partial copy.
+func (e *Engine) Fork() *Engine {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	fork := &Engine{
 		classifier: e.classifier,
+		entailer:   e.entailer,
 		dag:        newDAG(),
 		scores:     newScoreCache(),
 		cfg:        e.cfg,
 		oracle:     e.oracle,
 	}
+	fork.scores.setPersister(e.scores.persist)
 	for _, edge := range e.dag.AllEdges() {
 		fork.dag.AddEdge(edge)
 	}
 	for k, v := range e.scores.all() {
 		fork.scores.loadSilent(k, v)
 	}
-	return fork, nil
+	return fork
 }
 
-// Merge integrates a fork's edges into the parent. New scores from the
-// fork flow through the parent's persister; inherited ones don't
-// double-write because they're already cached (get-ok path in set).
-func (e *Engine) Merge(fork *Engine, _ string) error {
+// Merge integrates a fork's edges and any new chunk-pair scores into
+// the parent. Idempotent: edges and scores already present in the
+// parent are not duplicated. Scores new to the parent flow through
+// the parent's persister.
+func (e *Engine) Merge(fork *Engine) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	for _, edge := range fork.dag.AllEdges() {
 		e.dag.AddEdge(edge)
 	}
@@ -756,28 +780,6 @@ func (e *Engine) Merge(fork *Engine, _ string) error {
 		}
 	}
 	return nil
-}
-
-// LoadDAG loads persisted edges into the engine (service calls on startup).
-func (e *Engine) LoadDAG(edges []*pb.Edge) {
-	for _, edge := range edges {
-		e.dag.AddEdge(edge)
-	}
-}
-
-// LoadScores hydrates the in-memory chunk-pair score cache from
-// persisted rows. Replaces the previous LoadScoreCache(map) signature
-// that exposed the internal scoreKey type. Silent path: no
-// write-back to the DB.
-func (e *Engine) LoadScores(scores []PersistedScore) {
-	for _, ps := range scores {
-		e.scores.loadSilent(scoreKey{
-			FromMsgID:    ps.FromMsgID,
-			FromChunkIdx: ps.FromChunkIdx,
-			ToMsgID:      ps.ToMsgID,
-			ToChunkIdx:   ps.ToChunkIdx,
-		}, ps.Score)
-	}
 }
 
 // --- internal helpers ---

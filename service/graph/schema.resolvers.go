@@ -594,11 +594,13 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 			return nil, fmt.Errorf("engine config: negative values are not allowed; λ / headroom / NLIFusionWeight must be in [0,1]")
 		}
 		s.Engine = cfg
-		// Apply to live engine immediately. Stored DAG edges are
-		// unchanged — they carry raw score components (reranker CE +
-		// temporal) that get reprojected under the new config at walk
-		// time. No rebuild step, no score-cache invalidation.
-		live := r.Engine.Config()
+		// Apply to a fresh engine. Stored DAG edges are unchanged —
+		// substrate.Build reloads them from disk so the rebuilt
+		// engine carries the same raw score components (reranker CE +
+		// temporal) reprojected under the new config at walk time.
+		// Threshold tightening immediately hides edges that no longer
+		// qualify; loosening restores them.
+		live := r.Engine().Config()
 		live.EdgeThreshold = cfg.EdgeThreshold
 		live.ScoreFloor = cfg.ScoreFloor
 		live.WeightCE = cfg.WeightCE
@@ -612,7 +614,9 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		live.BudgetHeadroomPct = cfg.BudgetHeadroomPct
 		live.PerMsgDelimiterTokens = cfg.PerMsgDelimiterTokens
 		live.NLIFusionWeight = cfg.NLIFusionWeight
-		r.Engine.UpdateConfig(live)
+		if err := r.UpdateEngineConfig(ctx, live); err != nil {
+			return nil, fmt.Errorf("update engine config: %w", err)
+		}
 		log.Printf("[Settings] Engine config applied live: thr=%.3f floor=%.3f wCE=%.2f wT=%.2f z=%.2f minStd=%.3f radius=%d topK=%d budget=%d λ=%.2f headroom=%.2f delim=%d α=%.2f",
 			live.EdgeThreshold, live.ScoreFloor, live.WeightCE, live.WeightTemp,
 			live.ZScoreThreshold, live.MinBatchStdDev,
@@ -623,7 +627,7 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		return nil, err
 	}
 	// Hot-reload providers from updated config
-	if err := r.ReloadProviders(); err != nil {
+	if err := r.ReloadProviders(ctx); err != nil {
 		log.Printf("[Settings] Provider reload: %v", err)
 	}
 	return r.Query().Settings(ctx)
@@ -964,7 +968,7 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	// config file. This lets the UI reflect the actual operating
 	// config (including any defaults that kicked in when Settings had
 	// zero-value engine fields).
-	engineCfg := r.Engine.Config()
+	engineCfg := r.Engine().Config()
 	engine, err := json.Marshal(map[string]any{
 		"edge_threshold":        engineCfg.EdgeThreshold,
 		"score_floor":           engineCfg.ScoreFloor,

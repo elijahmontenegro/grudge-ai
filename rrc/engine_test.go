@@ -111,9 +111,7 @@ func testEngine(mc *mockClassifier, o *mockChunkOracle) *Engine {
 	cfg := DefaultConfig()
 	cfg.ZScoreThreshold = 0
 	cfg.MinBatchStdDev = 0
-	e := NewEngine(cfg, mc)
-	e.SetChunkOracle(o)
-	return e
+	return NewEngine(cfg, mc, WithChunkOracle(o))
 }
 
 // --- Tests ---
@@ -148,8 +146,7 @@ func TestOnMessage_NilClassifier(t *testing.T) {
 	// ErrClassifierUnavailable so callers can surface it rather than
 	// silently producing zero edges.
 	o := newMockChunkOracle()
-	e := NewEngine(DefaultConfig(), nil)
-	e.SetChunkOracle(o)
+	e := NewEngine(DefaultConfig(), nil, WithChunkOracle(o))
 	msg := addMsg(o, "m1", 1, "t1", "hello")
 	corpus := []*pb.Message{addMsg(o, "m0", 0, "t1", "hi")}
 
@@ -450,10 +447,7 @@ func TestFork(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fork, err := e.Fork("t1")
-	if err != nil {
-		t.Fatal(err)
-	}
+	fork := e.Fork()
 
 	parentEdges := e.dag.AllEdges()
 	forkEdges := fork.dag.AllEdges()
@@ -476,14 +470,14 @@ func TestMerge(t *testing.T) {
 		Score: 0.8, FromThreadId: "t1", ToThreadId: "t1",
 	})
 
-	fork, _ := e.Fork("t1")
+	fork := e.Fork()
 
 	fork.dag.AddEdge(&pb.Edge{
 		FromMessageId: "m1", ToMessageId: "m2",
 		Score: 0.7, FromThreadId: "t1", ToThreadId: "t1",
 	})
 
-	if err := e.Merge(fork, "t1"); err != nil {
+	if err := e.Merge(fork); err != nil {
 		t.Fatal(err)
 	}
 
@@ -677,9 +671,7 @@ func threeGateConfig() EngineConfig {
 }
 
 func threeGateEngine(mc *mockClassifier, o *mockChunkOracle) *Engine {
-	e := NewEngine(threeGateConfig(), mc)
-	e.SetChunkOracle(o)
-	return e
+	return NewEngine(threeGateConfig(), mc, WithChunkOracle(o))
 }
 
 func TestOnMessage_Gate1_AbsoluteThreshold(t *testing.T) {
@@ -762,8 +754,7 @@ func TestOnMessage_Gate2_Disabled(t *testing.T) {
 	mc.SetScore("b", "q", 0.25)
 	mc.SetScore("c", "q", 0.50)
 	o := newMockChunkOracle()
-	e := NewEngine(cfg, mc)
-	e.SetChunkOracle(o)
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
 	m0 := addMsg(o, "m0", 0, "tA", "a")
 	m1 := addMsg(o, "m1", 0, "tB", "b")
@@ -823,8 +814,7 @@ func TestOnMessage_Gate3_Disabled(t *testing.T) {
 	mc.SetScore("b", "q", 0.200)
 	mc.SetScore("c", "q", 0.217)
 	o := newMockChunkOracle()
-	e := NewEngine(cfg, mc)
-	e.SetChunkOracle(o)
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
 	m0 := addMsg(o, "m0", 0, "tA", "a")
 	m1 := addMsg(o, "m1", 0, "tB", "b")
@@ -853,8 +843,7 @@ func TestOnMessage_Gate2_SingleCandidateNoOp(t *testing.T) {
 	mc := newMockClassifier()
 	mc.SetScore("a", "q", 0.5) // fused = 0.6*0.5 + 0.4 = 0.7
 	o := newMockChunkOracle()
-	e := NewEngine(cfg, mc)
-	e.SetChunkOracle(o)
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
 	m0 := addMsg(o, "m0", 0, "tA", "a")
 	q := addMsg(o, "q", 0, "tQ", "q")
@@ -896,8 +885,7 @@ func TestOnMessage_RescoredFilterInvariant(t *testing.T) {
 	mc.SetScore("e", "q", 0.4) // not scored
 
 	o := newMockChunkOracle()
-	e := NewEngine(cfg, mc)
-	e.SetChunkOracle(o)
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
 	priors := []*pb.Message{
 		addMsg(o, "m0", 0, "t1", "a"),
@@ -932,8 +920,7 @@ func TestOnMessage_CachedScoresCountAsRescored(t *testing.T) {
 	mc.SetScore("b", "q", 0.5)
 
 	o := newMockChunkOracle()
-	e := NewEngine(cfg, mc)
-	e.SetChunkOracle(o)
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
 	m0 := addMsg(o, "m0", 0, "t1", "a")
 	m1 := addMsg(o, "m1", 1, "t1", "b")
@@ -995,7 +982,6 @@ func (o *vectorOracle) EnsureVector(_ context.Context, ref ChunkRef) ([]float32,
 func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DiversityLambda = 0.7
-	e := NewEngine(cfg, newMockClassifier())
 
 	o := newVectorOracle()
 	// dup1..dup3 are near-identical vectors (cosine ≈ 1).
@@ -1004,7 +990,7 @@ func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 	o.set("dup2", []float32{0.99, 0.01, 0})
 	o.set("dup3", []float32{0.98, 0.02, 0})
 	o.set("distinct", []float32{0, 1, 0})
-	e.SetChunkOracle(o)
+	e := NewEngine(cfg, newMockClassifier(), WithChunkOracle(o))
 
 	selected := []*pb.SelectedMessage{
 		{MessageId: "dup1", EffectiveScore: 0.95},
@@ -1066,8 +1052,7 @@ func TestApplyMMR_NoOracleError(t *testing.T) {
 // of computing "λ·x + 0" or "0 + (1-λ)·diversity" — those extremes
 // collapse to the non-MMR paths the caller already has.
 func TestApplyMMR_LambdaExtremesNoOp(t *testing.T) {
-	e := NewEngine(DefaultConfig(), newMockClassifier())
-	e.SetChunkOracle(newVectorOracle())
+	e := NewEngine(DefaultConfig(), newMockClassifier(), WithChunkOracle(newVectorOracle()))
 	selected := []*pb.SelectedMessage{
 		{MessageId: "a", EffectiveScore: 0.9},
 		{MessageId: "b", EffectiveScore: 0.8},
@@ -1124,9 +1109,7 @@ func TestOnMessage_NLIFusion(t *testing.T) {
 	me := &mockEntailer{scores: map[string]float64{"prior": 0.4}}
 
 	o := newMockChunkOracle()
-	e := NewEngine(cfg, mc)
-	e.SetChunkOracle(o)
-	e.SetEntailer(me)
+	e := NewEngine(cfg, mc, WithChunkOracle(o), WithEntailer(me))
 
 	prior := addMsg(o, "m0", 0, "t1", "prior")
 	q := addMsg(o, "q", 1, "t1", "q")
@@ -1168,9 +1151,7 @@ func TestOnMessage_NLIFailurePropagates(t *testing.T) {
 	me := &mockEntailer{err: errors.New("predict server down")}
 
 	o := newMockChunkOracle()
-	e := NewEngine(cfg, mc)
-	e.SetChunkOracle(o)
-	e.SetEntailer(me)
+	e := NewEngine(cfg, mc, WithChunkOracle(o), WithEntailer(me))
 
 	prior := addMsg(o, "m0", 0, "t1", "prior")
 	q := addMsg(o, "q", 1, "t1", "q")
@@ -1199,9 +1180,8 @@ func TestOnMessage_NLISkippedWhenUnwired(t *testing.T) {
 	mc.SetScore("prior", "q", 0.8)
 
 	o := newMockChunkOracle()
-	e := NewEngine(cfg, mc)
-	e.SetChunkOracle(o)
-	// No SetEntailer call.
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
+	// No entailer wired.
 
 	prior := addMsg(o, "m0", 0, "t1", "prior")
 	q := addMsg(o, "q", 1, "t1", "q")
