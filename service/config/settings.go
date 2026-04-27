@@ -37,6 +37,7 @@ type EngineConfig struct {
 	MinBatchStdDev        float64 `json:"min_batch_stddev"`
 	RadiusSize            int     `json:"radius_size"`
 	RerankTopK            int     `json:"rerank_top_k"`
+	MinPerThreadInTopK    int     `json:"min_per_thread_in_top_k"`
 	ContextBudgetTokens   int     `json:"context_budget_tokens"`
 	DiversityLambda       float64 `json:"diversity_lambda"`
 	BudgetHeadroomPct     float64 `json:"budget_headroom_pct"`

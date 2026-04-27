@@ -586,6 +586,7 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 			cfg.WeightCE < 0 || cfg.WeightTemp < 0 ||
 			cfg.ZScoreThreshold < 0 || cfg.MinBatchStdDev < 0 ||
 			cfg.RadiusSize < 0 || cfg.RerankTopK < 0 ||
+			cfg.MinPerThreadInTopK < 0 ||
 			cfg.ContextBudgetTokens < 0 ||
 			cfg.DiversityLambda < 0 || cfg.DiversityLambda > 1 ||
 			cfg.BudgetHeadroomPct < 0 || cfg.BudgetHeadroomPct > 1 ||
@@ -609,6 +610,7 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		live.MinBatchStdDev = cfg.MinBatchStdDev
 		live.RadiusSize = cfg.RadiusSize
 		live.RerankTopK = cfg.RerankTopK
+		live.MinPerThreadInTopK = cfg.MinPerThreadInTopK
 		live.ContextBudgetTokens = cfg.ContextBudgetTokens
 		live.DiversityLambda = cfg.DiversityLambda
 		live.BudgetHeadroomPct = cfg.BudgetHeadroomPct
@@ -976,9 +978,10 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 		"weight_temp":           engineCfg.WeightTemp,
 		"z_score_threshold":     engineCfg.ZScoreThreshold,
 		"min_batch_stddev":      engineCfg.MinBatchStdDev,
-		"radius_size":           engineCfg.RadiusSize,
-		"rerank_top_k":          engineCfg.RerankTopK,
-		"context_budget_tokens": engineCfg.ContextBudgetTokens,
+		"radius_size":              engineCfg.RadiusSize,
+		"rerank_top_k":             engineCfg.RerankTopK,
+		"min_per_thread_in_top_k":  engineCfg.MinPerThreadInTopK,
+		"context_budget_tokens":    engineCfg.ContextBudgetTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal engine config: %w", err)

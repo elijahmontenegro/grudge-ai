@@ -278,8 +278,8 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 
 		// Cosine prefilter on unscored — rank priors by cosine(new_chunk, prior_chunk).
 		// Vectors may be nil for chunks not yet embedded; those go to the tail of the ranking.
+		simScore := make(map[int]float64, len(unscoredIdx))
 		if nc.Vector != nil {
-			simScore := make(map[int]float64, len(unscoredIdx))
 			for _, j := range unscoredIdx {
 				if v := priorChunks[j].chunk.Vector; v != nil {
 					simScore[j] = cosine(nc.Vector, v)
@@ -294,7 +294,68 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 		if k <= 0 || k > len(unscoredIdx) {
 			k = len(unscoredIdx)
 		}
-		rerankSet := unscoredIdx[:k]
+
+		var rerankSet []int
+		minQ := e.cfg.MinPerThreadInTopK
+		if minQ <= 0 || len(unscoredIdx) <= k {
+			// Per-thread quota disabled, or pool fits in K already —
+			// straight global top-K is the legacy behavior.
+			rerankSet = unscoredIdx[:k]
+		} else {
+			// Per-thread quota inside the top-K. Without this, a corpus
+			// dominated by one large thread starves small threads from
+			// the rerank pool — global cosine top-K is volume-biased,
+			// not relevance-biased. We group unscored by from-thread,
+			// take quota slots per thread (in cosine order — slices
+			// are already sorted because unscoredIdx was), then fill
+			// remaining slots from leftovers globally. Same-thread
+			// depth is preserved because same-thread priors win the
+			// cosine race for fill slots; cross-thread is kept
+			// reachable because each thread always gets at least its
+			// quota.
+			byThread := map[string][]int{}
+			threadOrder := []string{}
+			for _, j := range unscoredIdx {
+				tid := priors[priorChunks[j].msgIdx].ThreadId
+				if _, seen := byThread[tid]; !seen {
+					threadOrder = append(threadOrder, tid)
+				}
+				byThread[tid] = append(byThread[tid], j)
+			}
+			// Cap quota at k/numThreads so quotas never over-allocate
+			// (e.g., 50 threads × quota 8 = 400 > k=64). Below that
+			// floor, drop to ceil distribution per thread.
+			quota := minQ
+			if quota*len(threadOrder) > k {
+				quota = k / len(threadOrder)
+				if quota < 1 {
+					quota = 1
+				}
+			}
+			rerankSet = make([]int, 0, k)
+			leftovers := make([]int, 0, len(unscoredIdx))
+			for _, tid := range threadOrder {
+				slice := byThread[tid]
+				take := quota
+				if take > len(slice) {
+					take = len(slice)
+				}
+				rerankSet = append(rerankSet, slice[:take]...)
+				leftovers = append(leftovers, slice[take:]...)
+			}
+			// Fill remaining slots from leftovers, re-sorted by cosine
+			// (the per-thread split breaks the prior global order).
+			sort.SliceStable(leftovers, func(a, b int) bool {
+				return simScore[leftovers[a]] > simScore[leftovers[b]]
+			})
+			fill := k - len(rerankSet)
+			if fill > 0 && len(leftovers) > 0 {
+				if fill > len(leftovers) {
+					fill = len(leftovers)
+				}
+				rerankSet = append(rerankSet, leftovers[:fill]...)
+			}
+		}
 
 		// One rerank call per new chunk: query = new chunk text, candidates = selected prior chunks.
 		if len(rerankSet) > 0 {

@@ -235,6 +235,9 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		if se.NLIFusionWeight > 0 {
 			rrcCfg.NLIFusionWeight = se.NLIFusionWeight
 		}
+		if se.MinPerThreadInTopK > 0 {
+			rrcCfg.MinPerThreadInTopK = se.MinPerThreadInTopK
+		}
 	}
 	if rrcCfg.Chunk != (rrc.ChunkConfig{}) {
 		db.SetChunkConfig(rrcCfg.Chunk)

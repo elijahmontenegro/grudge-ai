@@ -40,6 +40,30 @@ type EngineConfig struct {
 
 	RerankTopK int // Max chunk-pairs sent to the reranker per OnMessage
 
+	// MinPerThreadInTopK is the per-thread quota inside the cosine
+	// prefilter that picks RerankTopK candidates. Without a quota,
+	// global cosine top-K is volume-biased: a corpus dominated by
+	// one large thread (e.g., a long-running novel-writing thread
+	// with thousands of chunks) can crowd small threads out of the
+	// rerank pool entirely. The relevant content lives in the small
+	// thread; cosine never surfaces it; the reranker never scores
+	// it; no edge forms; cross-thread recall fails — by volume, not
+	// by relevance.
+	//
+	// MinPerThreadInTopK reserves at least this many slots per
+	// from-thread. After the per-thread quotas are filled, remaining
+	// slots fill from global cosine ordering. With 64 RerankTopK and
+	// 8 MinPerThreadInTopK across 6 threads: each thread gets 8
+	// guaranteed slots (48 total), the remaining 16 fill from
+	// whichever thread had the most non-quota leftovers — preserving
+	// volume-weighted depth where it's earned without starving small
+	// threads.
+	//
+	// Set to 0 to disable (pure global top-K, the legacy behavior).
+	// The quota caps at RerankTopK / numThreads when many threads
+	// are present, so quotas can't over-allocate.
+	MinPerThreadInTopK int
+
 	// Radius is the last-N window per protocol §2 / §3.3. The Network
 	// Regime places Radius between Selected and Current Turn so the
 	// model sees continuous recent context bridging deep-history
@@ -184,7 +208,11 @@ func DefaultConfig() EngineConfig {
 		ZScoreThreshold: 1.0,
 		MinBatchStdDev:  0.05,
 		RerankTopK:      64,
-		RadiusSize:      10,
+		// 8 per thread leaves 64 - 8*N quota slots filled by global
+		// cosine. Up to 8 threads quota'd, then quota auto-caps at
+		// RerankTopK/N to avoid over-allocation.
+		MinPerThreadInTopK: 8,
+		RadiusSize:         10,
 		Chunk:           DefaultChunkConfig(),
 		// Safety-net boundary for the Network payload. Measured in
 		// "approximate tokens" — specifically (UTF-8 rune count)/4,
