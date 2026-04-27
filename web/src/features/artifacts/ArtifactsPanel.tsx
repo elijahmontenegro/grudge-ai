@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { IconChevron, IconPanelRight } from '@/primitives/icons'
+import { IconButton } from '@/primitives/IconButton'
 import { AsciiDocBody } from '@/primitives/AsciiDocBody'
 import { aggregateArtifacts } from '@/domain/artifacts'
 import { useLocalStorage } from '@/primitives/useLocalStorage'
@@ -102,20 +103,16 @@ export function ArtifactsPanel({
         <span className="artifacts-title">artifacts</span>
         <span className="artifacts-count">{artifacts.length}</span>
         <span className="artifacts-head-spacer" />
-        {/* Uses `.sb-icon-btn` (same class as the sidebar's collapse
-            toggle and the topbar's artifacts opener) so the close
-            button is visually indistinguishable from its collapsed-
-            state counterpart — same frame, same icon, same hover,
-            no "active" tint. It's just a toggle, not a pressed
-            state. */}
-        <button
-          className="sb-icon-btn"
+        {/* IconButton renders the same `.sb-icon-btn` class the
+            sidebar's collapse toggle and the topbar's artifacts
+            opener use, so the close button is visually
+            indistinguishable from its collapsed-state counterpart
+            — same frame, same icon, same hover, no active tint. */}
+        <IconButton
+          icon={<IconPanelRight size={18} />}
+          label="Hide artifacts"
           onClick={onClose}
-          title="Hide artifacts"
-          aria-label="Hide artifacts"
-        >
-          <IconPanelRight size={18} />
-        </button>
+        />
       </header>
       <div className="artifacts-body scroll">
         {artifacts.length === 0 && (

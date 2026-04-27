@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useRef, useState } from 'react'
 import { IconChats, IconChevron, IconPlus, IconSearch, IconX, IconPanel } from '@/primitives/icons'
+import { IconButton } from '@/primitives/IconButton'
 import { kbdLabel } from '@/primitives/platform'
 import { ThreadRow } from '@/features/chrome/ThreadRow'
 import { SidebarSection } from '@/features/chrome/SidebarSection'
@@ -180,9 +181,11 @@ export function ThreadSidebar({
             control reads as "one button that doesn't move" across
             the two sidebar states. Brand is pushed to the opposite
             side by the spacer. */}
-        <button className="sb-icon-btn" onClick={onToggleCollapsed} title="Collapse sidebar">
-          <IconPanel size={18} />
-        </button>
+        <IconButton
+          icon={<IconPanel size={18} />}
+          label="Collapse sidebar"
+          onClick={onToggleCollapsed}
+        />
         <span className="sb-head-spacer" />
         <button
           className="sb-brand"

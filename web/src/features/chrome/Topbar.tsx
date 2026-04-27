@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { ThreadConfigPopover } from '@/features/thread/ThreadConfigPopover'
 import { IconChevron, IconPanelRight } from '@/primitives/icons'
+import { IconButton } from '@/primitives/IconButton'
 import { ThreadActionsMenu } from '@/features/chrome/ThreadActionsMenu'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
 import type { ThreadSummary } from '@/hooks/useThreads'
@@ -175,14 +176,11 @@ export function Topbar({
           no active/on state, just a neutral toggle (matches the
           sidebar's collapse button treatment). */}
       {isThreadView && onToggleArtifacts && artifactsCollapsed && (
-        <button
-          className="sb-icon-btn"
+        <IconButton
+          icon={<IconPanelRight size={18} />}
+          label="Show artifacts"
           onClick={onToggleArtifacts}
-          title="Show artifacts"
-          aria-label="Show artifacts"
-        >
-          <IconPanelRight size={18} />
-        </button>
+        />
       )}
     </div>
   )

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation } from '@apollo/client/react'
 import { UPDATE_THREAD } from '@/graphql/operations'
 import { IconPlus, IconSettings, IconX } from '@/primitives/icons'
+import { IconButton } from '@/primitives/IconButton'
 import type {
   UpdateThreadMutation,
   UpdateThreadMutationVariables,
@@ -88,15 +89,13 @@ export function ThreadConfigPopover({ threadId, workingDirs, sandboxed }: Thread
 
   return (
     <>
-      <button
+      <IconButton
         ref={anchorRef}
-        className="sb-icon-btn"
+        icon={<IconSettings size={18} />}
+        label="thread config"
         onClick={() => setOpen((o) => !o)}
-        title="thread config"
         style={{ marginLeft: 10 }}
-      >
-        <IconSettings size={18} />
-      </button>
+      />
       {open && pos && (
         <div
           ref={popRef}
@@ -178,13 +177,11 @@ export function ThreadConfigPopover({ threadId, workingDirs, sandboxed }: Thread
                 background: 'var(--paper)',
               }}
             />
-            <button
+            <IconButton
+              icon={<IconPlus size={18} />}
+              label="add"
               onClick={addDir}
-              className="sb-icon-btn"
-              title="add"
-            >
-              <IconPlus size={18} />
-            </button>
+            />
           </div>
           <label
             style={{

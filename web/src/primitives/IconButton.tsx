@@ -1,10 +1,12 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react'
 
 interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   icon: ReactNode
   /** Visible label for screen readers, falls through to title attr.
    *  Required because IconButtons have no visible text. */
   label: string
+  /** Forwarded ref. Popover anchors need it to compute placement. */
+  ref?: Ref<HTMLButtonElement>
 }
 
 /**
@@ -14,9 +16,9 @@ interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
  * one wrapper unifies the markup and ensures every site carries an
  * aria-label.
  */
-export function IconButton({ icon, label, type = 'button', ...rest }: IconButtonProps) {
+export function IconButton({ icon, label, type = 'button', ref, ...rest }: IconButtonProps) {
   return (
-    <button type={type} className="sb-icon-btn" aria-label={label} title={label} {...rest}>
+    <button ref={ref} type={type} className="sb-icon-btn" aria-label={label} title={label} {...rest}>
       {icon}
     </button>
   )
