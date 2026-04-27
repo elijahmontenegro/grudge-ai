@@ -1,12 +1,27 @@
 import path from 'path'
+import { execSync } from 'child_process'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+function gitShortSha(): string {
+  try {
+    return execSync('git rev-parse --short HEAD', { cwd: __dirname })
+      .toString()
+      .trim()
+  } catch {
+    return 'unknown'
+  }
+}
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   css: {
     transformer: 'postcss',
+  },
+  define: {
+    __BUILD_COMMIT__: JSON.stringify(gitShortSha()),
+    __BUILD_DATE__: JSON.stringify(new Date().toISOString().slice(0, 10)),
   },
   resolve: {
     alias: {

@@ -13,7 +13,6 @@ import {
 } from './types'
 import { General } from './General'
 import { Providers } from './Providers'
-import { Sandbox } from './Sandbox'
 import { Tools } from './Tools'
 import { Advanced } from './Advanced'
 import { About } from './About'
@@ -110,7 +109,6 @@ export function Settings() {
 
       <General prefs={prefs} setPrefs={setPrefs} />
       <Providers providers={providers} setProviders={setProviders} />
-      <Sandbox />
       <Tools
         mcpServers={mcpServers}
         setMcpServers={setMcpServers}
