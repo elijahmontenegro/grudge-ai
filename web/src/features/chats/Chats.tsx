@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ThreadRow } from '@/features/chrome/ThreadRow'
 import { IconSearch, IconX } from '@/primitives/icons'
+import { SegButton } from '@/primitives/SegButton'
 import { useThreads, type ThreadSummary } from '@/hooks/useThreads'
 import { useRecentActivity } from '@/hooks/useRecentActivity'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
@@ -62,17 +63,16 @@ export function Chats({ onOpenThread }: ChatsProps) {
       <div className="chats-body">
         <section className="chats-col chats-col-list">
           <div className="chats-filter-row">
-            <div className="chats-filters">
-              <button data-on={filter === 'all'} onClick={() => setFilter('all')}>
-                all <span>{counts.all}</span>
-              </button>
-              <button data-on={filter === 'starred'} onClick={() => setFilter('starred')}>
-                starred <span>{counts.starred}</span>
-              </button>
-              <button data-on={filter === 'archived'} onClick={() => setFilter('archived')}>
-                archived <span>{counts.archived}</span>
-              </button>
-            </div>
+            <SegButton
+              className="chats-filters"
+              value={filter}
+              onChange={setFilter}
+              options={[
+                { value: 'all', label: <>all <span>{counts.all}</span></> },
+                { value: 'starred', label: <>starred <span>{counts.starred}</span></> },
+                { value: 'archived', label: <>archived <span>{counts.archived}</span></> },
+              ]}
+            />
             <div className="chats-search">
               <IconSearch size={13} />
               <input

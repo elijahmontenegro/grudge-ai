@@ -1,6 +1,7 @@
 import { type RefObject } from 'react'
 import { IconPaperclip } from '@/primitives/icons'
 import { IS_MAC } from '@/primitives/platform'
+import { SegButton } from '@/primitives/SegButton'
 import {
   DURATIONS,
   type AutonomousDuration,
@@ -71,45 +72,37 @@ export function Foot({
           </button>
         </>
       )}
-      <span className="mode-select">
-        <button data-on={mode === 'normal'} onClick={() => setMode('normal')} disabled={runtimeActive}>
-          chat
-        </button>
-        <button data-on={mode === 'plan'} onClick={() => setMode('plan')} disabled={runtimeActive}>
-          plan
-        </button>
-        <button
-          data-on={mode === 'autonomous'}
-          onClick={() => setMode('autonomous')}
-          disabled={runtimeActive}
-        >
-          autonomous
-        </button>
-      </span>
+      <SegButton
+        className="mode-select"
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: 'normal', label: 'chat', disabled: runtimeActive },
+          { value: 'plan', label: 'plan', disabled: runtimeActive },
+          { value: 'autonomous', label: 'autonomous', disabled: runtimeActive },
+        ]}
+      />
       {mode === 'autonomous' ? (
-        <span className="scope-select" title="Autonomous run duration">
-          for
-          {DURATIONS.map((d) => (
-            <button
-              key={d}
-              data-on={duration === d}
-              onClick={() => setDuration(d)}
-              disabled={runtimeActive}
-            >
-              {d}
-            </button>
-          ))}
-        </span>
+        <SegButton
+          className="scope-select"
+          title="Autonomous run duration"
+          label="for"
+          value={duration}
+          onChange={setDuration}
+          options={DURATIONS.map((d) => ({ value: d, label: d, disabled: runtimeActive }))}
+        />
       ) : (
-        <span className="scope-select" title="Selection scope">
-          scope
-          <button data-on={scope === 'thread'} onClick={() => setScope('thread')} disabled={runtimeActive}>
-            thread
-          </button>
-          <button data-on={scope === 'all'} onClick={() => setScope('all')} disabled={runtimeActive}>
-            all
-          </button>
-        </span>
+        <SegButton
+          className="scope-select"
+          title="Selection scope"
+          label="scope"
+          value={scope}
+          onChange={setScope}
+          options={[
+            { value: 'thread', label: 'thread', disabled: runtimeActive },
+            { value: 'all', label: 'all', disabled: runtimeActive },
+          ]}
+        />
       )}
       <span className="spacer" />
       {valueLength > 0 && !runtimeActive && (
