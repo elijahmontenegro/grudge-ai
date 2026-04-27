@@ -443,7 +443,6 @@ export type StreamEvent = {
   error?: Maybe<Scalars['String']['output']>;
   messageId: Scalars['ID']['output'];
   thinking?: Maybe<Scalars['String']['output']>;
-  toolCall?: Maybe<ToolCallDelta>;
 };
 
 export type SubagentProgress = {
@@ -517,13 +516,6 @@ export type ThreadStateEvent = {
 export type ToolCallBlock = {
   __typename?: 'ToolCallBlock';
   arguments: Scalars['String']['output'];
-  id: Scalars['ID']['output'];
-  name: Scalars['String']['output'];
-};
-
-export type ToolCallDelta = {
-  __typename?: 'ToolCallDelta';
-  arguments?: Maybe<Scalars['String']['output']>;
   id: Scalars['ID']['output'];
   name: Scalars['String']['output'];
 };
@@ -766,7 +758,7 @@ export type MessageStreamSubscriptionVariables = Exact<{
 }>;
 
 
-export type MessageStreamSubscription = { __typename?: 'Subscription', messageStream: { __typename?: 'StreamEvent', messageId: string, delta?: string | null, thinking?: string | null, done: boolean, error?: string | null, toolCall?: { __typename?: 'ToolCallDelta', id: string, name: string, arguments?: string | null } | null } };
+export type MessageStreamSubscription = { __typename?: 'Subscription', messageStream: { __typename?: 'StreamEvent', messageId: string, delta?: string | null, thinking?: string | null, done: boolean, error?: string | null } };
 
 export type AgentStateSubSubscriptionVariables = Exact<{
   threadId: Scalars['ID']['input'];

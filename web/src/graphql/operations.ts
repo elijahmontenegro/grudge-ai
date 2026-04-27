@@ -290,11 +290,6 @@ export const MESSAGE_STREAM = gql`
       messageId
       delta
       thinking
-      toolCall {
-        id
-        name
-        arguments
-      }
       done
       error
     }

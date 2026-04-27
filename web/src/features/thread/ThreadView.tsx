@@ -259,12 +259,14 @@ export function ThreadView({
     if (grew && autoScrollRef.current) scrollToBottom()
   }, [corpus.length])
 
-  // While the stream is active, follow deltas / thinking / tool-calls as
-  // they accumulate so the caret stays on-screen.
+  // While the stream is active, follow deltas / thinking as they
+  // accumulate so the caret stays on-screen. Tool calls flow through
+  // ToolExecution subscription rather than the stream — their list
+  // belongs to the live-tools effect downstream.
   useEffect(() => {
     if (!streaming || !autoScrollRef.current) return
     scrollToBottom()
-  }, [streaming, stream.text.length, stream.thinking.length, stream.toolCalls.length])
+  }, [streaming, stream.text.length, stream.thinking.length])
 
   // Interactive tool outputs render inside their tool's own slot (see
   // CLAUDE.md: "Tool outputs render in their tool's slot"). Compute,

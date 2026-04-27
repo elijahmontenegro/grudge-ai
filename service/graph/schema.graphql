@@ -125,15 +125,8 @@ type StreamEvent {
   messageId: ID!
   delta: String
   thinking: String
-  toolCall: ToolCallDelta
   done: Boolean!
   error: String
-}
-
-type ToolCallDelta {
-  id: ID!
-  name: String!
-  arguments: String
 }
 
 type AgentState {

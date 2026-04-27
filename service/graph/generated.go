@@ -193,7 +193,6 @@ type ComplexityRoot struct {
 		Error     func(childComplexity int) int
 		MessageID func(childComplexity int) int
 		Thinking  func(childComplexity int) int
-		ToolCall  func(childComplexity int) int
 	}
 
 	SubagentProgress struct {
@@ -235,12 +234,6 @@ type ComplexityRoot struct {
 	}
 
 	ToolCallBlock struct {
-		Arguments func(childComplexity int) int
-		ID        func(childComplexity int) int
-		Name      func(childComplexity int) int
-	}
-
-	ToolCallDelta struct {
 		Arguments func(childComplexity int) int
 		ID        func(childComplexity int) int
 		Name      func(childComplexity int) int
@@ -1167,12 +1160,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.StreamEvent.Thinking(childComplexity), true
-	case "StreamEvent.toolCall":
-		if e.ComplexityRoot.StreamEvent.ToolCall == nil {
-			break
-		}
-
-		return e.ComplexityRoot.StreamEvent.ToolCall(childComplexity), true
 
 	case "SubagentProgress.forkThreadId":
 		if e.ComplexityRoot.SubagentProgress.ForkThreadID == nil {
@@ -1372,25 +1359,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ToolCallBlock.Name(childComplexity), true
-
-	case "ToolCallDelta.arguments":
-		if e.ComplexityRoot.ToolCallDelta.Arguments == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ToolCallDelta.Arguments(childComplexity), true
-	case "ToolCallDelta.id":
-		if e.ComplexityRoot.ToolCallDelta.ID == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ToolCallDelta.ID(childComplexity), true
-	case "ToolCallDelta.name":
-		if e.ComplexityRoot.ToolCallDelta.Name == nil {
-			break
-		}
-
-		return e.ComplexityRoot.ToolCallDelta.Name(childComplexity), true
 
 	case "ToolExecution.arguments":
 		if e.ComplexityRoot.ToolExecution.Arguments == nil {
@@ -5993,43 +5961,6 @@ func (ec *executionContext) fieldContext_StreamEvent_thinking(_ context.Context,
 	return fc, nil
 }
 
-func (ec *executionContext) _StreamEvent_toolCall(ctx context.Context, field graphql.CollectedField, obj *StreamEvent) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_StreamEvent_toolCall,
-		func(ctx context.Context) (any, error) {
-			return obj.ToolCall, nil
-		},
-		nil,
-		ec.marshalOToolCallDelta2ᚖgithubᚗcomᚋemontenegrᚋspideyᚋserviceᚋgraphᚐToolCallDelta,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_StreamEvent_toolCall(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "StreamEvent",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "id":
-				return ec.fieldContext_ToolCallDelta_id(ctx, field)
-			case "name":
-				return ec.fieldContext_ToolCallDelta_name(ctx, field)
-			case "arguments":
-				return ec.fieldContext_ToolCallDelta_arguments(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type ToolCallDelta", field.Name)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _StreamEvent_done(ctx context.Context, field graphql.CollectedField, obj *StreamEvent) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -6264,8 +6195,6 @@ func (ec *executionContext) fieldContext_Subscription_messageStream(ctx context.
 				return ec.fieldContext_StreamEvent_delta(ctx, field)
 			case "thinking":
 				return ec.fieldContext_StreamEvent_thinking(ctx, field)
-			case "toolCall":
-				return ec.fieldContext_StreamEvent_toolCall(ctx, field)
 			case "done":
 				return ec.fieldContext_StreamEvent_done(ctx, field)
 			case "error":
@@ -7041,93 +6970,6 @@ func (ec *executionContext) _ToolCallBlock_arguments(ctx context.Context, field 
 func (ec *executionContext) fieldContext_ToolCallBlock_arguments(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ToolCallBlock",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ToolCallDelta_id(ctx context.Context, field graphql.CollectedField, obj *ToolCallDelta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_ToolCallDelta_id,
-		func(ctx context.Context) (any, error) {
-			return obj.ID, nil
-		},
-		nil,
-		ec.marshalNID2string,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_ToolCallDelta_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ToolCallDelta",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type ID does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ToolCallDelta_name(ctx context.Context, field graphql.CollectedField, obj *ToolCallDelta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_ToolCallDelta_name,
-		func(ctx context.Context) (any, error) {
-			return obj.Name, nil
-		},
-		nil,
-		ec.marshalNString2string,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_ToolCallDelta_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ToolCallDelta",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _ToolCallDelta_arguments(ctx context.Context, field graphql.CollectedField, obj *ToolCallDelta) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_ToolCallDelta_arguments,
-		func(ctx context.Context) (any, error) {
-			return obj.Arguments, nil
-		},
-		nil,
-		ec.marshalOString2ᚖstring,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_ToolCallDelta_arguments(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "ToolCallDelta",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -10955,8 +10797,6 @@ func (ec *executionContext) _StreamEvent(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = ec._StreamEvent_delta(ctx, field, obj)
 		case "thinking":
 			out.Values[i] = ec._StreamEvent_thinking(ctx, field, obj)
-		case "toolCall":
-			out.Values[i] = ec._StreamEvent_toolCall(ctx, field, obj)
 		case "done":
 			out.Values[i] = ec._StreamEvent_done(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -11394,52 +11234,6 @@ func (ec *executionContext) _ToolCallBlock(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
-var toolCallDeltaImplementors = []string{"ToolCallDelta"}
-
-func (ec *executionContext) _ToolCallDelta(ctx context.Context, sel ast.SelectionSet, obj *ToolCallDelta) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, toolCallDeltaImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("ToolCallDelta")
-		case "id":
-			out.Values[i] = ec._ToolCallDelta_id(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "name":
-			out.Values[i] = ec._ToolCallDelta_name(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "arguments":
-			out.Values[i] = ec._ToolCallDelta_arguments(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -12952,13 +12746,6 @@ func (ec *executionContext) marshalOThread2ᚖgithubᚗcomᚋemontenegrᚋspidey
 		return graphql.Null
 	}
 	return ec._Thread(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalOToolCallDelta2ᚖgithubᚗcomᚋemontenegrᚋspideyᚋserviceᚋgraphᚐToolCallDelta(ctx context.Context, sel ast.SelectionSet, v *ToolCallDelta) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	return ec._ToolCallDelta(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOViewState2ᚖgithubᚗcomᚋemontenegrᚋspideyᚋserviceᚋgraphᚐViewState(ctx context.Context, sel ast.SelectionSet, v *ViewState) graphql.Marshaler {

@@ -10,15 +10,14 @@ interface StreamingTurnProps {
 }
 
 export function StreamingTurn({ stream, subagents = [], liveTools = [] }: StreamingTurnProps) {
-  // ToolExecution subscription drives status transitions; match items to
-  // that live list by id so statuses (running → ok/error) light up as
-  // the backend reports them.
-  const liveById = new Map(liveTools.map((t) => [t.callId, t]))
-
-  const anyToolsActive =
-    liveTools.length > 0
-      ? liveTools.some((t) => t.status === 'running' || t.status === 'pending')
-      : stream.items.some((it) => it.kind === 'toolCall')
+  // ToolExecution subscription is the only source of tool calls during
+  // streaming — they don't appear on the StreamEvent (ADK emits
+  // FunctionCall as a discrete event, not a streamable delta, so a
+  // marker on the stream would carry no information the live list
+  // doesn't already have).
+  const anyToolsActive = liveTools.some(
+    (t) => t.status === 'running' || t.status === 'pending',
+  )
 
   const lastItem = stream.items[stream.items.length - 1]
   const stageLabel = !stream.messageId
@@ -49,35 +48,34 @@ export function StreamingTurn({ stream, subagents = [], liveTools = [] }: Stream
                 </div>
               )
             }
-            if (it.kind === 'text') {
-              return (
-                <p
-                  key={`text-${i}`}
-                  style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word', margin: '0 0 12px' }}
-                >
-                  {/* Raw text during streaming — markdown reparse per
-                      delta was O(n²) and half-closed mid-stream
-                      constructs flashed broken layouts. Turn.tsx
-                      renders markdown once the stream settles. */}
-                  {it.text}
-                  {i === stream.items.length - 1 && <span className="caret" />}
-                </p>
-              )
-            }
-            const live = liveById.get(it.id)
+            return (
+              <p
+                key={`text-${i}`}
+                style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word', margin: '0 0 12px' }}
+              >
+                {/* Raw text during streaming — markdown reparse per
+                    delta was O(n²) and half-closed mid-stream
+                    constructs flashed broken layouts. Turn.tsx
+                    renders markdown once the stream settles. */}
+                {it.text}
+                {i === stream.items.length - 1 && <span className="caret" />}
+              </p>
+            )
+          })}
+          {liveTools.map((t) => {
             const status =
-              live?.status === 'completed' && !live?.isError
+              t.status === 'completed' && !t.isError
                 ? 'ok'
-                : live?.isError || live?.status === 'error'
+                : t.isError || t.status === 'error'
                   ? 'error'
                   : 'running'
             return (
               <ToolCall
-                key={`tool-${it.id}`}
+                key={`tool-${t.callId}`}
                 t={{
-                  name: it.name,
-                  args: it.arguments,
-                  result: live?.result ?? '',
+                  name: t.toolName,
+                  args: t.arguments,
+                  result: t.result ?? '',
                   status,
                 }}
               />

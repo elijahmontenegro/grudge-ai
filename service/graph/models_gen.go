@@ -113,12 +113,11 @@ type SkillInfo struct {
 }
 
 type StreamEvent struct {
-	MessageID string         `json:"messageId"`
-	Delta     *string        `json:"delta,omitempty"`
-	Thinking  *string        `json:"thinking,omitempty"`
-	ToolCall  *ToolCallDelta `json:"toolCall,omitempty"`
-	Done      bool           `json:"done"`
-	Error     *string        `json:"error,omitempty"`
+	MessageID string  `json:"messageId"`
+	Delta     *string `json:"delta,omitempty"`
+	Thinking  *string `json:"thinking,omitempty"`
+	Done      bool    `json:"done"`
+	Error     *string `json:"error,omitempty"`
 }
 
 type SubagentProgress struct {
@@ -144,12 +143,6 @@ type ToolCallBlock struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
-}
-
-type ToolCallDelta struct {
-	ID        string  `json:"id"`
-	Name      string  `json:"name"`
-	Arguments *string `json:"arguments,omitempty"`
 }
 
 type ToolExecution struct {
