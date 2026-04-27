@@ -11,6 +11,7 @@ import (
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/config"
+	"github.com/emontenegr/spidey/service/runtime/substrate"
 	"github.com/emontenegr/spidey/service/storage"
 )
 
@@ -207,41 +208,47 @@ func TestKernel_EngineSwap_AtomicUnderConcurrentReads(t *testing.T) {
 }
 
 // TestKernel_MidAssembleEngineSwap — Goroutine A starts an Assemble
-// against a captured engine pointer; while A is blocked inside the
-// slow Score call, the kernel swaps in a different engine. A
-// completes successfully on the engine it captured, B sees the new
-// engine. No panic, no torn write to the old engine's DAG.
+// against the engine kernel published at boot; while A is blocked
+// inside the slow Score call, UpdateEngineConfig fires and rebuilds
+// substrate with a different classifier injected. A completes on
+// the engine it captured, B sees the new engine. No panic, no torn
+// write to the old engine's DAG.
 //
-// This is the scenario the previous "lower-confidence" line in the
-// session report was about — kernel.UpdateEngineConfig fires while a
-// runner has an active OnMessage. Direct engine injection
-// (k.engine.Store) sidesteps substrate's hardcoded TEI-classifier
-// construction; the test validates the runtime contract, not the
-// substrate's wiring choices.
+// Goes through the production path: Bootstrap with substrate.WithClassifier
+// at boot, UpdateEngineConfig with substrate.WithClassifier on swap.
+// substrate.Build constructs the engine in both cases via the same
+// code path; the test exercises the actual production swap, not a
+// shortcut. Validates atomic.Pointer correctness AND substrate's
+// rebuild-and-swap behavior under concurrent in-flight Assemble.
 func TestKernel_MidAssembleEngineSwap(t *testing.T) {
 	dir := t.TempDir()
 	cfg := minimalConfig(dir)
+	cfg.Settings.Engine = config.EngineConfig{
+		EdgeThreshold:   0.5,
+		ScoreFloor:      0.0,
+		WeightCE:        0.6,
+		WeightTemp:      0.4,
+		ZScoreThreshold: 0,
+		MinBatchStdDev:  0,
+		RadiusSize:      0,
+		RerankTopK:      32,
+	}
 
-	k, err := Bootstrap(context.Background(), cfg)
+	scorerA := &gatedScorer{enter: make(chan struct{}, 1), release: make(chan struct{})}
+	oracleA := &fakeOracle{texts: map[string]string{
+		"prior": "alpha",
+		"query": "beta",
+	}}
+
+	k, err := Bootstrap(
+		context.Background(), cfg,
+		substrate.WithClassifier(scorerA),
+		substrate.WithChunkOracle(oracleA),
+	)
 	if err != nil {
 		t.Fatalf("Bootstrap: %v", err)
 	}
 	defer k.Shutdown()
-
-	// Build engineA with a classifier that blocks on a channel —
-	// gives the test deterministic control over Assemble's timing.
-	scorerA := &gatedScorer{enter: make(chan struct{}, 1), release: make(chan struct{})}
-	oracle := &fakeOracle{texts: map[string]string{
-		"prior": "alpha",
-		"query": "beta",
-	}}
-	rrcCfg := rrc.DefaultConfig()
-	rrcCfg.ZScoreThreshold = 0
-	rrcCfg.MinBatchStdDev = 0
-	rrcCfg.RadiusSize = 0
-	rrcCfg.DiversityLambda = 0
-	engineA := rrc.NewEngine(rrcCfg, scorerA, rrc.WithChunkOracle(oracle))
-	k.engine.Store(engineA)
 
 	prior := makeFakeMsg("prior", 0, "t1", "alpha")
 	query := makeFakeMsg("query", 1, "t1", "beta")
@@ -252,12 +259,15 @@ func TestKernel_MidAssembleEngineSwap(t *testing.T) {
 		err error
 	}
 	resCh := make(chan asmResult, 1)
+	engineA := k.Engine()
+	engineAThreshold := engineA.Config().EdgeThreshold // capture before swap mutates cfg
 
-	// Goroutine A captures engineA and starts Assemble. The slow
-	// classifier signals on `enter` once Score is reached, then
-	// blocks on `release` until the test allows it to return.
+	// Goroutine A captures engineA via k.Engine() and starts
+	// Assemble. The gated classifier signals on `enter` once Score
+	// is reached, then blocks on `release` until the test allows
+	// it to return.
 	go func() {
-		e := k.Engine() // captures engineA
+		e := k.Engine()
 		res, err := e.Assemble(context.Background(), rrc.AssembleRequest{
 			Query:        query,
 			Corpus:       corpus,
@@ -268,29 +278,43 @@ func TestKernel_MidAssembleEngineSwap(t *testing.T) {
 		resCh <- asmResult{res: res, err: err}
 	}()
 
-	// Wait until A is parked inside Score on engineA.
 	select {
 	case <-scorerA.enter:
 	case <-time.After(2 * time.Second):
 		t.Fatal("scorer A never reached Score()")
 	}
 
-	// Build engineB with an entirely independent classifier and
-	// oracle, and swap. From here forward k.Engine() returns
-	// engineB. engineA is still alive — A still holds it.
+	// Mid-Assemble: drive UpdateEngineConfig with a different
+	// classifier and oracle. substrate.Build rebuilds, atomic.Store
+	// publishes the new engine. engineA is still alive, A still
+	// holds it.
 	scorerB := &gatedScorer{enter: make(chan struct{}, 1), release: make(chan struct{})}
 	oracleB := &fakeOracle{texts: map[string]string{
 		"prior": "alpha",
 		"query": "beta",
 	}}
-	engineB := rrc.NewEngine(rrcCfg, scorerB, rrc.WithChunkOracle(oracleB))
-	k.engine.Store(engineB)
-
-	if got := k.Engine(); got != engineB {
-		t.Errorf("after swap k.Engine() should be engineB, got different pointer")
+	newCfg := engineA.Config()
+	newCfg.EdgeThreshold = 0.42 // distinct so we can verify the swap
+	if err := k.UpdateEngineConfig(
+		context.Background(), newCfg,
+		substrate.WithClassifier(scorerB),
+		substrate.WithChunkOracle(oracleB),
+	); err != nil {
+		close(scorerA.release)
+		t.Fatalf("UpdateEngineConfig: %v", err)
 	}
 
-	// Release A — it completes on the engine it captured.
+	if engineA == k.Engine() {
+		close(scorerA.release)
+		t.Fatal("engine pointer unchanged after UpdateEngineConfig — swap failed")
+	}
+	if k.Engine().Config().EdgeThreshold != 0.42 {
+		t.Errorf("new engine missing new config: EdgeThreshold=%v want 0.42",
+			k.Engine().Config().EdgeThreshold)
+	}
+
+	// Release A. It completes on engineA — the engine it captured
+	// before the swap.
 	close(scorerA.release)
 	select {
 	case r := <-resCh:
@@ -304,15 +328,17 @@ func TestKernel_MidAssembleEngineSwap(t *testing.T) {
 		t.Fatal("goroutine A did not complete after release")
 	}
 
-	// engineA should be functionally intact post-swap. Direct
-	// invocation (not via k.Engine()) confirms its DAG / score
-	// cache survived the swap untouched.
-	if engineA.Config().EdgeThreshold != rrcCfg.EdgeThreshold {
+	// engineA's config remains intact post-swap. UpdateEngineConfig
+	// mutated cfg.Settings.Engine in place, so we compare against
+	// the threshold we captured before the swap.
+	if engineA.Config().EdgeThreshold != engineAThreshold {
 		t.Errorf("engineA config corrupted: EdgeThreshold=%v want %v",
-			engineA.Config().EdgeThreshold, rrcCfg.EdgeThreshold)
+			engineA.Config().EdgeThreshold, engineAThreshold)
 	}
 
-	// engineB's scorer never ran — A's release didn't trigger it.
+	// scorerB hasn't been called yet — A's release didn't wake the
+	// wrong gated channel, confirming the engines hold no shared
+	// goroutines.
 	if scorerB.callCount.Load() != 0 {
 		t.Errorf("scorerB should not have been called yet, got %d calls",
 			scorerB.callCount.Load())

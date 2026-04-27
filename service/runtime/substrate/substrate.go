@@ -93,7 +93,7 @@ type Substrate struct {
 	Embedder      core.Embedder
 
 	Searcher    *search.Searcher
-	ChunkOracle *search.ChunkOracle
+	ChunkOracle rrc.ChunkOracle
 
 	// Model IDs identify the provider+model under which scores and
 	// embeddings are persisted. Empty when the corresponding
@@ -102,6 +102,40 @@ type Substrate struct {
 	// id, harmless.
 	RerankerModelID string
 	EmbedModelID    string
+}
+
+// Option configures Build at the seams that aren't expressible
+// through the config alone. Production callers pass nothing — every
+// substrate component constructs from cfg.Settings.Providers via
+// the registered adapters. Tests inject fakes (gated classifier,
+// stub oracle) to drive Engine.Assemble through real code paths
+// without standing up a TEI server.
+type Option func(*options)
+
+type options struct {
+	classifier  core.Classifier
+	chunkOracle rrc.ChunkOracle
+}
+
+// WithClassifier overrides the classifier substrate would otherwise
+// build from the "classifier" / "embedder" providers in cfg. The
+// override wins unconditionally; cfg-derived URLs are ignored when
+// it's set.
+//
+// The composite-classifier construction (NLI + embedding similarity
+// from two URLs) lives inside tei. Tests that don't have those
+// services wire a single Scorer here and exercise the rest of
+// substrate as-is.
+func WithClassifier(c core.Classifier) Option {
+	return func(o *options) { o.classifier = c }
+}
+
+// WithChunkOracle overrides the chunk oracle substrate would
+// otherwise build from the embedder provider. Same semantics as
+// WithClassifier — production callers pass nothing; tests inject a
+// stub that returns canned chunks/vectors.
+func WithChunkOracle(co rrc.ChunkOracle) Option {
+	return func(o *options) { o.chunkOracle = co }
 }
 
 // Build wires the substrate from a loaded config and an open DB.
@@ -113,7 +147,14 @@ type Substrate struct {
 // not-yet-configured UX rather than crash. classifier == nil ||
 // MainCompleter == nil produces a warning here so boot logs
 // surface the situation early.
-func Build(ctx context.Context, cfg *config.Config, db *storage.DB) (*Substrate, error) {
+//
+// Options override fields that would otherwise come from cfg —
+// see WithClassifier / WithChunkOracle.
+func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Option) (*Substrate, error) {
+	o := &options{}
+	for _, opt := range opts {
+		opt(o)
+	}
 	s := &Substrate{DB: db, Config: cfg}
 
 	if mainCfg, ok := cfg.Settings.Providers["main"]; ok && mainCfg.Adapter != "" {
@@ -139,7 +180,10 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB) (*Substrate,
 		embedURL = embCfg.BaseURL
 		s.EmbedModelID = embCfg.Model
 	}
-	if nliURL != "" || embedURL != "" {
+	if o.classifier != nil {
+		s.Classifier = o.classifier
+		log.Printf("Classifier: injected (test/override)")
+	} else if nliURL != "" || embedURL != "" {
 		s.Classifier = tei.NewCompositeClassifier(nliURL, embedURL)
 		log.Printf("Composite classifier: NLI=%q, embed=%q", nliURL, embedURL)
 	}
@@ -207,8 +251,12 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB) (*Substrate,
 
 	// Searcher + ChunkOracle share the same embedder and model id.
 	// Construct before the engine so the oracle can flow in as an
-	// engine option.
-	if s.Embedder != nil && s.EmbedModelID != "" {
+	// engine option. WithChunkOracle override wins over the
+	// embedder-derived default (used by tests that don't have a
+	// real embedder service to point at).
+	if o.chunkOracle != nil {
+		s.ChunkOracle = o.chunkOracle
+	} else if s.Embedder != nil && s.EmbedModelID != "" {
 		s.Searcher = search.NewSearcher(s.Embedder, s.EmbedModelID, db)
 		s.ChunkOracle = search.NewChunkOracle(db, s.Embedder, s.EmbedModelID)
 	}
@@ -219,9 +267,9 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB) (*Substrate,
 	//   - score persister (write-through to DB on every new chunk-pair score)
 	// The engine has no public mutation surface — settings changes
 	// rebuild it via kernel.UpdateEngineConfig / ReloadProviders.
-	opts := []rrc.Option{}
+	engineOpts := []rrc.Option{}
 	if edges, err := db.AllEdges(); err == nil && len(edges) > 0 {
-		opts = append(opts, rrc.WithLoadedEdges(edges))
+		engineOpts = append(engineOpts, rrc.WithLoadedEdges(edges))
 		log.Printf("Loaded %d edges", len(edges))
 	}
 	if s.RerankerModelID != "" {
@@ -236,26 +284,28 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB) (*Substrate,
 					Score:        v,
 				})
 			}
-			opts = append(opts, rrc.WithLoadedScores(converted))
+			engineOpts = append(engineOpts, rrc.WithLoadedScores(converted))
 			log.Printf("Loaded %d chunk-pair scores (model=%s)", len(scores), s.RerankerModelID)
 		}
 		modelID := s.RerankerModelID
-		opts = append(opts, rrc.WithScorePersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
+		engineOpts = append(engineOpts, rrc.WithScorePersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
 			if err := db.InsertChunkScore(fromID, fromIdx, toID, toIdx, modelID, score); err != nil {
 				log.Printf("InsertChunkScore(%s[%d], %s[%d], %s): %v", fromID, fromIdx, toID, toIdx, modelID, err)
 			}
 		}))
 	}
 	if s.ChunkOracle != nil {
-		opts = append(opts, rrc.WithChunkOracle(s.ChunkOracle))
+		engineOpts = append(engineOpts, rrc.WithChunkOracle(s.ChunkOracle))
 	}
-	s.Engine = rrc.NewEngine(rrcCfg, s.Classifier, opts...)
+	s.Engine = rrc.NewEngine(rrcCfg, s.Classifier, engineOpts...)
 
-	if s.ChunkOracle != nil {
-		// Backfill chunk embeddings in the background. Non-blocking —
-		// service accepts requests immediately; OnMessage misses on
-		// not-yet-backfilled chunks just embed live.
-		go s.ChunkOracle.BackfillEmbeddings(context.Background())
+	// Backfill chunk embeddings in the background. Non-blocking —
+	// service accepts requests immediately; OnMessage misses on
+	// not-yet-backfilled chunks just embed live. Skip when the
+	// oracle was injected (it may not implement the production
+	// BackfillEmbeddings protocol).
+	if real, ok := s.ChunkOracle.(*search.ChunkOracle); ok {
+		go real.BackfillEmbeddings(context.Background())
 	}
 
 	return s, nil

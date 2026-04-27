@@ -130,7 +130,10 @@ type Kernel struct {
 // Failures here are fatal — no token estimator, no storage, no
 // providers means no agent. Sandbox preflight is non-fatal (logs
 // and continues; sandboxed=false threads are unaffected).
-func Bootstrap(ctx context.Context, cfg *config.Config) (*Kernel, error) {
+//
+// substrate options pass through to Build for callers that need to
+// inject fakes (tests). Production callers pass nothing.
+func Bootstrap(ctx context.Context, cfg *config.Config, opts ...substrate.Option) (*Kernel, error) {
 	// tiktoken is the committed token estimator for context-budget
 	// sizing. If it can't load — corrupt cache, network unreachable
 	// for first-run fetch — refuse to start rather than silently
@@ -160,7 +163,7 @@ func Bootstrap(ctx context.Context, cfg *config.Config) (*Kernel, error) {
 		log.Printf("Sandbox ready: image %s", sandbox.Image)
 	}
 
-	subs, err := substrate.Build(ctx, cfg, db)
+	subs, err := substrate.Build(ctx, cfg, db, opts...)
 	if err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("substrate: %w", err)
@@ -296,11 +299,14 @@ func (k *Kernel) setEmbedQueue(q *search.EmbedQueue) *search.EmbedQueue {
 // lock, the substrate is built first (failure here leaves the
 // kernel state untouched), then the engine is swapped in one
 // atomic write.
-func (k *Kernel) ReloadProviders(ctx context.Context) error {
+//
+// substrate options pass through to Build (production callers
+// pass nothing; tests inject fakes).
+func (k *Kernel) ReloadProviders(ctx context.Context, opts ...substrate.Option) error {
 	k.reloadMu.Lock()
 	defer k.reloadMu.Unlock()
 
-	subs, err := substrate.Build(ctx, k.Config, k.DB)
+	subs, err := substrate.Build(ctx, k.Config, k.DB, opts...)
 	if err != nil {
 		return fmt.Errorf("rebuild substrate: %w", err)
 	}
@@ -348,7 +354,10 @@ func (k *Kernel) ReloadProviders(ctx context.Context) error {
 // Same swap semantics as ReloadProviders: build new from the same
 // substrate snapshot (loaded edges + scores from disk, current
 // classifier / oracle / persister), atomic Store, stop runners.
-func (k *Kernel) UpdateEngineConfig(ctx context.Context, cfg rrc.EngineConfig) error {
+//
+// substrate options pass through to Build for tests that need to
+// inject fakes during the rebuild.
+func (k *Kernel) UpdateEngineConfig(ctx context.Context, cfg rrc.EngineConfig, opts ...substrate.Option) error {
 	k.reloadMu.Lock()
 	defer k.reloadMu.Unlock()
 
@@ -372,7 +381,7 @@ func (k *Kernel) UpdateEngineConfig(ctx context.Context, cfg rrc.EngineConfig) e
 		PerMsgDelimiterTokens: cfg.PerMsgDelimiterTokens,
 		NLIFusionWeight:       cfg.NLIFusionWeight,
 	}
-	subs, err := substrate.Build(ctx, k.Config, k.DB)
+	subs, err := substrate.Build(ctx, k.Config, k.DB, opts...)
 	if err != nil {
 		k.Config.Settings.Engine = old
 		return fmt.Errorf("rebuild substrate: %w", err)
