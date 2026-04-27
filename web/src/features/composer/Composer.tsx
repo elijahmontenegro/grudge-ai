@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { IS_MAC } from '@/primitives/platform'
+import { useLocalStorage } from '@/primitives/useLocalStorage'
 import { AgentStatus } from '@/graphql/generated/types'
 import { useAttachments, type AttachmentMeta } from '@/hooks/useAttachments'
 import { Attachments } from './Attachments'
@@ -62,23 +63,9 @@ interface ComposerProps {
 
 const DRAFT_PREFIX = 'spidey.draft:'
 
-function loadDraft(key?: string): string {
-  if (!key) return ''
-  try {
-    return localStorage.getItem(DRAFT_PREFIX + key) || ''
-  } catch {
-    return ''
-  }
-}
-
-function saveDraft(key: string | undefined, value: string) {
-  if (!key) return
-  try {
-    if (value) localStorage.setItem(DRAFT_PREFIX + key, value)
-    else localStorage.removeItem(DRAFT_PREFIX + key)
-  } catch {
-    // storage quota / private mode — drop silently
-  }
+const stringCodec = {
+  serialize: (v: string) => v,
+  parse: (raw: string) => raw,
 }
 
 /**
@@ -114,7 +101,18 @@ export function Composer({
   sandboxed,
   onSandboxedChange,
 }: ComposerProps) {
-  const [value, setValue] = useState<string>(() => loadDraft(draftKey))
+  // Per-thread draft text persists across tab close. useLocalStorage
+  // handles the dynamic-key dance — when draftKey switches (the user
+  // navigates to another thread) the load effect refreshes value from
+  // the new key BEFORE the persist effect could overwrite it. Null
+  // key (pre-thread-creation composer on Home) → in-memory only, no
+  // localStorage write.
+  const [value, setValue] = useLocalStorage<string>(
+    draftKey ? DRAFT_PREFIX + draftKey : null,
+    '',
+    stringCodec,
+    { removeOnEmpty: true },
+  )
   const [durationLocal, setDurationLocal] = useState<AutonomousDuration>('1h')
   const duration = durationProp ?? durationLocal
   const setDuration = setDurationProp ?? setDurationLocal
@@ -129,17 +127,6 @@ export function Composer({
   const running = agentStatus === AgentStatus.Running
   const paused = agentStatus === AgentStatus.Paused
   const runtimeActive = running || paused
-
-  // Swap draft when the thread (draftKey) changes. Without this, text
-  // typed in thread A would appear in thread B after navigation.
-  useEffect(() => {
-    setValue(loadDraft(draftKey))
-  }, [draftKey])
-
-  // Persist on change — NOT via a [draftKey, value] effect. That form
-  // fires once with the stale outgoing `value` under the new
-  // `draftKey`, clobbering the destination thread's saved draft
-  // before the load effect can run.
 
   useEffect(() => {
     if (taRef.current) {
@@ -167,7 +154,6 @@ export function Composer({
     // new-turn concept.
     if (paused && onResumeAgent) {
       setValue('')
-      saveDraft(draftKey, '')
       onResumeAgent(text || undefined)
       return
     }
@@ -180,7 +166,6 @@ export function Composer({
       onSend(text, attachments)
     }
     setValue('')
-    saveDraft(draftKey, '')
     clear()
   }
 
@@ -331,11 +316,7 @@ export function Composer({
           className="composer-input"
           placeholder={placeholder}
           value={value}
-          onChange={(e) => {
-            const v = e.target.value
-            setValue(v)
-            saveDraft(draftKey, v)
-          }}
+          onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKey}
           onPaste={onPaste}
           disabled={textareaDisabled}

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { IconArrow, IconSearch, IconSettings, IconSkill } from '@/primitives/icons'
-import { StateDot } from '@/features/chrome/StateDot'
 import { PALETTE_ITEMS } from '@/data/fixtures'
 import { useSearch, type SearchHit } from '@/hooks/useSearch'
 import { useSkills } from '@/hooks/useSkills'
@@ -157,7 +156,7 @@ export function CommandPalette({
                   >
                     <span className="icon">
                       {item.kind === 'action' && <IconArrow />}
-                      {item.kind === 'thread' && <StateDot state="idle" />}
+                      {item.kind === 'thread' && <span className="thread-dot" data-state="idle" />}
                       {item.kind === 'skill' && <IconSkill />}
                       {item.kind === 'search' && <IconSearch />}
                       {item.kind === 'setting' && <IconSettings />}
