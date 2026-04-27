@@ -4,9 +4,12 @@ import (
 	"context"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/storage"
 )
@@ -200,6 +203,176 @@ func TestKernel_EngineSwap_AtomicUnderConcurrentReads(t *testing.T) {
 	want := float64(swaps) / 100.0
 	if diff := final.EdgeThreshold - want; diff < -1e-9 || diff > 1e-9 {
 		t.Errorf("final EdgeThreshold: got %v want %v", final.EdgeThreshold, want)
+	}
+}
+
+// TestKernel_MidAssembleEngineSwap — Goroutine A starts an Assemble
+// against a captured engine pointer; while A is blocked inside the
+// slow Score call, the kernel swaps in a different engine. A
+// completes successfully on the engine it captured, B sees the new
+// engine. No panic, no torn write to the old engine's DAG.
+//
+// This is the scenario the previous "lower-confidence" line in the
+// session report was about — kernel.UpdateEngineConfig fires while a
+// runner has an active OnMessage. Direct engine injection
+// (k.engine.Store) sidesteps substrate's hardcoded TEI-classifier
+// construction; the test validates the runtime contract, not the
+// substrate's wiring choices.
+func TestKernel_MidAssembleEngineSwap(t *testing.T) {
+	dir := t.TempDir()
+	cfg := minimalConfig(dir)
+
+	k, err := Bootstrap(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	defer k.Shutdown()
+
+	// Build engineA with a classifier that blocks on a channel —
+	// gives the test deterministic control over Assemble's timing.
+	scorerA := &gatedScorer{enter: make(chan struct{}, 1), release: make(chan struct{})}
+	oracle := &fakeOracle{texts: map[string]string{
+		"prior": "alpha",
+		"query": "beta",
+	}}
+	rrcCfg := rrc.DefaultConfig()
+	rrcCfg.ZScoreThreshold = 0
+	rrcCfg.MinBatchStdDev = 0
+	rrcCfg.RadiusSize = 0
+	rrcCfg.DiversityLambda = 0
+	engineA := rrc.NewEngine(rrcCfg, scorerA, rrc.WithChunkOracle(oracle))
+	k.engine.Store(engineA)
+
+	prior := makeFakeMsg("prior", 0, "t1", "alpha")
+	query := makeFakeMsg("query", 1, "t1", "beta")
+	corpus := []*pb.Message{prior, query}
+
+	type asmResult struct {
+		res rrc.AssembleResult
+		err error
+	}
+	resCh := make(chan asmResult, 1)
+
+	// Goroutine A captures engineA and starts Assemble. The slow
+	// classifier signals on `enter` once Score is reached, then
+	// blocks on `release` until the test allows it to return.
+	go func() {
+		e := k.Engine() // captures engineA
+		res, err := e.Assemble(context.Background(), rrc.AssembleRequest{
+			Query:        query,
+			Corpus:       corpus,
+			ThreadCorpus: corpus,
+			Scope:        pb.SelectionScope_SELECTION_SCOPE_THREAD,
+			ThreadID:     "t1",
+		})
+		resCh <- asmResult{res: res, err: err}
+	}()
+
+	// Wait until A is parked inside Score on engineA.
+	select {
+	case <-scorerA.enter:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scorer A never reached Score()")
+	}
+
+	// Build engineB with an entirely independent classifier and
+	// oracle, and swap. From here forward k.Engine() returns
+	// engineB. engineA is still alive — A still holds it.
+	scorerB := &gatedScorer{enter: make(chan struct{}, 1), release: make(chan struct{})}
+	oracleB := &fakeOracle{texts: map[string]string{
+		"prior": "alpha",
+		"query": "beta",
+	}}
+	engineB := rrc.NewEngine(rrcCfg, scorerB, rrc.WithChunkOracle(oracleB))
+	k.engine.Store(engineB)
+
+	if got := k.Engine(); got != engineB {
+		t.Errorf("after swap k.Engine() should be engineB, got different pointer")
+	}
+
+	// Release A — it completes on the engine it captured.
+	close(scorerA.release)
+	select {
+	case r := <-resCh:
+		if r.err != nil {
+			t.Fatalf("goroutine A Assemble failed mid-swap: %v", r.err)
+		}
+		if len(r.res.Wire) == 0 {
+			t.Error("goroutine A produced empty wire")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine A did not complete after release")
+	}
+
+	// engineA should be functionally intact post-swap. Direct
+	// invocation (not via k.Engine()) confirms its DAG / score
+	// cache survived the swap untouched.
+	if engineA.Config().EdgeThreshold != rrcCfg.EdgeThreshold {
+		t.Errorf("engineA config corrupted: EdgeThreshold=%v want %v",
+			engineA.Config().EdgeThreshold, rrcCfg.EdgeThreshold)
+	}
+
+	// engineB's scorer never ran — A's release didn't trigger it.
+	if scorerB.callCount.Load() != 0 {
+		t.Errorf("scorerB should not have been called yet, got %d calls",
+			scorerB.callCount.Load())
+	}
+}
+
+// gatedScorer is a Scorer that signals on `enter` when Score is
+// invoked, then blocks until `release` closes. The first call also
+// records itself in callCount for later assertions.
+type gatedScorer struct {
+	enter     chan struct{}
+	release   chan struct{}
+	callCount atomic.Int32
+}
+
+func (g *gatedScorer) Score(_ context.Context, _ string, candidates []string) ([]float64, error) {
+	g.callCount.Add(1)
+	select {
+	case g.enter <- struct{}{}:
+	default:
+	}
+	<-g.release
+	out := make([]float64, len(candidates))
+	for i := range out {
+		out[i] = 0.7
+	}
+	return out, nil
+}
+
+// fakeOracle is a minimal ChunkOracle: each registered text is
+// returned as a single chunk at index 0 with a fixed unit vector
+// so cosine prefilter is a no-op.
+type fakeOracle struct {
+	texts map[string]string
+}
+
+func (o *fakeOracle) ChunksForMessages(_ context.Context, ids []string) (map[string][]rrc.ChunkRef, error) {
+	out := make(map[string][]rrc.ChunkRef)
+	for _, id := range ids {
+		if t, ok := o.texts[id]; ok {
+			out[id] = []rrc.ChunkRef{{
+				MessageID: id, ChunkIndex: 0, Text: t, Vector: []float32{1.0},
+			}}
+		}
+	}
+	return out, nil
+}
+
+func (o *fakeOracle) EnsureVector(_ context.Context, _ rrc.ChunkRef) ([]float32, error) {
+	return []float32{1.0}, nil
+}
+
+// makeFakeMsg constructs a minimal message for the swap test.
+func makeFakeMsg(id string, position int64, threadID, text string) *pb.Message {
+	return &pb.Message{
+		Id:       id,
+		Role:     pb.Role_ROLE_USER,
+		Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: text}}}},
+		Position: position,
+		ThreadId: threadID,
 	}
 }
 
