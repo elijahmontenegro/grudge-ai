@@ -1777,6 +1777,25 @@ button { cursor: pointer; }
 .scope-select button:hover { color: var(--ink); background: var(--paper-3); }
 .scope-select button[data-on="true"] { color: var(--ink); background: var(--paper-3); }
 
+/* Permission segmented control (settings · tool permissions row).
+   Bordered group with no gap between buttons; selected = ink fill. */
+.perm-select {
+  display: inline-flex;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.perm-select button {
+  padding: 3px 9px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  background: transparent;
+  border-right: 1px solid var(--rule);
+}
+.perm-select button:last-child { border-right: none; }
+.perm-select button[data-on="true"] { background: var(--ink); color: var(--paper); }
+
 .composer-shell[data-mode="plan"] { border-color: color-mix(in oklch, var(--accent), transparent 60%); }
 .composer-shell[data-mode="autonomous"] { border-color: color-mix(in oklch, var(--accent), transparent 40%); }
 .composer-shell[data-dragging="true"] {

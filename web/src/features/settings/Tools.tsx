@@ -1,3 +1,4 @@
+import { SegButton } from '@/primitives/SegButton'
 import type {
   HookConfig,
   MCPServer,
@@ -305,32 +306,16 @@ export function Tools({
                   {t.name}
                 </span>
                 <span style={{ fontSize: 12, color: 'var(--muted)' }}>{t.desc}</span>
-                <span
-                  className="seg"
-                  style={{
-                    display: 'inline-flex',
-                    border: '1px solid var(--rule)',
-                    borderRadius: 3,
-                    overflow: 'hidden',
-                  }}
-                >
-                  {(['allow', 'ask', 'deny'] as Perm[]).map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setPermissions({ ...permissions, [t.name]: p })}
-                      style={{
-                        padding: '3px 9px',
-                        fontFamily: 'var(--mono)',
-                        fontSize: 10.5,
-                        background: cur === p ? 'var(--ink)' : 'transparent',
-                        color: cur === p ? 'var(--paper)' : 'var(--muted)',
-                        borderRight: p !== 'deny' ? '1px solid var(--rule)' : 'none',
-                      }}
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </span>
+                <SegButton
+                  className="perm-select"
+                  value={cur}
+                  onChange={(next) => setPermissions({ ...permissions, [t.name]: next })}
+                  options={[
+                    { value: 'allow', label: 'allow' },
+                    { value: 'ask', label: 'ask' },
+                    { value: 'deny', label: 'deny' },
+                  ]}
+                />
               </div>
             )
           })}
