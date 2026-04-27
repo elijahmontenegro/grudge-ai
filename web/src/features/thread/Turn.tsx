@@ -1,7 +1,7 @@
 import { type ReactNode, useState } from 'react'
 import { ToolCall } from './ToolCall'
 import { AskQuestionRow } from './AskQuestionRow'
-import { MarkdownBody } from '@/features/thread/MarkdownBody'
+import { MarkdownBody } from '@/primitives/MarkdownBody'
 import { formatSize } from '@/hooks/useAttachments'
 import type { ThreadMessage } from '@/hooks/useThreadMessages'
 
