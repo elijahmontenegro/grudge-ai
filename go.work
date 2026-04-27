@@ -4,5 +4,6 @@ use (
 	./core
 	./gen/go
 	./rrc
+	./scripts/verifydeps
 	./service
 )

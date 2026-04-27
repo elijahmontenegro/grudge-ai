@@ -10,6 +10,7 @@ import (
 	"time"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -686,12 +687,13 @@ func (e *Engine) ApplyMMR(ctx context.Context, selected []*pb.SelectedMessage, l
 	// Copy each SelectedMessage before rewriting EffectiveScore so
 	// callers whose original slice escaped elsewhere (logging,
 	// introspection publish, audit trails) don't observe a surprise
-	// mutation. Pointer identity within out is stable for the MMR pass
-	// itself; callers get fresh structs with adjusted scores.
+	// mutation. proto.Clone (not value-copy) because the proto type
+	// embeds a MessageState containing a mutex — value-copying it
+	// trips go vet's copylocks check and risks wedged state under
+	// concurrent reflection access.
 	remaining := make([]*pb.SelectedMessage, len(selected))
 	for i, s := range selected {
-		cp := *s
-		remaining[i] = &cp
+		remaining[i] = proto.Clone(s).(*pb.SelectedMessage)
 	}
 	sort.SliceStable(remaining, func(i, j int) bool {
 		return orig[remaining[i].MessageId] > orig[remaining[j].MessageId]

@@ -27,10 +27,29 @@ tasks:
         cmd: cd {{.ITEM}} && go test ./...
 
   lint:
-    desc: Vet all Go modules
+    desc: Vet all Go modules. Skips copylocks on service/graph because
+          gqlgen's generated marshalers pass proto messages by value
+          and proto types embed a sync.Mutex via MessageState. The
+          warning is benign (marshalers don't mutate from multiple
+          goroutines); excluding only that package preserves rigor on
+          hand-written code.
     cmds:
-      - for: [gen/go, core, rrc, service]
+      - for: [gen/go, core, rrc]
         cmd: cd {{.ITEM}} && go vet ./...
+      - cd service && go vet $(go list ./... | grep -v '/graph$')
+      - cd service && go vet -copylocks=false ./graph/...
+
+  verify:deps:
+    desc: Cross-module dependency-graph invariants (storage boundary, tiktoken decoupling)
+    cmds:
+      - go run ./scripts/verifydeps
+
+  verify:
+    desc: Run every CI invariant — lint, dep-graph checks, tests
+    cmds:
+      - task: lint
+      - task: verify:deps
+      - task: test
 
   tidy:
     desc: Run go mod tidy in each module
