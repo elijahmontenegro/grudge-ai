@@ -1,11 +1,11 @@
 import { useCallback, type RefObject } from 'react'
 import { IconArchive, IconEdit, IconTrash } from '@/primitives/icons'
-import type { Thread } from '@/domain/types'
+import type { ThreadSummary } from '@/hooks/useThreads'
 import { usePopover } from '@/primitives/usePopover'
 
 interface Props {
   anchorRef: RefObject<HTMLElement | null>
-  thread: Thread & { archived?: boolean }
+  thread: ThreadSummary
   onClose: () => void
   onRename: () => void
   onToggleArchive: () => void
@@ -47,7 +47,7 @@ export function ThreadActionsMenu({
       </button>
       <button className="thread-menu-item" onClick={onToggleArchive} role="menuitem">
         <span className="thread-menu-icon"><IconArchive size={13} /></span>
-        <span>{thread.archived ? 'Unarchive' : 'Archive'}</span>
+        <span>{thread.archivedAt ? 'Unarchive' : 'Archive'}</span>
       </button>
       <button className="thread-menu-item danger" onClick={onDelete} role="menuitem">
         <span className="thread-menu-icon"><IconTrash size={13} /></span>

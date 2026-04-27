@@ -1,10 +1,9 @@
 import { useMemo, useState } from 'react'
 import { ThreadRow } from '@/features/chrome/ThreadRow'
 import { IconSearch, IconX } from '@/primitives/icons'
-import { useThreads } from '@/hooks/useThreads'
+import { useThreads, type ThreadSummary } from '@/hooks/useThreads'
 import { useRecentActivity } from '@/hooks/useRecentActivity'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
-import type { Thread } from '@/domain/types'
 
 type Filter = 'all' | 'starred' | 'archived'
 
@@ -29,24 +28,25 @@ export function Chats({ onOpenThread }: ChatsProps) {
   const { items: activity, loading: activityLoading } = useRecentActivity(24)
   const muts = useThreadMutations()
 
-  const shown = useMemo<Thread[]>(() => {
+  const shown = useMemo<ThreadSummary[]>(() => {
     const q = query.trim().toLowerCase()
     return threads
-      .filter((t) => !t.parentId) // roots only — branches sit under parents
+      .filter((t) => !t.parentThreadId) // roots only — branches sit under parents
       .filter((t) => {
-        if (filter === 'starred') return t.pinned && !t.archived
-        if (filter === 'archived') return !!t.archived
-        return !t.archived
+        const archived = !!t.archivedAt
+        if (filter === 'starred') return false // pinned not on schema; future
+        if (filter === 'archived') return archived
+        return !archived
       })
       .filter((t) => !q || t.name.toLowerCase().includes(q) || t.id.toLowerCase().includes(q))
   }, [threads, filter, query])
 
   const counts = useMemo(() => {
-    const roots = threads.filter((t) => !t.parentId)
+    const roots = threads.filter((t) => !t.parentThreadId)
     return {
-      all: roots.filter((t) => !t.archived).length,
-      starred: roots.filter((t) => t.pinned && !t.archived).length,
-      archived: roots.filter((t) => t.archived).length,
+      all: roots.filter((t) => !t.archivedAt).length,
+      starred: 0,
+      archived: roots.filter((t) => !!t.archivedAt).length,
     }
   }, [threads])
 
@@ -107,7 +107,7 @@ export function Chats({ onOpenThread }: ChatsProps) {
                 active={false}
                 onClick={() => onOpenThread(t.id)}
                 onArchiveToggle={() =>
-                  t.archived ? void muts.unarchive(t.id) : void muts.archive(t.id)
+                  t.archivedAt ? void muts.unarchive(t.id) : void muts.archive(t.id)
                 }
                 onDelete={() => void muts.remove(t.id)}
                 onRename={(n) => void muts.rename(t.id, n)}

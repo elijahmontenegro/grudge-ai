@@ -4,13 +4,14 @@ import { StateDot } from '@/features/chrome/StateDot'
 import { PALETTE_ITEMS } from '@/data/fixtures'
 import { useSearch, type SearchHit } from '@/hooks/useSearch'
 import { useSkills } from '@/hooks/useSkills'
-import type { PaletteItem, Thread } from '@/domain/types'
+import type { ThreadSummary } from '@/hooks/useThreads'
+import type { PaletteItem } from '@/domain/types'
 
 interface PaletteProps {
   open: boolean
   onClose: () => void
   onRun: (item: PaletteItem) => void
-  threads: Thread[]
+  threads: ThreadSummary[]
   /** messageId is passed when a search result was clicked, so the target
    *  thread can scroll to that specific turn. Null for direct thread jumps. */
   onOpenThread: (id: string, messageId?: string) => void

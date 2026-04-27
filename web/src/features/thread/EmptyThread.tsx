@@ -1,7 +1,7 @@
-import type { Thread } from '@/domain/types'
+import type { ThreadDetail } from '@/hooks/useThreadMessages'
 
 interface EmptyThreadProps {
-  thread: Thread
+  thread: ThreadDetail
   parentName?: string | null
 }
 
@@ -16,18 +16,18 @@ export function EmptyThread({ thread, parentName }: EmptyThreadProps) {
       <div className="empty-thread">
         <div className="empty-thread-rule">
           <span>
-            branch point · <b>{parentName}</b> #{thread.branchAt}
+            branch point · <b>{parentName}</b> #{thread.branchPointPosition}
           </span>
         </div>
         <p className="empty-thread-lede">
-          This thread branches from <b>{parentName}</b> at position <b>#{thread.branchAt}</b>.
+          This thread branches from <b>{parentName}</b> at position <b>#{thread.branchPointPosition}</b>.
           Everything above that point is inherited; everything you send here diverges.
         </p>
-        {thread.branchAt != null && (
+        {thread.branchPointPosition != null && (
           <dl className="empty-thread-facts">
             <div>
               <dt>inherited corpus</dt>
-              <dd>{thread.branchAt} messages</dd>
+              <dd>{thread.branchPointPosition} messages</dd>
             </div>
           </dl>
         )}

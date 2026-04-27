@@ -1,9 +1,10 @@
 import { useRef, useState } from 'react'
-import { IconArchive, IconChevron, IconPin, IconX } from '@/primitives/icons'
-import type { Thread } from '@/domain/types'
+import { IconArchive, IconChevron, IconX } from '@/primitives/icons'
+import { isAutonomous } from '@/domain/derive'
+import type { ThreadSummary } from '@/hooks/useThreads'
 
 interface ThreadRowProps {
-  thread: Thread
+  thread: ThreadSummary
   active: boolean
   onClick: () => void
   child?: boolean
@@ -27,7 +28,7 @@ export function ThreadRow({
   onDelete,
   onRename,
 }: ThreadRowProps) {
-  const autonomous = (thread.elapsed || '').startsWith('autonomous')
+  const autonomous = isAutonomous(thread.mode)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(thread.name)
   // Escape sets this so a blur-on-unmount triggered by setEditing(false)
@@ -109,11 +110,6 @@ export function ThreadRow({
         <span className="thread-row-name">{thread.name}</span>
       )}
       {!editing && autonomous && <span className="thread-row-tick" title="autonomous run" />}
-      {!editing && thread.pinned && !child && (
-        <span className="thread-row-pin" title="pinned">
-          <IconPin size={10} />
-        </span>
-      )}
       {!editing && onArchiveToggle && (
         <button
           className="thread-row-action"
@@ -121,7 +117,7 @@ export function ThreadRow({
             e.stopPropagation()
             onArchiveToggle()
           }}
-          title={thread.archived ? 'unarchive' : 'archive'}
+          title={thread.archivedAt ? 'unarchive' : 'archive'}
         >
           <IconArchive size={10} />
         </button>

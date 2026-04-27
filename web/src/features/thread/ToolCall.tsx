@@ -1,9 +1,15 @@
 import { type ReactNode, useEffect, useState } from 'react'
 import { IconChevron } from '@/primitives/icons'
-import type { ToolInvocation } from '@/domain/types'
+
+export interface ToolCallView {
+  name: string
+  args: string
+  result: string
+  status: 'ok' | 'running' | 'error'
+}
 
 interface ToolCallProps {
-  t: ToolInvocation
+  t: ToolCallView
   /** Rendered inside the tool's expanded body. Used for interactive
    *  tool outputs (AskUserQuestion answer form, ExitPlanMode approval
    *  card) — they belong in the tool's own slot, not as floating cards

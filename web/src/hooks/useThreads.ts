@@ -1,17 +1,16 @@
-import { useMemo } from 'react'
 import { useApolloClient, useQuery, useSubscription } from '@apollo/client/react'
 import { LIST_THREADS, THREAD_STATE_CHANGES } from '@/graphql/operations'
-import { adaptThread } from '@/domain/adapters'
 import type {
   ListThreadsQuery,
   ListThreadsQueryVariables,
   ThreadStateChangesSubscription,
   ThreadStateChangesSubscriptionVariables,
 } from '@/graphql/generated/types'
-import type { Thread } from '@/domain/types'
+
+export type ThreadSummary = ListThreadsQuery['threads'][number]
 
 export interface ThreadsResult {
-  threads: Thread[]
+  threads: ThreadSummary[]
   loading: boolean
   error: string | null
 }
@@ -21,8 +20,7 @@ export interface ThreadsResult {
  *  re-render without a refetch. status / mode / name now flow
  *  through the Apollo cache directly — Thread carries those
  *  fields on the schema, so the sidebar's running tick is
- *  whatever Apollo last saw, not a parallel module-scope state
- *  map. */
+ *  whatever Apollo last saw. */
 function useLiveThreadStatePatching() {
   const client = useApolloClient()
   useSubscription<ThreadStateChangesSubscription, ThreadStateChangesSubscriptionVariables>(
@@ -63,17 +61,18 @@ function useLiveThreadStatePatching() {
   )
 }
 
+/** Returns the gql ListThreads payload directly. Consumers use
+ *  helpers in @/domain/derive for computed fields (lastActive,
+ *  state, archived predicate). */
 export function useThreads(includeArchived = true): ThreadsResult {
   const { data, loading, error } = useQuery<ListThreadsQuery, ListThreadsQueryVariables>(
     LIST_THREADS,
     { variables: { includeArchived } },
   )
   useLiveThreadStatePatching()
-
-  const threads = useMemo<Thread[]>(
-    () => (data?.threads ? data.threads.map(adaptThread) : []),
-    [data],
-  )
-
-  return { threads, loading, error: error?.message ?? null }
+  return {
+    threads: data?.threads ? [...data.threads] : [],
+    loading,
+    error: error?.message ?? null,
+  }
 }

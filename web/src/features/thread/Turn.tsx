@@ -3,13 +3,18 @@ import { ToolCall } from './ToolCall'
 import { AskQuestionRow } from './AskQuestionRow'
 import { MarkdownBody } from '@/features/thread/MarkdownBody'
 import { formatSize } from '@/hooks/useAttachments'
-import type { Message, MessageAttachment } from '@/domain/types'
+import type { ThreadMessage } from '@/hooks/useThreadMessages'
+
+type Attachment = ThreadMessage['attachments'][number]
 
 interface TurnProps {
-  prompt: Message
+  prompt: ThreadMessage
+  /** Thread id needed for attachment URLs (gql Message doesn't
+   *  carry the parent thread id). */
+  threadId: string
   /** One user prompt can produce many assistant steps (thinking / tool calls
    *  / final text). Render all of them in order so nothing is dropped. */
-  responses: Message[]
+  responses: ThreadMessage[]
   /** Shown when the turn is pending and the agent isn't actively streaming. */
   pendingLabel?: string
   last?: boolean
@@ -31,6 +36,7 @@ interface TurnProps {
 
 export function Turn({
   prompt,
+  threadId,
   responses,
   pendingLabel,
   last,
@@ -40,15 +46,15 @@ export function Turn({
   renderToolExtras,
 }: TurnProps) {
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(prompt.text)
+  const [draft, setDraft] = useState(prompt.content)
 
   async function save() {
-    if (!draft.trim() || draft.trim() === prompt.text) {
+    if (!draft.trim() || draft.trim() === prompt.content) {
       setEditing(false)
       return
     }
     if (onEdit) {
-      await onEdit(prompt.pos, draft.trim())
+      await onEdit(prompt.position, draft.trim())
     }
     setEditing(false)
   }
@@ -64,7 +70,7 @@ export function Turn({
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
                   setEditing(false)
-                  setDraft(prompt.text)
+                  setDraft(prompt.content)
                 } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                   e.preventDefault()
                   void save()
@@ -106,22 +112,22 @@ export function Turn({
                 className="plan-reject"
                 onClick={() => {
                   setEditing(false)
-                  setDraft(prompt.text)
+                  setDraft(prompt.content)
                 }}
               >
                 cancel
               </button>
               <span style={{ color: 'var(--muted-2)', marginLeft: 'auto' }}>
-                editing forks a new thread at #{prompt.pos}
+                editing forks a new thread at #{prompt.position}
               </span>
             </div>
           </div>
         ) : (
           <div className="turn-prompt" style={{ position: 'relative' }}>
-            {prompt.text}
+            {prompt.content}
             {prompt.attachments && prompt.attachments.length > 0 && (
               <TurnAttachments
-                threadId={prompt.thread}
+                threadId={threadId}
                 attachments={prompt.attachments}
               />
             )}
@@ -129,7 +135,7 @@ export function Turn({
               <button
                 className="turn-prompt-edit"
                 onClick={() => {
-                  setDraft(prompt.text)
+                  setDraft(prompt.content)
                   setEditing(true)
                 }}
                 title="edit — forks a new thread from this turn"
@@ -155,27 +161,24 @@ function TurnResponses({
   responses,
   renderToolExtras,
 }: {
-  responses: Message[]
+  responses: ThreadMessage[]
   renderToolExtras?: TurnProps['renderToolExtras']
 }) {
+  // Index every tool result across the turn. The agent commonly
+  // emits a tool call in one message and its result in the next,
+  // so consumers want a single map keyed by callId.
   const resultById: Record<string, { result: string; status: 'ok' | 'running' | 'error' }> = {}
   for (const r of responses) {
-    for (const t of r.tools ?? []) {
-      if (t.result !== null && !resultById[t.id]) {
-        resultById[t.id] = { result: t.result, status: t.status }
-      }
-    }
-    for (const tr of r.toolResults ?? []) {
-      if (!resultById[tr.toolCallId]) {
-        const looksError =
-          /^\s*(error|failed|exception|traceback)/i.test(tr.content) ||
-          /\b(connection refused|timed? out|not found|permission denied|actively refused)\b/i.test(
-            tr.content,
-          )
-        resultById[tr.toolCallId] = {
-          result: tr.content,
-          status: looksError ? 'error' : 'ok',
-        }
+    for (const tr of r.toolResults) {
+      if (resultById[tr.toolCallId]) continue
+      const looksError =
+        /^\s*(error|failed|exception|traceback)/i.test(tr.content) ||
+        /\b(connection refused|timed? out|not found|permission denied|actively refused)\b/i.test(
+          tr.content,
+        )
+      resultById[tr.toolCallId] = {
+        result: tr.content,
+        status: looksError ? 'error' : 'ok',
       }
     }
   }
@@ -185,23 +188,21 @@ function TurnResponses({
 
   responses.forEach((r, idx) => {
     const hasThinking = !!r.thinking
-    const newCalls = (r.tools ?? []).filter((t) => !seenCallIds.has(t.id))
+    const newCalls = r.toolCalls.filter((t) => !seenCallIds.has(t.id))
     newCalls.forEach((t) => seenCallIds.add(t.id))
-    const hasText = !!r.text
+    const hasText = !!r.content
 
     if (!hasThinking && newCalls.length === 0 && !hasText) return
 
     if (hasThinking) out.push(<div key={`${r.id}-think`} className="thinking">{r.thinking}</div>)
     newCalls.forEach((t) => {
       const paired = resultById[t.id]
-      const effectiveResult = paired?.result ?? t.result ?? ''
-      const effectiveStatus = paired?.status ?? t.status
+      const effectiveResult = paired?.result ?? ''
+      const effectiveStatus = paired?.status ?? 'running'
       // AskUserQuestion gets a specialized compact row — the generic
       // ToolCall presentation (name + JSON args + status) reads badly
       // when the "output" is a conversational answer we already
-      // surface via the composer-takeover AnswerStage. The row here
-      // summarises "asking/answered/unanswered · <question>" and only
-      // expands for multi-question calls.
+      // surface via the composer-takeover AnswerStage.
       if (t.name === 'AskUserQuestion') {
         out.push(
           <AskQuestionRow
@@ -237,7 +238,7 @@ function TurnResponses({
         />,
       )
     })
-    if (hasText) out.push(<MarkdownBody key={`${r.id}-text-${idx}`} text={r.text} />)
+    if (hasText) out.push(<MarkdownBody key={`${r.id}-text-${idx}`} text={r.content} />)
   })
 
   return <>{out}</>
@@ -248,7 +249,7 @@ function TurnAttachments({
   attachments,
 }: {
   threadId: string
-  attachments: MessageAttachment[]
+  attachments: Attachment[]
 }) {
   return (
     <div className="turn-attachments">

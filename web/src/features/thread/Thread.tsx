@@ -185,13 +185,15 @@ export function ThreadPage({
     )
   }
 
-  const parent = thread.parentId ? allThreads.find((t) => t.id === thread.parentId) : null
-  const fullThread = { ...thread, corpus: messages }
+  const parent = thread.parentThreadId
+    ? allThreads.find((t) => t.id === thread.parentThreadId)
+    : null
 
   return (
     <ToolExecutionsProvider threadId={id} resetKey={turnSeq}>
       <ThreadViewWired
-        thread={fullThread}
+        thread={thread}
+        messages={messages}
         parentName={parent?.name}
         streaming={streaming}
         stream={stream}

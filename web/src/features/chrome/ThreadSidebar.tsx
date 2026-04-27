@@ -6,41 +6,39 @@ import { SidebarSection } from '@/features/chrome/SidebarSection'
 import { UserMenu } from '@/features/chrome/UserMenu'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
 import { useMe } from '@/hooks/useMe'
-import type { Thread } from '@/domain/types'
+import type { ThreadSummary } from '@/hooks/useThreads'
 
-/** Number of most-recently-active non-pinned threads shown in the sidebar.
- *  Everything beyond lives on the Home "all chats" view. Keeps the sidebar
- *  calm rather than an ever-growing list. */
+/** Number of most-recently-active threads shown in the sidebar.
+ *  Everything beyond lives on the Home "all chats" view. */
 const RECENT_CAP = 10
 
 interface GroupedSection {
   key: string
   label: string
-  threads: Thread[]
-  childrenByParent: Record<string, Thread[]>
+  threads: ThreadSummary[]
+  childrenByParent: Record<string, ThreadSummary[]>
   defaultCollapsed?: boolean
 }
 
 /**
- * Two-section groupThreads:
- *   - Starred (all pinned, non-archived)
- *   - Recent (non-pinned, non-archived, sorted by lastActive, capped)
- * Search collapses both into a single "results" section.
- * Archived is removed from the sidebar entirely — accessible via the
- * "View all chats" button at the bottom, which goes to Home.
+ * One-section groupThreads (Recent: non-archived, capped). The
+ * prior Starred section depended on a `pinned` field that was
+ * always false — schema doesn't model pin state. Search collapses
+ * the list into a "results" section. Archived threads live behind
+ * the "View all chats" button.
  */
-function groupThreads(threads: Thread[], query: string): GroupedSection[] {
+function groupThreads(threads: ThreadSummary[], query: string): GroupedSection[] {
   const q = query.trim().toLowerCase()
   const matches = threads.filter(
     (t) => !q || t.name.toLowerCase().includes(q) || t.id.toLowerCase().includes(q),
   )
 
-  const roots = matches.filter((t) => !t.parentId)
-  const childrenByParent: Record<string, Thread[]> = {}
+  const roots = matches.filter((t) => !t.parentThreadId)
+  const childrenByParent: Record<string, ThreadSummary[]> = {}
   matches
-    .filter((t) => t.parentId)
+    .filter((t) => t.parentThreadId)
     .forEach((c) => {
-      const key = c.parentId as string
+      const key = c.parentThreadId as string
       ;(childrenByParent[key] ||= []).push(c)
     })
 
@@ -48,18 +46,13 @@ function groupThreads(threads: Thread[], query: string): GroupedSection[] {
     return [{ key: 'results', label: 'results', threads: roots, childrenByParent }]
   }
 
-  const active = roots.filter((t) => !t.archived)
-  const starred = active.filter((t) => t.pinned)
-  const recent = active.filter((t) => !t.pinned).slice(0, RECENT_CAP)
-
-  const sections: GroupedSection[] = []
-  if (starred.length) sections.push({ key: 'starred', label: 'starred', threads: starred, childrenByParent })
-  sections.push({ key: 'recent', label: 'recent', threads: recent, childrenByParent })
-  return sections
+  const active = roots.filter((t) => !t.archivedAt)
+  const recent = active.slice(0, RECENT_CAP)
+  return [{ key: 'recent', label: 'recent', threads: recent, childrenByParent }]
 }
 
 interface SidebarProps {
-  threads: Thread[]
+  threads: ThreadSummary[]
   activeId: string
   view: string
   onSelect: (id: string) => void
@@ -104,10 +97,10 @@ export function ThreadSidebar({
   const me = useMe()
 
   const sections = useMemo(() => groupThreads(threads, query), [threads, query])
-  const visibleThreadCount = threads.filter((t) => !t.archived).length
+  const visibleThreadCount = threads.filter((t) => !t.archivedAt).length
 
-  function toggleArchive(t: Thread) {
-    if (t.archived) void threadMuts.unarchive(t.id)
+  function toggleArchive(t: ThreadSummary) {
+    if (t.archivedAt) void threadMuts.unarchive(t.id)
     else void threadMuts.archive(t.id)
   }
   async function rename(id: string, name: string) {

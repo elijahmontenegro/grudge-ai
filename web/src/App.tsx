@@ -17,7 +17,7 @@ import { useThreadMutations } from '@/hooks/useThreadMutations'
 import { useNeedsSetup } from '@/hooks/useNeedsSetup'
 import { useAgentState } from '@/hooks/useAgentState'
 import { useLocalStorage } from '@/primitives/useLocalStorage'
-import type { Message } from '@/domain/types'
+import type { ThreadMessage } from '@/hooks/useThreadMessages'
 
 // FirstRun and Settings are config-flow pages — lazy-loaded so they don't
 // weigh on the thread-view initial paint.
@@ -211,7 +211,7 @@ export default function App() {
   }, [view])
 
   const activeThread = threadId ? threads.find((t) => t.id === threadId) : undefined
-  const corpus: Message[] = activeMessages
+  const corpus: ThreadMessage[] = activeMessages
   const chromeless = view === 'firstrun'
 
   return (

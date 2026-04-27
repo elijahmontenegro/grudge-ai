@@ -4,11 +4,11 @@ import { ThreadConfigPopover } from '@/features/thread/ThreadConfigPopover'
 import { IconChevron, IconPanelRight } from '@/primitives/icons'
 import { ThreadActionsMenu } from '@/features/chrome/ThreadActionsMenu'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
-import type { Thread } from '@/domain/types'
+import type { ThreadSummary } from '@/hooks/useThreads'
 
 interface TopbarProps {
   view: 'home' | 'thread' | 'settings' | 'firstrun' | string
-  thread?: Thread & { workingDirs?: string[]; sandboxed?: boolean }
+  thread?: ThreadSummary
   /** Artifacts panel collapse state. Undefined when there's no panel
    *  to toggle (non-thread routes). */
   artifactsCollapsed?: boolean
@@ -63,7 +63,7 @@ export function Topbar({
   }
   function toggleArchive() {
     if (!thread) return
-    if (thread.archived) void muts.unarchive(thread.id)
+    if (thread.archivedAt) void muts.unarchive(thread.id)
     else void muts.archive(thread.id)
     setMenuOpen(false)
   }

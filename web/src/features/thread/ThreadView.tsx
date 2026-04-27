@@ -18,10 +18,11 @@ import type { StreamState } from '@/hooks/useSendAndStream'
 import type { LiveSubagent } from '@/hooks/useSubagentProgress'
 import type { LiveToolCall } from '@/state/toolExecutions'
 import type { AttachmentMeta } from '@/hooks/useAttachments'
-import type { Message, Thread } from '@/domain/types'
+import type { ThreadDetail, ThreadMessage } from '@/hooks/useThreadMessages'
 
 interface ThreadViewProps {
-  thread: Thread
+  thread: ThreadDetail
+  messages: ThreadMessage[]
   parentName?: string | null
   streaming: boolean
   stream: StreamState
@@ -92,16 +93,17 @@ interface ThreadViewProps {
 }
 
 interface TurnData {
-  prompt: Message
+  prompt: ThreadMessage
   /** All assistant messages produced in response to this prompt, in order.
    *  Agent turns commonly span many messages — one per thinking step / tool
    *  invocation — so grouping one-to-one would drop most of the work. */
-  responses: Message[]
+  responses: ThreadMessage[]
   pending?: boolean
 }
 
 export function ThreadView({
   thread,
+  messages,
   parentName,
   streaming,
   stream,
@@ -145,16 +147,15 @@ export function ThreadView({
   onDenyTool,
   approvalsBusy,
 }: ThreadViewProps) {
-  // `thread.corpus || []` would produce a new array on every render and
-  // re-trigger every downstream useMemo. Stabilize with its own memo.
-  const corpus = useMemo(() => thread.corpus ?? [], [thread.corpus])
+  // The corpus is the messages array, not bundled into thread.
+  const corpus = messages
 
   const turns = useMemo<TurnData[]>(() => {
     const out: TurnData[] = []
     for (let i = 0; i < corpus.length; i++) {
       const m = corpus[i]
       if (m.role !== 'user') continue
-      const responses: Message[] = []
+      const responses: ThreadMessage[] = []
       let j = i + 1
       while (j < corpus.length && corpus[j].role === 'assistant') {
         responses.push(corpus[j])
@@ -286,7 +287,7 @@ export function ThreadView({
     // Walk newest-to-oldest; the freshest ExitPlanMode owns the approval card.
     for (let i = corpus.length - 1; i >= 0; i--) {
       const msg = corpus[i]
-      for (const call of msg.tools ?? []) {
+      for (const call of msg.toolCalls) {
         if (call.name === 'ExitPlanMode') return call.id
       }
     }
@@ -312,9 +313,9 @@ export function ThreadView({
       // a long thread. Analogous to VS Code's git decorations or find
       // matches being the bulk of the ruler lanes.
       if (m.role === 'user') {
-        out.push({ frac, kind: 'user', title: `#${m.pos} you` })
+        out.push({ frac, kind: 'user', title: `#${m.position} you` })
       }
-      for (const tr of m.toolResults ?? []) {
+      for (const tr of m.toolResults) {
         if (
           /^\s*(error|failed|exception|traceback)/i.test(tr.content) ||
           /\b(connection refused|timed? out|permission denied|actively refused)\b/i.test(tr.content)
@@ -323,7 +324,7 @@ export function ThreadView({
           break
         }
       }
-      for (const call of m.tools ?? []) {
+      for (const call of m.toolCalls) {
         if (call.name === 'AskUserQuestion' && pendingQuestionByCallId.has(call.id)) {
           out.push({ frac, kind: 'question', title: 'awaiting answer' })
         }
@@ -399,6 +400,7 @@ export function ThreadView({
               <div key={t.prompt.id} data-turn={i} ref={isLast ? lastTurnRef : null}>
                 <Turn
                   prompt={t.prompt}
+                  threadId={thread.id}
                   responses={t.responses}
                   pendingLabel={
                     t.pending && !streaming ? 'Waiting for agent.' : undefined

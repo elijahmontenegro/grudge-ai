@@ -3,7 +3,8 @@ import { IconChevron, IconPanelRight } from '@/primitives/icons'
 import { AsciiDocBody } from '@/features/artifacts/AsciiDocBody'
 import { aggregateArtifacts } from '@/domain/artifacts'
 import { useLocalStorage } from '@/primitives/useLocalStorage'
-import type { Artifact, ArtifactOp, Message } from '@/domain/types'
+import type { Artifact, ArtifactOp } from '@/domain/types'
+import type { ThreadMessage } from '@/hooks/useThreadMessages'
 
 const WIDTH_STORAGE_KEY = 'spidey.artifactsWidth'
 const DEFAULT_WIDTH = 720
@@ -20,7 +21,7 @@ const widthCodec = {
 }
 
 interface ArtifactsPanelProps {
-  corpus: Message[]
+  corpus: ThreadMessage[]
   /** Latest compiled plan content from agent.planContent. Used only as a
    *  fallback for the plan body when the FileWrite hasn't refetched yet. */
   livePlanContent?: string | null

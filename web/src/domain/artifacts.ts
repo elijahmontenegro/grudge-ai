@@ -1,4 +1,5 @@
-import type { Artifact, ArtifactOp, ArtifactTouch, Message } from './types'
+import type { Artifact, ArtifactOp, ArtifactTouch } from './types'
+import type { GqlMessage } from './derive'
 
 // Tools we currently track as file touches. Bash touches (rm, mv, > foo)
 // are not tracked — doing so would require parsing arbitrary shell and
@@ -78,11 +79,11 @@ function isPlanPath(path: string): boolean {
  * than the call. First pass builds a call-id → result map spanning all
  * messages, second pass walks calls in order and emits touches.
  */
-export function aggregateArtifacts(corpus: Message[]): Artifact[] {
+export function aggregateArtifacts(corpus: GqlMessage[]): Artifact[] {
   // Build a global call-id → result map across the whole corpus.
   const resultByCallId = new Map<string, string>()
   for (const msg of corpus) {
-    for (const r of msg.toolResults ?? []) {
+    for (const r of msg.toolResults) {
       // First result wins — subsequent ones are usually just the same call
       // re-reported in a later message.
       if (!resultByCallId.has(r.toolCallId)) {
@@ -94,7 +95,7 @@ export function aggregateArtifacts(corpus: Message[]): Artifact[] {
   const byPath = new Map<string, Artifact>()
 
   for (const msg of corpus) {
-    for (const call of msg.tools ?? []) {
+    for (const call of msg.toolCalls) {
       const op = FILE_TOOLS[call.name]
       if (!op) continue
       const path = extractPath(call.name, call.arguments)
@@ -113,7 +114,7 @@ export function aggregateArtifacts(corpus: Message[]): Artifact[] {
         toolName: call.name,
         toolCallId: call.id,
         messageId: msg.id,
-        position: msg.pos,
+        position: msg.position,
         argsJSON: call.arguments,
         body,
         edit: editForTool(call.name, call.arguments),
