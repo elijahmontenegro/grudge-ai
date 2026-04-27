@@ -1,3 +1,4 @@
+import { Form } from '@/primitives/Form'
 import type { Preferences } from './types'
 
 interface GeneralProps {
@@ -12,14 +13,13 @@ export function General({ prefs, setPrefs }: GeneralProps) {
     <div className="role-card">
       <h3>Profile</h3>
       <div className="role-name">Name in system prompt</div>
-      <div className="row">
-        <label>name</label>
+      <Form.Row label="name">
         <input
           value={prefs.name ?? ''}
           onChange={(e) => setPrefs({ ...prefs, name: e.target.value })}
           placeholder="Your name"
         />
-      </div>
+      </Form.Row>
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { Form } from '@/primitives/Form'
 import { EMPTY_PROVIDER, type ProviderConfig, type ProvidersMap } from './types'
 
 interface ProvidersProps {
@@ -63,26 +64,23 @@ function RoleCard({ title, subtitle, role, onChange }: RoleCardProps) {
     <div className="role-card">
       <h3>{title}</h3>
       <div className="role-name">{subtitle}</div>
-      <div className="row">
-        <label>adapter</label>
+      <Form.Row label="adapter">
         <input
           value={role.adapter}
           onChange={(e) => onChange({ adapter: e.target.value })}
           placeholder="ollama / openai / anthropic / tei / searxng"
         />
-      </div>
-      <div className="row">
-        <label>model</label>
+      </Form.Row>
+      <Form.Row label="model">
         <input value={role.model} onChange={(e) => onChange({ model: e.target.value })} />
-      </div>
-      <div className="row">
-        <label>base url</label>
+      </Form.Row>
+      <Form.Row label="base url">
         <input
           value={role.base_url ?? ''}
           onChange={(e) => onChange({ base_url: e.target.value })}
           placeholder="http://localhost:…"
         />
-      </div>
+      </Form.Row>
     </div>
   )
 }

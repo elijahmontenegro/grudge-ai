@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { GET_SETTINGS, UPDATE_SETTINGS } from '@/graphql/operations'
+import { Form } from '@/primitives/Form'
 import type {
   GetSettingsQuery,
   UpdateSettingsMutation,
@@ -100,39 +101,35 @@ export function FirstRun({ onComplete }: { onComplete: () => void }) {
       <div className="role-card">
         <h3>You</h3>
         <div className="role-name">Profile</div>
-        <div className="row">
-          <label>Name</label>
+        <Form.Row label="Name">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Your name"
           />
-        </div>
+        </Form.Row>
       </div>
 
       <div className="role-card">
         <h3>Main model · your LLM</h3>
         <div className="role-name">Reasoning, tool use, responses</div>
-        <div className="row">
-          <label>adapter</label>
+        <Form.Row label="adapter">
           <input
             value={main.adapter}
             onChange={(e) => setMain({ ...main, adapter: e.target.value })}
             placeholder="ollama / openai / anthropic"
           />
-        </div>
-        <div className="row">
-          <label>model</label>
+        </Form.Row>
+        <Form.Row label="model">
           <input value={main.model} onChange={(e) => setMain({ ...main, model: e.target.value })} />
-        </div>
-        <div className="row">
-          <label>base url</label>
+        </Form.Row>
+        <Form.Row label="base url">
           <input
             value={main.base_url ?? ''}
             onChange={(e) => setMain({ ...main, base_url: e.target.value })}
             placeholder="http://localhost:11434"
           />
-        </div>
+        </Form.Row>
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginTop: 24, alignItems: 'center' }}>
