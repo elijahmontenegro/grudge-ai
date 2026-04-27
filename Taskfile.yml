@@ -45,11 +45,12 @@ tasks:
       - go run ./scripts/verifydeps
 
   verify:
-    desc: Run every CI invariant — lint, dep-graph checks, tests
+    desc: Run every CI invariant — lint, dep-graph checks, Go tests, web tests
     cmds:
       - task: lint
       - task: verify:deps
       - task: test
+      - task: web:test
 
   tidy:
     desc: Run go mod tidy in each module
@@ -79,6 +80,12 @@ tasks:
     dir: web
     cmds:
       - npm run build
+
+  web:test:
+    desc: Run frontend test suite (vitest)
+    dir: web
+    cmds:
+      - npm test
 
   web:dev:
     desc: Run frontend dev server

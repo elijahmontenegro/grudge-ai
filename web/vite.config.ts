@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import path from 'path'
 import { execSync } from 'child_process'
 import { defineConfig } from 'vite'
@@ -27,6 +28,11 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: './src/test/setup.ts',
   },
   server: {
     proxy: {
