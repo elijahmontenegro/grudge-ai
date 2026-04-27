@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react'
-import { IS_MAC } from '@/primitives/platform'
 import { useLocalStorage } from '@/primitives/useLocalStorage'
 import { AgentStatus } from '@/graphql/generated/types'
 import { useAttachments, type AttachmentMeta } from '@/hooks/useAttachments'
@@ -231,14 +230,17 @@ export function Composer({
   }
 
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return
+    if (e.key !== 'Enter') return
+    // Shift+Enter inserts a newline (default browser behavior).
+    if (e.shiftKey && !(e.metaKey || e.ctrlKey)) return
     e.preventDefault()
     // Stop the window-level shortcut handler from also flipping mode
     // after we've already handled the key here.
     e.stopPropagation()
-    // ⌘⇧↵ / Ctrl+Shift+↵ — submit as autonomous regardless of
-    // current mode.
-    submit(e.shiftKey)
+    // Cmd/Ctrl+Shift+Enter — submit as autonomous regardless of
+    // current mode. Plain Enter and Cmd/Ctrl+Enter both submit
+    // under the current mode.
+    submit(e.metaKey || e.ctrlKey ? e.shiftKey : false)
   }
 
   const placeholder = paused
@@ -252,8 +254,8 @@ export function Composer({
         : mode === 'plan'
           ? 'Describe what you want. The agent will propose a plan first.'
           : mode === 'autonomous'
-            ? `Goal for the autonomous run. ${IS_MAC ? '⌘↵' : 'Ctrl+↵'} to start.`
-            : `Continue the thread. ${IS_MAC ? '⌘↵' : 'Ctrl+↵'} to send.`
+            ? 'Goal for the autonomous run. ↵ to start, ⇧↵ for newline.'
+            : 'Continue the thread. ↵ to send, ⇧↵ for newline.'
 
   // Textarea lock semantics:
   //   running  → locked (correction must go through pause first)

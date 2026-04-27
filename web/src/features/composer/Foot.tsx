@@ -1,6 +1,5 @@
 import { type RefObject } from 'react'
 import { IconPaperclip } from '@/primitives/icons'
-import { IS_MAC } from '@/primitives/platform'
 import { SegButton } from '@/primitives/SegButton'
 import {
   DURATIONS,
@@ -107,7 +106,7 @@ export function Foot({
       <span className="spacer" />
       {valueLength > 0 && !runtimeActive && (
         <span className="composer-hint">
-          {valueLength} chars · {IS_MAC ? '⌘↵' : 'Ctrl+↵'}
+          {valueLength} chars · ↵
         </span>
       )}
       <button
