@@ -491,9 +491,17 @@ export type Thread = {
   createdAt: Scalars['DateTime']['output'];
   id: Scalars['ID']['output'];
   messageCount: Scalars['Int']['output'];
+  mode: AgentMode;
   name: Scalars['String']['output'];
   parentThreadId?: Maybe<Scalars['ID']['output']>;
   sandboxed: Scalars['Boolean']['output'];
+  /**
+   * Live agent state for this thread. Resolved from the agent_state
+   * table on demand. Surfacing these on Thread (rather than only via
+   * the separate agentState query) lets the LIST_THREADS Apollo cache
+   * carry sidebar-status info without a parallel module-scope state map.
+   */
+  status: AgentStatus;
   workingDirs: Array<Scalars['String']['output']>;
 };
 
@@ -558,7 +566,7 @@ export type ListThreadsQueryVariables = Exact<{
 }>;
 
 
-export type ListThreadsQuery = { __typename?: 'Query', threads: Array<{ __typename?: 'Thread', id: string, name: string, createdAt: string, parentThreadId?: string | null, branchPointPosition?: number | null, archivedAt?: string | null, messageCount: number, workingDirs: Array<string>, sandboxed: boolean }> };
+export type ListThreadsQuery = { __typename?: 'Query', threads: Array<{ __typename?: 'Thread', id: string, name: string, createdAt: string, parentThreadId?: string | null, branchPointPosition?: number | null, archivedAt?: string | null, messageCount: number, workingDirs: Array<string>, sandboxed: boolean, status: AgentStatus, mode: AgentMode }> };
 
 export type GetThreadMessagesQueryVariables = Exact<{
   threadId: Scalars['ID']['input'];

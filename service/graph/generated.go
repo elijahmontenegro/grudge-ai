@@ -218,9 +218,11 @@ type ComplexityRoot struct {
 		CreatedAt           func(childComplexity int) int
 		Id                  func(childComplexity int) int
 		MessageCount        func(childComplexity int) int
+		Mode                func(childComplexity int) int
 		Name                func(childComplexity int) int
 		ParentThreadId      func(childComplexity int) int
 		Sandboxed           func(childComplexity int) int
+		Status              func(childComplexity int) int
 		WorkingDirs         func(childComplexity int) int
 	}
 
@@ -346,6 +348,8 @@ type ThreadResolver interface {
 
 	ArchivedAt(ctx context.Context, obj *v1.Thread) (*time.Time, error)
 	MessageCount(ctx context.Context, obj *v1.Thread) (int, error)
+	Status(ctx context.Context, obj *v1.Thread) (AgentStatus, error)
+	Mode(ctx context.Context, obj *v1.Thread) (AgentMode, error)
 }
 
 type executableSchema graphql.ExecutableSchemaState[ResolverRoot, DirectiveRoot, ComplexityRoot]
@@ -1282,6 +1286,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Thread.MessageCount(childComplexity), true
+	case "Thread.mode":
+		if e.ComplexityRoot.Thread.Mode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Thread.Mode(childComplexity), true
 	case "Thread.name":
 		if e.ComplexityRoot.Thread.Name == nil {
 			break
@@ -1300,6 +1310,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Thread.Sandboxed(childComplexity), true
+	case "Thread.status":
+		if e.ComplexityRoot.Thread.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Thread.Status(childComplexity), true
 	case "Thread.workingDirs":
 		if e.ComplexityRoot.Thread.WorkingDirs == nil {
 			break
@@ -3349,6 +3365,10 @@ func (ec *executionContext) fieldContext_Mutation_createThread(ctx context.Conte
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
 			case "messageCount":
 				return ec.fieldContext_Thread_messageCount(ctx, field)
+			case "status":
+				return ec.fieldContext_Thread_status(ctx, field)
+			case "mode":
+				return ec.fieldContext_Thread_mode(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -3410,6 +3430,10 @@ func (ec *executionContext) fieldContext_Mutation_updateThread(ctx context.Conte
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
 			case "messageCount":
 				return ec.fieldContext_Thread_messageCount(ctx, field)
+			case "status":
+				return ec.fieldContext_Thread_status(ctx, field)
+			case "mode":
+				return ec.fieldContext_Thread_mode(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -3594,6 +3618,10 @@ func (ec *executionContext) fieldContext_Mutation_editMessage(ctx context.Contex
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
 			case "messageCount":
 				return ec.fieldContext_Thread_messageCount(ctx, field)
+			case "status":
+				return ec.fieldContext_Thread_status(ctx, field)
+			case "mode":
+				return ec.fieldContext_Thread_mode(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -4320,6 +4348,10 @@ func (ec *executionContext) fieldContext_Query_threads(ctx context.Context, fiel
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
 			case "messageCount":
 				return ec.fieldContext_Thread_messageCount(ctx, field)
+			case "status":
+				return ec.fieldContext_Thread_status(ctx, field)
+			case "mode":
+				return ec.fieldContext_Thread_mode(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -4381,6 +4413,10 @@ func (ec *executionContext) fieldContext_Query_thread(ctx context.Context, field
 				return ec.fieldContext_Thread_archivedAt(ctx, field)
 			case "messageCount":
 				return ec.fieldContext_Thread_messageCount(ctx, field)
+			case "status":
+				return ec.fieldContext_Thread_status(ctx, field)
+			case "mode":
+				return ec.fieldContext_Thread_mode(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type Thread", field.Name)
 		},
@@ -6720,6 +6756,64 @@ func (ec *executionContext) fieldContext_Thread_messageCount(_ context.Context, 
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Thread_status(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Thread_status,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Thread().Status(ctx, obj)
+		},
+		nil,
+		ec.marshalNAgentStatus2githubᚗcomᚋemontenegrᚋspideyᚋserviceᚋgraphᚐAgentStatus,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Thread_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Thread",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type AgentStatus does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Thread_mode(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Thread_mode,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Thread().Mode(ctx, obj)
+		},
+		nil,
+		ec.marshalNAgentMode2githubᚗcomᚋemontenegrᚋspideyᚋserviceᚋgraphᚐAgentMode,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Thread_mode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Thread",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type AgentMode does not have child fields")
 		},
 	}
 	return fc, nil
@@ -11094,6 +11188,78 @@ func (ec *executionContext) _Thread(ctx context.Context, sel ast.SelectionSet, o
 					}
 				}()
 				res = ec._Thread_messageCount(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "status":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Thread_status(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "mode":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Thread_mode(ctx, field, obj)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}

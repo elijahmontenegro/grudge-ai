@@ -15,6 +15,14 @@ type Thread {
   branchPointPosition: Int
   archivedAt: DateTime
   messageCount: Int!
+  """
+  Live agent state for this thread. Resolved from the agent_state
+  table on demand. Surfacing these on Thread (rather than only via
+  the separate agentState query) lets the LIST_THREADS Apollo cache
+  carry sidebar-status info without a parallel module-scope state map.
+  """
+  status: AgentStatus!
+  mode: AgentMode!
 }
 
 type Message {

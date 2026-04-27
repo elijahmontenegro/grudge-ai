@@ -1,16 +1,38 @@
-import type { ListThreadsQuery, GetThreadMessagesQuery, GetRecentActivityQuery } from '@/graphql/generated/types'
-import type { Message, Thread, ActivityEntry } from './types'
+import {
+  AgentMode,
+  AgentStatus,
+  type GetRecentActivityQuery,
+  type GetThreadMessagesQuery,
+  type ListThreadsQuery,
+} from '@/graphql/generated/types'
+import type { ActivityEntry, Message, Thread, ThreadState } from './types'
+
+function gqlStatusToState(status: AgentStatus | undefined | null): ThreadState {
+  switch (status) {
+    case AgentStatus.Running:
+      return 'running'
+    case AgentStatus.Paused:
+      return 'paused'
+    default:
+      return 'idle'
+  }
+}
 
 export function adaptThread(t: ListThreadsQuery['threads'][number]): Thread {
   const ageMs = Date.now() - new Date(t.createdAt).getTime()
   const lastActive = formatRelative(ageMs)
+  // status / mode now live on the Thread schema directly — surfaced
+  // here so the sidebar's running tick reads from Apollo cache rather
+  // than the prior module-scope event bus.
+  const isAutonomous = t.mode === AgentMode.Autonomous
   return {
     id: t.id,
     // Backend stores empty string for threads that haven't received a first
     // message yet. Surfacing "Untitled" is more useful than an invisible
     // sidebar row.
     name: t.name?.trim() || 'Untitled',
-    state: 'idle',
+    state: gqlStatusToState(t.status),
+    elapsed: isAutonomous ? 'autonomous' : undefined,
     lastActive,
     msgCount: t.messageCount,
     archived: t.archivedAt != null,

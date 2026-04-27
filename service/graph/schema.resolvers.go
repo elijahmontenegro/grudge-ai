@@ -19,6 +19,7 @@ import (
 	"github.com/emontenegr/spidey/service/adkbridge"
 	"github.com/emontenegr/spidey/service/adoc"
 	"github.com/emontenegr/spidey/service/config"
+	"github.com/emontenegr/spidey/service/runtime/agentstate"
 	runtimerunner "github.com/emontenegr/spidey/service/runtime/runner"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -405,8 +406,8 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 	if haveEntry && entry.Runner.IsAutonomousActive() {
 		entry.Runner.ResumeAutonomous()
 	} else if st.Mode == storage.AgentModeAutonomous {
-		remaining, perr := remainingAutonomousDuration(st)
-		if perr == nil && remaining > 0 {
+		remaining, reason := agentstate.ComputeRemainingBudget(st)
+		if reason == "" && remaining > 0 {
 			runner, rerr := r.getOrCreateRunner(threadID)
 			if rerr != nil {
 				return false, fmt.Errorf("restart runner: %w", rerr)
@@ -1191,6 +1192,41 @@ func (r *threadResolver) MessageCount(ctx context.Context, obj *pb.Thread) (int,
 	return r.DB.MessageCount(obj.Id), nil
 }
 
+// Status resolves the live agent status for a thread from
+// agent_state. Threads with no row default to Idle so a brand-new
+// thread reads cleanly without an explicit status insert.
+func (r *threadResolver) Status(ctx context.Context, obj *pb.Thread) (AgentStatus, error) {
+	st, _ := r.DB.GetAgentState(obj.Id)
+	if st == nil {
+		return AgentStatusIdle, nil
+	}
+	switch st.Status {
+	case storage.AgentStatusRunning:
+		return AgentStatusRunning, nil
+	case storage.AgentStatusPaused:
+		return AgentStatusPaused, nil
+	default:
+		return AgentStatusIdle, nil
+	}
+}
+
+// Mode resolves the live agent mode for a thread from agent_state.
+// Defaults to Normal when no row exists.
+func (r *threadResolver) Mode(ctx context.Context, obj *pb.Thread) (AgentMode, error) {
+	st, _ := r.DB.GetAgentState(obj.Id)
+	if st == nil {
+		return AgentModeNormal, nil
+	}
+	switch st.Mode {
+	case storage.AgentModeAutonomous:
+		return AgentModeAutonomous, nil
+	case storage.AgentModePlan:
+		return AgentModePlan, nil
+	default:
+		return AgentModeNormal, nil
+	}
+}
+
 // Edge returns EdgeResolver implementation.
 func (r *Resolver) Edge() EdgeResolver { return &edgeResolver{r} }
 
@@ -1227,31 +1263,3 @@ type selectedMessageResolver struct{ *Resolver }
 type selectionResultResolver struct{ *Resolver }
 type subscriptionResolver struct{ *Resolver }
 type threadResolver struct{ *Resolver }
-
-// remainingAutonomousDuration computes how much of an autonomous run's
-// configured wall-clock budget is left, given the stored AgentState.
-// Used by ResumeAgent to restart an autonomous loop after a process
-// restart. Default budget 1h when DurationLimit is unset; a 5-minute
-// floor prevents immediate expiration on near-deadline resumes.
-//
-// Kept as a file-local helper (not a method on resolver) because
-// gqlgen's codegen does not know about non-resolver methods and
-// would orphan them on regeneration.
-func remainingAutonomousDuration(st *storage.AgentState) (time.Duration, error) {
-	if st.DurationLimit == "" {
-		return time.Hour, nil
-	}
-	total, err := time.ParseDuration(st.DurationLimit)
-	if err != nil {
-		return 0, fmt.Errorf("parse durationLimit %q: %w", st.DurationLimit, err)
-	}
-	if st.StartedAt == nil {
-		return total, nil
-	}
-	elapsed := time.Since(*st.StartedAt)
-	remaining := total - elapsed
-	if remaining < 5*time.Minute {
-		remaining = 5 * time.Minute
-	}
-	return remaining, nil
-}

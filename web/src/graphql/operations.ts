@@ -14,6 +14,8 @@ export const LIST_THREADS = gql`
       messageCount
       workingDirs
       sandboxed
+      status
+      mode
     }
   }
 `
