@@ -491,7 +491,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 		}
 		s := bestScore[p.Id]
 		temporal := TemporalProximity(p.Position, msg.Position)
-		fused := FuseScore(e.cfg, s, temporal)
+		fused := FuseScore(e.cfg, s, temporal, p.ThreadId != msg.ThreadId)
 		candidates = append(candidates, candidate{
 			prior: p, ce: s, temporal: temporal, fused: fused,
 		})

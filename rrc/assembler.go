@@ -26,7 +26,8 @@ type selectionEntry struct {
 // (stored_edges, current_config): change config and the graph
 // reprojects immediately, no rebuild or invalidation step needed.
 func edgeScoreUnderConfig(edge *pb.Edge, cfg EngineConfig) float64 {
-	return FuseScore(cfg, float64(edge.CrossEncoderScore), float64(edge.TemporalProximity))
+	crossThread := edge.FromThreadId != edge.ToThreadId
+	return FuseScore(cfg, float64(edge.CrossEncoderScore), float64(edge.TemporalProximity), crossThread)
 }
 
 // extractSubgraph performs best-first backward traversal from promptID through

@@ -398,21 +398,38 @@ func TestSelect_ThreadScope(t *testing.T) {
 
 func TestFuseScore(t *testing.T) {
 	cfg := DefaultConfig()
-	// With current defaults WeightCE=0.6, WeightTemp=0.4:
+	// Same-thread, defaults WeightCE=0.6, WeightTemp=0.4:
 	//   0.6*0.8 + 0.4*0.5 = 0.48 + 0.2 = 0.68
-	score := FuseScore(cfg, 0.8, 0.5)
-	expected := 0.68
-	if diff := score - expected; diff > 0.001 || diff < -0.001 {
-		t.Fatalf("expected %f, got %f", expected, score)
+	score := FuseScore(cfg, 0.8, 0.5, false)
+	if diff := score - 0.68; diff > 0.001 || diff < -0.001 {
+		t.Fatalf("same-thread: expected 0.68, got %f", score)
 	}
 }
 
 func TestFuseScore_CEOnly(t *testing.T) {
 	cfg := DefaultConfig()
-	// Zero temporal: 0.6*0.6 + 0.4*0 = 0.36
-	score := FuseScore(cfg, 0.6, 0)
+	// Same-thread zero temporal: 0.6*0.6 + 0.4*0 = 0.36
+	score := FuseScore(cfg, 0.6, 0, false)
 	if diff := score - 0.36; diff > 0.001 || diff < -0.001 {
-		t.Fatalf("expected 0.36, got %f", score)
+		t.Fatalf("same-thread zero-temporal: expected 0.36, got %f", score)
+	}
+}
+
+func TestFuseScore_CrossThread(t *testing.T) {
+	cfg := DefaultConfig()
+	// Cross-thread: temporal is meaningless across threads, so the
+	// fused score is the raw rerank. This levels the gating with
+	// same-thread (both clear EdgeThreshold=0.5 at CE=0.83 same-
+	// thread-zero-temporal vs CE=0.5 cross-thread).
+	score := FuseScore(cfg, 0.7, 0.0, true)
+	if diff := score - 0.7; diff > 0.001 || diff < -0.001 {
+		t.Fatalf("cross-thread: expected 0.7 (raw rerank), got %f", score)
+	}
+	// Even with a non-zero temporal value (which shouldn't happen
+	// but isn't an error), cross-thread ignores it.
+	score = FuseScore(cfg, 0.6, 0.5, true)
+	if diff := score - 0.6; diff > 0.001 || diff < -0.001 {
+		t.Fatalf("cross-thread temporal-ignored: expected 0.6, got %f", score)
 	}
 }
 
@@ -756,9 +773,15 @@ func TestOnMessage_Gate2_Disabled(t *testing.T) {
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	m0 := addMsg(o, "m0", 0, "tA", "a")
-	m1 := addMsg(o, "m1", 0, "tB", "b")
-	m2 := addMsg(o, "m2", 0, "tC", "c")
+	// Same-thread setup: with positions=0 all temporal=1.0, fused
+	// = 0.6*CE + 0.4 lands at 0.55 / 0.55 / 0.70. Cross-thread
+	// would skip temporal entirely (FuseScore semantics), so the
+	// fused floor would drop below EdgeThreshold for the 0.25
+	// candidates — that's a separate test surface; this one is
+	// about gate behavior given clean fused scores.
+	m0 := addMsg(o, "m0", 0, "tQ", "a")
+	m1 := addMsg(o, "m1", 0, "tQ", "b")
+	m2 := addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
 	edges, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1, m2})
@@ -816,9 +839,13 @@ func TestOnMessage_Gate3_Disabled(t *testing.T) {
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	m0 := addMsg(o, "m0", 0, "tA", "a")
-	m1 := addMsg(o, "m1", 0, "tB", "b")
-	m2 := addMsg(o, "m2", 0, "tC", "c")
+	// Same-thread setup so temporal=1.0 contributes to fused, lifting
+	// the tight CE cluster (0.51 / 0.52 / 0.53) just over EdgeThreshold.
+	// Cross-thread would skip temporal and the cluster would all sit
+	// below the threshold — different test surface.
+	m0 := addMsg(o, "m0", 0, "tQ", "a")
+	m1 := addMsg(o, "m1", 0, "tQ", "b")
+	m2 := addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
 	edges, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1, m2})
