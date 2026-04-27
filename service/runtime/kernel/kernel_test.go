@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
@@ -129,6 +130,76 @@ func TestBootstrap_EngineSwapsCleanly(t *testing.T) {
 	if second.Config().EdgeThreshold != 0.42 {
 		t.Errorf("new engine missing the new config: EdgeThreshold=%v want 0.42",
 			second.Config().EdgeThreshold)
+	}
+}
+
+// TestKernel_EngineSwap_AtomicUnderConcurrentReads — many readers
+// spinning on k.Engine() while a writer rotates the engine via
+// UpdateEngineConfig. atomic.Pointer guarantees no torn reads;
+// this test runs under -race so any unprotected pointer
+// publication or stale-write trips the detector.
+//
+// The mid-Assemble-with-real-classifier scenario is env-bound (needs
+// a registered fake provider), but the kernel-side correctness — that
+// readers never see a half-published pointer or a nil engine during
+// the swap — is the part that's testable here, and it's the part
+// most likely to regress if a future change replaces atomic.Pointer
+// with a non-atomic scheme.
+func TestKernel_EngineSwap_AtomicUnderConcurrentReads(t *testing.T) {
+	dir := t.TempDir()
+	cfg := minimalConfig(dir)
+
+	k, err := Bootstrap(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+	defer k.Shutdown()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	const readers = 8
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					e := k.Engine()
+					if e == nil {
+						t.Error("Engine() returned nil during swap")
+						return
+					}
+					// Read a field — exercises both the pointer
+					// swap and any reads against the engine state
+					// that were captured at the moment of read.
+					_ = e.Config().EdgeThreshold
+				}
+			}
+		}()
+	}
+
+	// Writer: rotate the engine N times.
+	const swaps = 50
+	for i := 0; i < swaps; i++ {
+		newCfg := k.Engine().Config()
+		newCfg.EdgeThreshold = float64(i+1) / 100.0
+		if err := k.UpdateEngineConfig(context.Background(), newCfg); err != nil {
+			close(stop)
+			wg.Wait()
+			t.Fatalf("UpdateEngineConfig (iter %d): %v", i, err)
+		}
+	}
+	close(stop)
+	wg.Wait()
+
+	// Final pointer carries the last config we wrote.
+	final := k.Engine().Config()
+	want := float64(swaps) / 100.0
+	if diff := final.EdgeThreshold - want; diff < -1e-9 || diff > 1e-9 {
+		t.Errorf("final EdgeThreshold: got %v want %v", final.EdgeThreshold, want)
 	}
 }
 

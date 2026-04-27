@@ -44,11 +44,18 @@ tasks:
     cmds:
       - go run ./scripts/verifydeps
 
+  verify:external:
+    desc: Build a foreign module that imports rrc — proves rrc is `go get`-shaped
+    cmds:
+      - cd scripts/verifydeps && go test -run TestRRC_BuildsFromForeignModule
+
   verify:
-    desc: Run every CI invariant — lint, dep-graph checks, Go tests, web tests
+    desc: Run every CI invariant — lint, dep-graph checks, foreign-module
+          build, Go tests, web tests
     cmds:
       - task: lint
       - task: verify:deps
+      - task: verify:external
       - task: test
       - task: web:test
 
