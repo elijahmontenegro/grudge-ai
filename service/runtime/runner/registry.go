@@ -34,14 +34,32 @@ type Entry struct {
 // lock; iteration via Range snapshots under the lock and runs
 // the callback after release so callers can call back into
 // other registry methods without deadlocking.
+//
+// GetOrBuild handles the lookup-then-construct dance under a
+// single critical section so concurrent first-callers for the
+// same thread id don't both run the build closure (the orphan-
+// runner race: loser's runner has no parent in the registry and
+// stopRunner can't reach it).
 type Registry struct {
-	mu sync.Mutex
-	m  map[string]*Entry
+	mu       sync.Mutex
+	m        map[string]*Entry
+	building map[string]*buildSignal
+}
+
+// buildSignal is the per-key channel waiters block on while a
+// build closure runs. The channel closes when the build resolves
+// (success or failure); err records the failure for waiters.
+type buildSignal struct {
+	done chan struct{}
+	err  error
 }
 
 // NewRegistry constructs an empty registry.
 func NewRegistry() *Registry {
-	return &Registry{m: map[string]*Entry{}}
+	return &Registry{
+		m:        map[string]*Entry{},
+		building: map[string]*buildSignal{},
+	}
 }
 
 // Get returns the entry for threadID. Second return is false
@@ -51,6 +69,55 @@ func (r *Registry) Get(threadID string) (*Entry, bool) {
 	defer r.mu.Unlock()
 	e, ok := r.m[threadID]
 	return e, ok
+}
+
+// GetOrBuild returns the entry for threadID, calling build once
+// if no entry exists yet. Concurrent callers for the same id
+// observe the single build invocation: the first caller runs
+// build (with the registry lock released so the closure can do
+// I/O); subsequent callers block on a per-key signal until the
+// build resolves, then read the entry the first caller stored.
+//
+// On build failure the signal closes with the recorded err; all
+// waiters return the same error and the building entry is
+// cleared so the next caller retries (no permanent wedge as a
+// sync.Once would impose).
+func (r *Registry) GetOrBuild(threadID string, build func() (*Entry, error)) (*Entry, error) {
+	for {
+		r.mu.Lock()
+		if e, ok := r.m[threadID]; ok {
+			r.mu.Unlock()
+			return e, nil
+		}
+		if sig, ok := r.building[threadID]; ok {
+			r.mu.Unlock()
+			<-sig.done
+			if sig.err != nil {
+				return nil, sig.err
+			}
+			// Successful build: re-loop to read out of r.m. The
+			// builder may have been raced off (Delete called between
+			// signal close and our read); in that case the loop
+			// observes no entry, no in-flight build, and starts a
+			// fresh build itself.
+			continue
+		}
+		sig := &buildSignal{done: make(chan struct{})}
+		r.building[threadID] = sig
+		r.mu.Unlock()
+
+		entry, err := build()
+
+		r.mu.Lock()
+		delete(r.building, threadID)
+		if err == nil {
+			r.m[threadID] = entry
+		}
+		sig.err = err
+		close(sig.done)
+		r.mu.Unlock()
+		return entry, err
+	}
 }
 
 // Set stores e under threadID, replacing any existing entry.

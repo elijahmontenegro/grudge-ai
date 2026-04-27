@@ -59,15 +59,18 @@ func NewResolver(k *kernel.Kernel) *Resolver {
 // supplies the Pubsub bridge (graph-typed translation) plus the
 // kernel-implemented Approvals / PlanStore / Selections /
 // EmbedEnqueuer interfaces via runtimeDeps.
+//
+// GetOrBuild covers the lookup-then-construct dance under one
+// critical section so two simultaneous callers for the same thread
+// (two browser tabs, boot reconciler racing first user message)
+// don't both run the build closure and orphan the loser's runner.
 func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
-	if entry, ok := r.Runners.Get(threadID); ok {
-		return entry.Runner, nil
-	}
-	entry, err := runtimerunner.Build(threadID, r.runtimeDeps())
+	entry, err := r.Runners.GetOrBuild(threadID, func() (*runtimerunner.Entry, error) {
+		return runtimerunner.Build(threadID, r.runtimeDeps())
+	})
 	if err != nil {
 		return nil, fmt.Errorf("build runner %s: %w", threadID, err)
 	}
-	r.Runners.Set(threadID, entry)
 	return entry.Runner, nil
 }
 
