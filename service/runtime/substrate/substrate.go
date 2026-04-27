@@ -213,6 +213,14 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	rrcCfg := rrc.DefaultConfig()
 	if se := cfg.Settings.Engine; se != (config.EngineConfig{}) {
 		rrcCfg.EdgeThreshold = se.EdgeThreshold
+		// Preserve DefaultConfig CrossThreadEdgeThreshold when the
+		// persisted settings predate the field (zero ⇒ legacy unset).
+		// Explicit zero from a user means "use single-knob behavior"
+		// — they can disable by setting it back to 0 deliberately,
+		// at which point the rrc fallthrough does the right thing.
+		if se.CrossThreadEdgeThreshold > 0 {
+			rrcCfg.CrossThreadEdgeThreshold = se.CrossThreadEdgeThreshold
+		}
 		rrcCfg.ScoreFloor = se.ScoreFloor
 		rrcCfg.WeightCE = se.WeightCE
 		rrcCfg.WeightTemp = se.WeightTemp

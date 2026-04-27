@@ -728,6 +728,74 @@ func TestOnMessage_Gate1_AbsoluteThreshold(t *testing.T) {
 	}
 }
 
+func TestOnMessage_CrossThreadEdgeThreshold(t *testing.T) {
+	// Cross-thread fused score = raw CE (FuseScore short-circuits
+	// the temporal term). At default same-thread EdgeThreshold=0.5,
+	// a cross-thread CE in the 0.40-0.50 band — the band where bge-
+	// reranker-v2-m3 lands genuinely-related cross-thread material —
+	// would be silently rejected.
+	//
+	// CrossThreadEdgeThreshold separates the gate. With it set to
+	// 0.4, a cross-thread CE=0.45 forms an edge; flipping it back to
+	// 0.5 (single-knob legacy) suppresses it.
+	cfg := DefaultConfig()
+	cfg.ZScoreThreshold = 0
+	cfg.MinBatchStdDev = 0
+	cfg.EdgeThreshold = 0.5
+	cfg.CrossThreadEdgeThreshold = 0.4
+
+	mc := newMockClassifier()
+	mc.SetScore("borderline", "q", 0.45)
+	o := newMockChunkOracle()
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
+
+	m0 := addMsg(o, "m0", 0, "tA", "borderline")
+	q := addMsg(o, "q", 0, "tQ", "q")
+
+	edges, err := e.OnMessage(context.Background(), q, []*pb.Message{m0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edges) != 1 {
+		t.Fatalf("cross-thread CE=0.45 should clear CrossThreadEdgeThreshold=0.4, got %d edges", len(edges))
+	}
+	// Sanity: same CE on a same-thread prior would clear neither
+	// threshold (fused = 0.6*0.45 + 0.4*1.0 = 0.67 — actually clears
+	// here because temporal=1.0). Use a positionally-distant same-
+	// thread prior so temporal contribution drops.
+	mc2 := newMockClassifier()
+	mc2.SetScore("borderline-same", "q2", 0.45)
+	o2 := newMockChunkOracle()
+	e2 := NewEngine(cfg, mc2, WithChunkOracle(o2))
+	pSame := addMsg(o2, "p", 0, "tQ", "borderline-same")
+	q2 := addMsg(o2, "q2", 100, "tQ", "q2") // d=100, temporal=1/101 ≈ 0.0099
+	sameEdges, err := e2.OnMessage(context.Background(), q2, []*pb.Message{pSame})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same-thread fused = 0.6*0.45 + 0.4*0.0099 ≈ 0.274 < 0.5 → no edge.
+	if len(sameEdges) != 0 {
+		t.Fatalf("same-thread CE=0.45 with weak temporal should not clear EdgeThreshold=0.5, got %d edges", len(sameEdges))
+	}
+
+	// Now disable the cross-thread carve-out and confirm legacy
+	// behavior: cross-thread CE=0.45 is suppressed under 0.5.
+	cfg.CrossThreadEdgeThreshold = 0 // fall through to EdgeThreshold
+	mc3 := newMockClassifier()
+	mc3.SetScore("borderline", "q", 0.45)
+	o3 := newMockChunkOracle()
+	e3 := NewEngine(cfg, mc3, WithChunkOracle(o3))
+	m0b := addMsg(o3, "m0b", 0, "tA", "borderline")
+	qb := addMsg(o3, "qb", 0, "tQ", "q")
+	legacyEdges, err := e3.OnMessage(context.Background(), qb, []*pb.Message{m0b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacyEdges) != 0 {
+		t.Fatalf("CrossThreadEdgeThreshold=0 should fall through to EdgeThreshold=0.5; CE=0.45 cross-thread should be suppressed, got %d edges", len(legacyEdges))
+	}
+}
+
 func TestOnMessage_Gate2_ZScoreBlocksCluster(t *testing.T) {
 	// Three priors all above absolute threshold. Two form a cluster,
 	// one is a clear outlier. Gate 2 keeps the outlier only — the

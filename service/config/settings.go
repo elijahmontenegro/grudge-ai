@@ -29,20 +29,21 @@ type Settings struct {
 // Engine means "use the rrc default" — handled at the service
 // boundary.
 type EngineConfig struct {
-	EdgeThreshold         float64 `json:"edge_threshold"`
-	ScoreFloor            float64 `json:"score_floor"`
-	WeightCE              float64 `json:"weight_ce"`
-	WeightTemp            float64 `json:"weight_temp"`
-	ZScoreThreshold       float64 `json:"z_score_threshold"`
-	MinBatchStdDev        float64 `json:"min_batch_stddev"`
-	RadiusSize            int     `json:"radius_size"`
-	RerankTopK            int     `json:"rerank_top_k"`
-	MinPerThreadInTopK    int     `json:"min_per_thread_in_top_k"`
-	ContextBudgetTokens   int     `json:"context_budget_tokens"`
-	DiversityLambda       float64 `json:"diversity_lambda"`
-	BudgetHeadroomPct     float64 `json:"budget_headroom_pct"`
-	PerMsgDelimiterTokens int     `json:"per_msg_delimiter_tokens"`
-	NLIFusionWeight       float64 `json:"nli_fusion_weight"`
+	EdgeThreshold            float64 `json:"edge_threshold"`
+	CrossThreadEdgeThreshold float64 `json:"cross_thread_edge_threshold"`
+	ScoreFloor               float64 `json:"score_floor"`
+	WeightCE                 float64 `json:"weight_ce"`
+	WeightTemp               float64 `json:"weight_temp"`
+	ZScoreThreshold          float64 `json:"z_score_threshold"`
+	MinBatchStdDev           float64 `json:"min_batch_stddev"`
+	RadiusSize               int     `json:"radius_size"`
+	RerankTopK               int     `json:"rerank_top_k"`
+	MinPerThreadInTopK       int     `json:"min_per_thread_in_top_k"`
+	ContextBudgetTokens      int     `json:"context_budget_tokens"`
+	DiversityLambda          float64 `json:"diversity_lambda"`
+	BudgetHeadroomPct        float64 `json:"budget_headroom_pct"`
+	PerMsgDelimiterTokens    int     `json:"per_msg_delimiter_tokens"`
+	NLIFusionWeight          float64 `json:"nli_fusion_weight"`
 }
 
 // GetUserName returns the configured display name, in priority:

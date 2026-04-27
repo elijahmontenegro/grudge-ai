@@ -52,10 +52,10 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 			continue
 		}
 		score := edgeScoreUnderConfig(edge, cfg)
-		if score < cfg.EdgeThreshold {
+		crossThread := edge.FromThreadId != promptThreadID
+		if score < cfg.EdgeThresholdFor(crossThread) {
 			continue // edge doesn't qualify under current config
 		}
-		crossThread := edge.FromThreadId != promptThreadID
 		heap.Push(pq, &pqItem{
 			entry: selectionEntry{
 				MessageID:      edge.FromMessageId,
@@ -95,11 +95,11 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 				continue
 			}
 			edgeScore := edgeScoreUnderConfig(edge, cfg)
-			if edgeScore < cfg.EdgeThreshold {
+			crossThread := edge.FromThreadId != promptThreadID
+			if edgeScore < cfg.EdgeThresholdFor(crossThread) {
 				continue
 			}
 			effectiveScore := edgeScore * entry.EffectiveScore
-			crossThread := edge.FromThreadId != promptThreadID
 			heap.Push(pq, &pqItem{
 				entry: selectionEntry{
 					MessageID:      edge.FromMessageId,

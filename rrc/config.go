@@ -8,6 +8,26 @@ package rrc
 // the weights still sum to 1.0.
 type EngineConfig struct {
 	EdgeThreshold float64 // Absolute edge creation threshold (fused score must clear this)
+
+	// CrossThreadEdgeThreshold gates cross-thread fused scores
+	// separately because the score distributions are not the same.
+	// Same-thread fused = WeightCE*CE + WeightTemp*temporal — the
+	// temporal contribution adds up to WeightTemp (≈0.4) to the
+	// fused score for adjacent priors. Cross-thread fused = CE only
+	// (FuseScore short-circuits — temporal positions across threads
+	// are incommensurable). At default weights, a same-thread CE of
+	// 0.17 with adjacent temporal=1.0 already clears EdgeThreshold
+	// 0.5; a cross-thread chunk needs CE ≥ 0.5 to clear the same
+	// gate. That asymmetry isn't a calibration of relevance — it's
+	// the temporal contribution showing up as a structural handicap
+	// against cross-thread material.
+	//
+	// Holding cross-thread to its own threshold lets the two
+	// regimes be tuned independently. Set to 0 to fall back to
+	// EdgeThreshold (legacy behavior — useful for tests and for
+	// users who want the single-knob model).
+	CrossThreadEdgeThreshold float64
+
 	WeightCE      float64 // Cross-encoder (reranker) weight
 	WeightTemp    float64 // Temporal proximity weight
 	ScoreFloor    float64 // DAG-traversal cutoff
@@ -155,6 +175,20 @@ type EngineConfig struct {
 	NLIFusionWeight float64
 }
 
+// EdgeThresholdFor returns the gating threshold appropriate for a
+// candidate of the given thread relationship to the target. Cross-
+// thread candidates use CrossThreadEdgeThreshold when configured,
+// because their fused score distribution is shifted down relative
+// to same-thread (no temporal contribution). Zero
+// CrossThreadEdgeThreshold falls back to EdgeThreshold for the
+// single-knob legacy model.
+func (cfg EngineConfig) EdgeThresholdFor(crossThread bool) float64 {
+	if crossThread && cfg.CrossThreadEdgeThreshold > 0 {
+		return cfg.CrossThreadEdgeThreshold
+	}
+	return cfg.EdgeThreshold
+}
+
 // DefaultConfig returns the default engine configuration.
 //
 // EdgeThreshold 0.35 / ScoreFloor 0.01 are the calibrated baseline
@@ -201,8 +235,17 @@ func DefaultConfig() EngineConfig {
 		// distribution — Selection routinely returned 50%+ of the
 		// corpus, which is the opposite of hyperselection. These new
 		// values produce 5-30 selections per query on the same corpus.
-		EdgeThreshold:   0.5,
-		WeightCE:        0.6,
+		EdgeThreshold: 0.5,
+		// CrossThreadEdgeThreshold 0.4. With cross-thread fused = CE
+		// (no temporal term), 0.5 was too tight: bge-reranker-v2-m3
+		// produces cross-thread CE in the 0.40-0.50 band on
+		// genuinely-related material across novel-style threads, so
+		// the same-thread 0.5 gate was suppressing legitimate cross-
+		// thread edges. 0.4 admits that band while still rejecting
+		// the noise floor (most cross-thread CE on unrelated
+		// material sits below 0.3).
+		CrossThreadEdgeThreshold: 0.4,
+		WeightCE:                 0.6,
 		WeightTemp:      0.4,
 		ScoreFloor:      0.3,
 		ZScoreThreshold: 1.0,

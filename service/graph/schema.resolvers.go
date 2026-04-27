@@ -582,7 +582,8 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		// rerank disabled). Clamping on `> 0` would silently drop valid
 		// zero-saves and create an "unset vs zero" ambiguity the input
 		// shape doesn't carry.
-		if cfg.EdgeThreshold < 0 || cfg.ScoreFloor < 0 ||
+		if cfg.EdgeThreshold < 0 || cfg.CrossThreadEdgeThreshold < 0 ||
+			cfg.ScoreFloor < 0 ||
 			cfg.WeightCE < 0 || cfg.WeightTemp < 0 ||
 			cfg.ZScoreThreshold < 0 || cfg.MinBatchStdDev < 0 ||
 			cfg.RadiusSize < 0 || cfg.RerankTopK < 0 ||
@@ -603,6 +604,9 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		// qualify; loosening restores them.
 		live := r.Engine().Config()
 		live.EdgeThreshold = cfg.EdgeThreshold
+		// User-zero ⇒ explicitly opt out of cross-thread carve-out;
+		// fallthrough is to EdgeThreshold per EdgeThresholdFor.
+		live.CrossThreadEdgeThreshold = cfg.CrossThreadEdgeThreshold
 		live.ScoreFloor = cfg.ScoreFloor
 		live.WeightCE = cfg.WeightCE
 		live.WeightTemp = cfg.WeightTemp
@@ -619,8 +623,9 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		if err := r.UpdateEngineConfig(ctx, live); err != nil {
 			return nil, fmt.Errorf("update engine config: %w", err)
 		}
-		log.Printf("[Settings] Engine config applied live: thr=%.3f floor=%.3f wCE=%.2f wT=%.2f z=%.2f minStd=%.3f radius=%d topK=%d budget=%d λ=%.2f headroom=%.2f delim=%d α=%.2f",
-			live.EdgeThreshold, live.ScoreFloor, live.WeightCE, live.WeightTemp,
+		log.Printf("[Settings] Engine config applied live: thr=%.3f xThr=%.3f floor=%.3f wCE=%.2f wT=%.2f z=%.2f minStd=%.3f radius=%d topK=%d budget=%d λ=%.2f headroom=%.2f delim=%d α=%.2f",
+			live.EdgeThreshold, live.CrossThreadEdgeThreshold,
+			live.ScoreFloor, live.WeightCE, live.WeightTemp,
 			live.ZScoreThreshold, live.MinBatchStdDev,
 			live.RadiusSize, live.RerankTopK, live.ContextBudgetTokens,
 			live.DiversityLambda, live.BudgetHeadroomPct, live.PerMsgDelimiterTokens, live.NLIFusionWeight)
@@ -972,16 +977,17 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	// zero-value engine fields).
 	engineCfg := r.Engine().Config()
 	engine, err := json.Marshal(map[string]any{
-		"edge_threshold":        engineCfg.EdgeThreshold,
-		"score_floor":           engineCfg.ScoreFloor,
-		"weight_ce":             engineCfg.WeightCE,
-		"weight_temp":           engineCfg.WeightTemp,
-		"z_score_threshold":     engineCfg.ZScoreThreshold,
-		"min_batch_stddev":      engineCfg.MinBatchStdDev,
-		"radius_size":              engineCfg.RadiusSize,
-		"rerank_top_k":             engineCfg.RerankTopK,
-		"min_per_thread_in_top_k":  engineCfg.MinPerThreadInTopK,
-		"context_budget_tokens":    engineCfg.ContextBudgetTokens,
+		"edge_threshold":              engineCfg.EdgeThreshold,
+		"cross_thread_edge_threshold": engineCfg.CrossThreadEdgeThreshold,
+		"score_floor":                 engineCfg.ScoreFloor,
+		"weight_ce":                   engineCfg.WeightCE,
+		"weight_temp":                 engineCfg.WeightTemp,
+		"z_score_threshold":           engineCfg.ZScoreThreshold,
+		"min_batch_stddev":            engineCfg.MinBatchStdDev,
+		"radius_size":                 engineCfg.RadiusSize,
+		"rerank_top_k":                engineCfg.RerankTopK,
+		"min_per_thread_in_top_k":     engineCfg.MinPerThreadInTopK,
+		"context_budget_tokens":       engineCfg.ContextBudgetTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal engine config: %w", err)

@@ -532,7 +532,11 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 	for _, c := range candidates {
 		// Gate 1: absolute threshold. Cuts noise floor (candidates
 		// with fused score too low to be plausible prereqs at all).
-		if c.fused < e.cfg.EdgeThreshold {
+		// Cross-thread candidates gate against
+		// CrossThreadEdgeThreshold because their fused score has no
+		// temporal contribution — see config.go for the asymmetry.
+		crossThread := c.prior.ThreadId != msg.ThreadId
+		if c.fused < e.cfg.EdgeThresholdFor(crossThread) {
 			skippedAbsolute++
 			continue
 		}
