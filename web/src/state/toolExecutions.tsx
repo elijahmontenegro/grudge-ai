@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useMutation, useSubscription } from '@apollo/client/react'
 import {
   ANSWER_QUESTION,
@@ -36,17 +44,24 @@ export interface AskUserQuestionItem {
 }
 export interface PendingQuestion {
   callId: string
-  /** Full structured question array decoded from the tool's arguments
-   *  JSON. At least one entry is always present — the first is the one
-   *  the UI prompts for first. */
   questions: AskUserQuestionItem[]
   arrivedAt: number
 }
 
+export interface LiveToolCall {
+  callId: string
+  toolName: string
+  arguments: string
+  status: 'running' | 'completed' | 'error' | 'pending' | 'waiting_for_user'
+  isError: boolean
+  result: string | null
+}
+
 /** Parse the JSON payload the backend publishes for AskUserQuestion.
- *  Accepts two shapes: the structured `{questions: [...]}` form and the
- *  legacy plain `{question: "..."}` form (in case an old tool call is
- *  still live across a deploy). Returns null when neither parses. */
+ *  Accepts two shapes: the structured `{questions: [...]}` form and
+ *  the legacy plain `{question: "..."}` form (in case an old tool
+ *  call is still live across a deploy). Returns null when neither
+ *  parses. */
 export function parseAskUserQuestionArgs(raw: string): AskUserQuestionItem[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown
@@ -92,56 +107,38 @@ function normalizeQuestion(raw: unknown): AskUserQuestionItem | null {
   return out
 }
 
-export interface LiveToolCall {
-  callId: string
-  toolName: string
-  arguments: string
-  status: 'running' | 'completed' | 'error' | 'pending' | 'waiting_for_user'
-  isError: boolean
-  result: string | null
-}
-
-export interface ToolExecutionsState {
-  /** Gated tool calls waiting on user approve/deny. */
+interface ToolExecutionsContextValue {
   pending: PendingToolCall[]
-  /** AskUserQuestion events waiting on user answer. */
   questions: PendingQuestion[]
-  /** Every tool lifecycle event on this thread, for live display during
-   *  streaming. Resets on turn boundary via `resetKey`. */
   live: LiveToolCall[]
   approve: (callId: string) => Promise<void>
   deny: (callId: string, reason?: string) => Promise<void>
-  /** Submit the user's reply to an AskUserQuestion. Pass a plain string
-   *  for a single-question tool call; pass a `{question: answer}` map
-   *  for a multi-question call — the resolver parses the JSON on the
-   *  other side. */
   answer: (callId: string, answer: string | Record<string, string>) => Promise<void>
-  /** Clear a stale question locally without sending any answer to the
-   *  backend. Used when the card is stuck (agent restarted, timeout
-   *  expired) and the user wants to dismiss without committing a reply. */
   dismissQuestion: (callId: string) => void
   busy: boolean
   error: string | null
 }
 
+const ToolExecutionsContext = createContext<ToolExecutionsContextValue | null>(null)
+
+interface ProviderProps {
+  threadId: string
+  /** Bumping this clears the live list (used at stream boundary). */
+  resetKey?: number | string
+  children: ReactNode
+}
+
 /**
- * Single subscription point for TOOL_EXECUTION_SUB. Exposes three views of
- * the same event stream:
- *   - pending: gated calls waiting for approve/deny (status="pending")
- *   - questions: AskUserQuestion prompts (status="waiting_for_user")
- *   - live: every lifecycle event for streaming display
+ * Single TOOL_EXECUTION subscription per thread, fanned out via
+ * context. Selector hooks below pluck what they need without each
+ * opening their own subscription.
  *
- * Previously `useToolApprovals` and `useLiveToolCalls` each opened their
- * own subscription — same events delivered twice per thread. Consolidated.
- *
- * `resetKey` — bumping it clears the `live` list (used at stream boundary).
- * Pending + questions are not reset since their resolution is driven by
- * terminal events, not turn boundaries.
+ * Pending + questions persist across turn boundaries because their
+ * lifecycle is driven by terminal status events, not turn starts.
+ * The live list resets on resetKey bumps so a new turn doesn't
+ * stack on top of the prior one.
  */
-export function useToolExecutions(
-  threadId: string,
-  resetKey: number | string = 0,
-): ToolExecutionsState {
+export function ToolExecutionsProvider({ threadId, resetKey = 0, children }: ProviderProps) {
   const [pending, setPending] = useState<PendingToolCall[]>([])
   const [questions, setQuestions] = useState<PendingQuestion[]>([])
   const [live, setLive] = useState<LiveToolCall[]>([])
@@ -155,7 +152,6 @@ export function useToolExecutions(
         const ev = data.data?.toolExecution
         if (!ev) return
 
-        // --- live list: upsert by callId, any status ---
         setLive((cur) => {
           const status = (ev.status as LiveToolCall['status']) ?? 'running'
           const idx = cur.findIndex((c) => c.callId === ev.callId)
@@ -173,7 +169,6 @@ export function useToolExecutions(
           return copy
         })
 
-        // --- pending list: gated tool approvals ---
         if (ev.status === 'pending') {
           setPending((cur) => {
             if (cur.some((c) => c.callId === ev.callId)) return cur
@@ -190,16 +185,12 @@ export function useToolExecutions(
           return
         }
 
-        // --- question list: AskUserQuestion prompts ---
         if (ev.status === 'waiting_for_user' && ev.toolName === 'AskUserQuestion') {
-          const questions = parseAskUserQuestionArgs(ev.arguments)
-          if (!questions) return
+          const parsed = parseAskUserQuestionArgs(ev.arguments)
+          if (!parsed) return
           setQuestions((cur) => {
             if (cur.some((q) => q.callId === ev.callId)) return cur
-            return [
-              ...cur,
-              { callId: ev.callId, questions, arrivedAt: Date.now() },
-            ]
+            return [...cur, { callId: ev.callId, questions: parsed, arrivedAt: Date.now() }]
           })
           return
         }
@@ -211,16 +202,12 @@ export function useToolExecutions(
     },
   )
 
-  // Thread changed → reset everything.
   useEffect(() => {
     setPending([])
     setQuestions([])
     setLive([])
   }, [threadId])
 
-  // Turn boundary → reset only the live list. Pending + questions survive
-  // across turns because their lifecycle is driven by terminal events, not
-  // turn starts.
   useEffect(() => {
     setLive([])
   }, [resetKey])
@@ -244,7 +231,6 @@ export function useToolExecutions(
     },
     [approveMut],
   )
-
   const deny = useCallback(
     async (callId: string, reason?: string) => {
       await denyMut({ variables: { callId, reason: reason ?? null } })
@@ -252,23 +238,20 @@ export function useToolExecutions(
     },
     [denyMut],
   )
-
   const answer = useCallback(
     async (callId: string, answerPayload: string | Record<string, string>) => {
       // Only clear from local state AFTER the mutation both resolves
       // AND returns `true` for `answerQuestion`. Apollo's `await
       // mutate()` does NOT throw on GraphQL errors by default — it
-      // resolves with `{ data, errors }` — so a stale callId (runner
-      // restart, timeout, already-answered) returns `errors` quietly
-      // and `answerQuestion: false` in data, which previously looked
-      // like success to the optimistic-dismiss path. Now we unwrap
+      // resolves with `{ data, errors }` — so a stale callId
+      // (runner restart, timeout, already-answered) returns `errors`
+      // quietly and `answerQuestion: false` in data, which previously
+      // looked like success to the optimistic-dismiss path. Unwrap
       // both and throw so the AnswerStage catches + surfaces it.
       const payload =
         typeof answerPayload === 'string' ? answerPayload : JSON.stringify(answerPayload)
       const res = await answerMut({ variables: { callId, answer: payload } })
-      if (res.error) {
-        throw new Error(res.error.message)
-      }
+      if (res.error) throw new Error(res.error.message)
       if (res.data?.answerQuestion !== true) {
         throw new Error(
           'Runner rejected the answer — the question is likely stale (restart or 5-minute timeout).',
@@ -278,27 +261,69 @@ export function useToolExecutions(
     },
     [answerMut],
   )
-
-  // Manual dismiss without sending an answer — useful when the question
-  // is stale (agent was restarted, timed out, or the user wants to
-  // ignore it). Never hits the backend.
   const dismissQuestion = useCallback((callId: string) => {
     setQuestions((cur) => cur.filter((q) => q.callId !== callId))
   }, [])
 
-  return {
-    pending,
-    questions,
-    live,
-    approve,
-    deny,
-    answer,
-    dismissQuestion,
-    busy: approveRes.loading || denyRes.loading || answerRes.loading,
-    error:
-      approveRes.error?.message ??
-      denyRes.error?.message ??
-      answerRes.error?.message ??
-      null,
+  const value = useMemo<ToolExecutionsContextValue>(
+    () => ({
+      pending,
+      questions,
+      live,
+      approve,
+      deny,
+      answer,
+      dismissQuestion,
+      busy: approveRes.loading || denyRes.loading || answerRes.loading,
+      error:
+        approveRes.error?.message ??
+        denyRes.error?.message ??
+        answerRes.error?.message ??
+        null,
+    }),
+    [
+      pending,
+      questions,
+      live,
+      approve,
+      deny,
+      answer,
+      dismissQuestion,
+      approveRes.loading,
+      denyRes.loading,
+      answerRes.loading,
+      approveRes.error,
+      denyRes.error,
+      answerRes.error,
+    ],
+  )
+
+  return (
+    <ToolExecutionsContext.Provider value={value}>{children}</ToolExecutionsContext.Provider>
+  )
+}
+
+function useToolExecutionsContext(): ToolExecutionsContextValue {
+  const ctx = useContext(ToolExecutionsContext)
+  if (!ctx) {
+    throw new Error('Tool-execution selector hook used outside ToolExecutionsProvider')
   }
+  return ctx
+}
+
+/** Pending tool-call approvals + the approve/deny handlers. */
+export function useToolApprovals() {
+  const { pending, approve, deny, busy, error } = useToolExecutionsContext()
+  return { pending, approve, deny, busy, error }
+}
+
+/** Pending AskUserQuestion prompts + the answer/dismiss handlers. */
+export function useToolQuestions() {
+  const { questions, answer, dismissQuestion, busy, error } = useToolExecutionsContext()
+  return { questions, answer, dismissQuestion, busy, error }
+}
+
+/** Live tool-call list (every lifecycle event for streaming display). */
+export function useLiveToolCalls(): LiveToolCall[] {
+  return useToolExecutionsContext().live
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { PendingToolCall } from '@/hooks/useToolExecutions'
+import type { PendingToolCall } from '@/state/toolExecutions'
 
 interface ToolApprovalSlotProps {
   pending: PendingToolCall

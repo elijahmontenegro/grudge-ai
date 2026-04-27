@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { IconChevron } from '@/primitives/icons'
-import { parseAskUserQuestionArgs } from '@/hooks/useToolExecutions'
+import { parseAskUserQuestionArgs } from '@/state/toolExecutions'
 
 interface AskQuestionRowProps {
   /** The tool call's raw arguments JSON. Decoded for the Q: display. */

@@ -12,7 +12,12 @@ import { useSendAndStream } from '@/hooks/useSendAndStream'
 import { useAgentState } from '@/hooks/useAgentState'
 import { useSubagentProgress } from '@/hooks/useSubagentProgress'
 import { usePlanMode } from '@/hooks/usePlanMode'
-import { useToolExecutions } from '@/hooks/useToolExecutions'
+import {
+  ToolExecutionsProvider,
+  useToolApprovals,
+  useToolQuestions,
+  useLiveToolCalls,
+} from '@/state/toolExecutions'
 import { useThreadMutations } from '@/hooks/useThreadMutations'
 import { useAgentControls } from '@/hooks/useAgentControls'
 import { AgentMode, AgentStatus } from '@/graphql/generated/types'
@@ -75,12 +80,6 @@ export function ThreadPage({
 
   const subagents = useSubagentProgress(id, turnSeq)
   const plan = usePlanMode()
-  // Single TOOL_EXECUTION subscription for this thread — exposes pending
-  // approvals, AskUserQuestion prompts, and a live-call list all from one
-  // stream (previously two separate subscriptions for the same events).
-  const tools = useToolExecutions(id, turnSeq)
-  const liveTools = tools.live
-  const approvals = tools
   const threadMuts = useThreadMutations()
   const agentControls = useAgentControls()
 
@@ -190,56 +189,84 @@ export function ThreadPage({
   const fullThread = { ...thread, corpus: messages }
 
   return (
+    <ToolExecutionsProvider threadId={id} resetKey={turnSeq}>
+      <ThreadViewWired
+        thread={fullThread}
+        parentName={parent?.name}
+        streaming={streaming}
+        stream={stream}
+        subagents={subagents}
+        onSend={async (text, attachments) => {
+          // Commit plan mode at send time if the user selected it. Runner
+          // restart inside enterPlanMode rebuilds the system prompt before
+          // the next SendMessage sees it.
+          if (mode === 'plan' && agent.mode !== AgentMode.Plan) {
+            await plan.enterPlan(id)
+          }
+          void send(text, attachments)
+        }}
+        onStartAutonomous={(text, d, attachments) => {
+          void agentControls.start(id, text, d, attachments)
+        }}
+        scope={scope}
+        setScope={setScope}
+        mode={mode}
+        setMode={setMode}
+        duration={duration}
+        setDuration={setDuration}
+        focusMessageId={focusMessageId}
+        onEditTurn={onEditTurn}
+        editInFlight={threadMuts.pending}
+        artifactsCollapsed={artifactsCollapsed}
+        onToggleArtifacts={onToggleArtifacts}
+        livePlanContent={agent.planContent}
+        agentMode={agent.mode}
+        planApproving={plan.approving}
+        planRejecting={plan.rejecting}
+        planEditing={plan.editing}
+        onApprovePlan={(auto) => void plan.approvePlan(id, auto)}
+        onRejectPlan={(feedback) => void plan.rejectPlan(id, feedback)}
+        onEditPlan={(content) => plan.editPlan(id, content)}
+        agentStatus={agent.status}
+        agentIsAutonomous={agent.isAutonomous}
+        agentElapsed={agent.elapsedTime}
+        agentRetry={agent.retry}
+        onPauseAgent={() => void agentControls.pause(id)}
+        onResumeAgent={(correction) => void agentControls.resume(id, correction)}
+        onStopAgent={() => void agentControls.stop(id)}
+        agentControlsPending={agentControls.pending}
+      />
+    </ToolExecutionsProvider>
+  )
+}
+
+// Inner shell that pulls tool-execution slices from context. Sits
+// inside ToolExecutionsProvider so the selector hooks resolve.
+function ThreadViewWired(
+  props: Omit<
+    React.ComponentProps<typeof ThreadView>,
+    | 'liveTools'
+    | 'pendingQuestions'
+    | 'onAnswerQuestion'
+    | 'onDismissQuestion'
+    | 'questionsBusy'
+    | 'pendingApprovals'
+    | 'onApproveTool'
+    | 'onDenyTool'
+    | 'approvalsBusy'
+  >,
+) {
+  const liveTools = useLiveToolCalls()
+  const approvals = useToolApprovals()
+  const questions = useToolQuestions()
+  return (
     <ThreadView
-      thread={fullThread}
-      parentName={parent?.name}
-      streaming={streaming}
-      stream={stream}
-      subagents={subagents}
+      {...props}
       liveTools={liveTools}
-      onSend={async (text, attachments) => {
-        // Commit plan mode at send time if the user selected it. Runner
-        // restart inside enterPlanMode rebuilds the system prompt before
-        // the next SendMessage sees it.
-        if (mode === 'plan' && agent.mode !== AgentMode.Plan) {
-          await plan.enterPlan(id)
-        }
-        void send(text, attachments)
-      }}
-      onStartAutonomous={(text, d, attachments) => {
-        void agentControls.start(id, text, d, attachments)
-      }}
-      scope={scope}
-      setScope={setScope}
-      mode={mode}
-      setMode={setMode}
-      duration={duration}
-      setDuration={setDuration}
-      focusMessageId={focusMessageId}
-      onEditTurn={onEditTurn}
-      editInFlight={threadMuts.pending}
-      artifactsCollapsed={artifactsCollapsed}
-      onToggleArtifacts={onToggleArtifacts}
-      livePlanContent={agent.planContent}
-      agentMode={agent.mode}
-      planApproving={plan.approving}
-      planRejecting={plan.rejecting}
-      planEditing={plan.editing}
-      onApprovePlan={(auto) => void plan.approvePlan(id, auto)}
-      onRejectPlan={(feedback) => void plan.rejectPlan(id, feedback)}
-      onEditPlan={(content) => plan.editPlan(id, content)}
-      agentStatus={agent.status}
-      agentIsAutonomous={agent.isAutonomous}
-      agentElapsed={agent.elapsedTime}
-      agentRetry={agent.retry}
-      onPauseAgent={() => void agentControls.pause(id)}
-      onResumeAgent={(correction) => void agentControls.resume(id, correction)}
-      onStopAgent={() => void agentControls.stop(id)}
-      agentControlsPending={agentControls.pending}
-      pendingQuestions={approvals.questions}
-      onAnswerQuestion={(cid, a) => approvals.answer(cid, a)}
-      onDismissQuestion={(cid) => approvals.dismissQuestion(cid)}
-      questionsBusy={approvals.busy}
+      pendingQuestions={questions.questions}
+      onAnswerQuestion={(cid, a) => questions.answer(cid, a)}
+      onDismissQuestion={(cid) => questions.dismissQuestion(cid)}
+      questionsBusy={questions.busy}
       pendingApprovals={approvals.pending}
       onApproveTool={(cid) => void approvals.approve(cid)}
       onDenyTool={(cid, r) => void approvals.deny(cid, r)}
