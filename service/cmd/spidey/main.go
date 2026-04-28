@@ -23,6 +23,7 @@ import (
 	_ "github.com/emontenegr/spidey/core/adapter/googleai"
 	_ "github.com/emontenegr/spidey/core/adapter/ollama"
 	_ "github.com/emontenegr/spidey/core/adapter/openai"
+	_ "github.com/emontenegr/spidey/core/adapter/tei"
 	_ "github.com/emontenegr/spidey/core/adapter/vllm"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/api"

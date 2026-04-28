@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/core/adapter/tei"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/search"
@@ -118,14 +117,9 @@ type options struct {
 }
 
 // WithClassifier overrides the classifier substrate would otherwise
-// build from the "classifier" / "embedder" providers in cfg. The
-// override wins unconditionally; cfg-derived URLs are ignored when
-// it's set.
-//
-// The composite-classifier construction (NLI + embedding similarity
-// from two URLs) lives inside tei. Tests that don't have those
-// services wire a single Scorer here and exercise the rest of
-// substrate as-is.
+// build from the "classifier" provider in cfg. Production callers
+// pass nothing; tests inject a fake Scorer to drive the engine
+// without standing up a TEI server.
 func WithClassifier(c core.Classifier) Option {
 	return func(o *options) { o.classifier = c }
 }
@@ -169,27 +163,29 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		s.MainCompleter = c
 	}
 
-	// Composite classifier: NLI + embedding similarity. classifier
-	// config points to NLI; embedder config points to embedding.
-	var nliURL, embedURL string
-	if clsCfg, ok := cfg.Settings.Providers["classifier"]; ok {
-		nliURL = clsCfg.BaseURL
-		s.RerankerModelID = clsCfg.Model
-	}
-	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
-		embedURL = embCfg.BaseURL
-		s.EmbedModelID = embCfg.Model
-	}
+	// Classifier (relevance scoring substrate). bge-reranker via TEI
+	// /rerank in production; the override path lets tests inject a
+	// fake. Constructed via the same core.NewProvider factory the
+	// embedder uses below — uniform shape per provider role.
 	if o.classifier != nil {
 		s.Classifier = o.classifier
 		log.Printf("Classifier: injected (test/override)")
-	} else if nliURL != "" || embedURL != "" {
-		s.Classifier = tei.NewCompositeClassifier(nliURL, embedURL)
-		log.Printf("Composite classifier: NLI=%q, embed=%q", nliURL, embedURL)
+	} else if clsCfg, ok := cfg.Settings.Providers["classifier"]; ok && clsCfg.Adapter != "" {
+		p, err := core.NewProvider(clsCfg.ToCore())
+		if err != nil {
+			return nil, fmt.Errorf("classifier provider: %w", err)
+		}
+		c, err := p.Classifier(clsCfg.Model)
+		if err != nil {
+			return nil, fmt.Errorf("classifier (%s/%s): %w", clsCfg.Adapter, clsCfg.Model, err)
+		}
+		s.Classifier = c
+		s.RerankerModelID = clsCfg.Model
+		log.Printf("Classifier: %s/%s @ %s", clsCfg.Adapter, clsCfg.Model, clsCfg.BaseURL)
 	}
 
-	// Embedder for semantic search (separate from classifier).
-	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok {
+	// Embedder (cosine prefilter + semantic search).
+	if embCfg, ok := cfg.Settings.Providers["embedder"]; ok && embCfg.Adapter != "" {
 		p, err := core.NewProvider(embCfg.ToCore())
 		if err != nil {
 			return nil, fmt.Errorf("embedder provider: %w", err)
@@ -199,6 +195,7 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 			return nil, fmt.Errorf("embedder (%s/%s): %w", embCfg.Adapter, embCfg.Model, err)
 		}
 		s.Embedder = e
+		s.EmbedModelID = embCfg.Model
 	}
 
 	if s.Classifier == nil || s.MainCompleter == nil {

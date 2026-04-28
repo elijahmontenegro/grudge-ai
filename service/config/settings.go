@@ -189,15 +189,15 @@ func probeProviders(s *Settings) {
 			BaseURL: "http://localhost:11434",
 		}
 	}
-	// TEI for NLI at default port
+	// TEI reranker at default port (8080)
 	if probeHTTP("http://localhost:8080/info") {
 		s.Providers["classifier"] = ProviderConfig{
 			Adapter: "tei",
-			Model:   "cross-encoder/nli-deberta-v3-base",
+			Model:   "BAAI/bge-reranker-v2-m3",
 			BaseURL: "http://localhost:8080",
 		}
 	}
-	// TEI for embeddings at port 8081
+	// TEI embedder at port 8081
 	if probeHTTP("http://localhost:8081/info") {
 		s.Providers["embedder"] = ProviderConfig{
 			Adapter: "tei",

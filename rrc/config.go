@@ -146,8 +146,8 @@ type EngineConfig struct {
 
 // DefaultConfig returns the default engine configuration.
 //
-// Edge formation gates on raw CE (post-NLI fusion if an entailer is
-// wired). EdgeThreshold 0.5 / ScoreFloor 0.3 are tuned for the
+// Edge formation gates on raw CE. EdgeThreshold 0.5 / ScoreFloor
+// 0.3 are tuned for the
 // protocol's discrimination contract (§6.4): Selection SHOULD return
 // nothing rather than low-confidence results. Observed CE
 // distribution on a 9.4k-edge corpus: confident-prerequisite
