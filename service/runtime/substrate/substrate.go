@@ -229,9 +229,6 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		if se.PerMsgDelimiterTokens > 0 {
 			rrcCfg.PerMsgDelimiterTokens = se.PerMsgDelimiterTokens
 		}
-		if se.NLIFusionWeight > 0 {
-			rrcCfg.NLIFusionWeight = se.NLIFusionWeight
-		}
 		if se.MinPerThreadInTopK > 0 {
 			rrcCfg.MinPerThreadInTopK = se.MinPerThreadInTopK
 		}

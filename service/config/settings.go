@@ -40,7 +40,6 @@ type EngineConfig struct {
 	DiversityLambda       float64 `json:"diversity_lambda"`
 	BudgetHeadroomPct     float64 `json:"budget_headroom_pct"`
 	PerMsgDelimiterTokens int     `json:"per_msg_delimiter_tokens"`
-	NLIFusionWeight       float64 `json:"nli_fusion_weight"`
 }
 
 // GetUserName returns the configured display name, in priority:

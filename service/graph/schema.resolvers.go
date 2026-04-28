@@ -589,9 +589,8 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 			cfg.ContextBudgetTokens < 0 ||
 			cfg.DiversityLambda < 0 || cfg.DiversityLambda > 1 ||
 			cfg.BudgetHeadroomPct < 0 || cfg.BudgetHeadroomPct > 1 ||
-			cfg.PerMsgDelimiterTokens < 0 ||
-			cfg.NLIFusionWeight < 0 || cfg.NLIFusionWeight > 1 {
-			return nil, fmt.Errorf("engine config: negative values are not allowed; λ / headroom / NLIFusionWeight must be in [0,1]")
+			cfg.PerMsgDelimiterTokens < 0 {
+			return nil, fmt.Errorf("engine config: negative values are not allowed; λ / headroom must be in [0,1]")
 		}
 		s.Engine = cfg
 		// Apply to a fresh engine. Stored DAG edges are unchanged —
@@ -615,17 +614,16 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		live.DiversityLambda = cfg.DiversityLambda
 		live.BudgetHeadroomPct = cfg.BudgetHeadroomPct
 		live.PerMsgDelimiterTokens = cfg.PerMsgDelimiterTokens
-		live.NLIFusionWeight = cfg.NLIFusionWeight
 		if err := r.UpdateEngineConfig(ctx, live); err != nil {
 			return nil, fmt.Errorf("update engine config: %w", err)
 		}
-		log.Printf("[Settings] Engine config applied live: thr=%.3f floor=%.3f z=%.2f minStd=%.3f radius=%d topK=%d quota=%d budget=%d λ=%.2f headroom=%.2f delim=%d α=%.2f",
+		log.Printf("[Settings] Engine config applied live: thr=%.3f floor=%.3f z=%.2f minStd=%.3f radius=%d topK=%d quota=%d budget=%d λ=%.2f headroom=%.2f delim=%d",
 			live.EdgeThreshold,
 			live.ScoreFloor,
 			live.ZScoreThreshold, live.MinBatchStdDev,
 			live.RadiusSize, live.RerankTopK, live.MinPerThreadInTopK,
 			live.ContextBudgetTokens,
-			live.DiversityLambda, live.BudgetHeadroomPct, live.PerMsgDelimiterTokens, live.NLIFusionWeight)
+			live.DiversityLambda, live.BudgetHeadroomPct, live.PerMsgDelimiterTokens)
 	}
 	if err := r.Config.Save(); err != nil {
 		return nil, err

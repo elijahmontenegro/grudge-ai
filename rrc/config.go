@@ -142,19 +142,6 @@ type EngineConfig struct {
 	// 40-message wire that's ~200 tokens.
 	PerMsgDelimiterTokens int
 
-	// NLIFusionWeight is α in the composite scoring fusion:
-	// score = α · bge_rerank + (1-α) · nli_entailment.
-	// At α=1 fusion degenerates to bge-only (today's behavior); at
-	// α=0 to NLI-only. 0.5 balances the two — bge captures surface
-	// relevance well, NLI captures the directional dependency
-	// ("this content answers that query") that bge-reranker-v2-m3
-	// misses, surfacing prerequisite content over process-thinking
-	// that merely shares query language. Takes effect only when an
-	// Entailer is wired on the Engine; otherwise ignored. The fused
-	// output replaces the raw bge score everywhere downstream — it
-	// is what gets cached in chunk_scores and what feeds
-	// EdgeThreshold gating.
-	NLIFusionWeight float64
 }
 
 // DefaultConfig returns the default engine configuration.
@@ -208,9 +195,5 @@ func DefaultConfig() EngineConfig {
 		// 5 tokens/message covers ChatML / Llama 3 / Mistral role
 		// delimiters to within ±1.
 		PerMsgDelimiterTokens: 5,
-		// Balanced fusion between bge-rerank (surface relevance)
-		// and NLI (directional dependency). Takes effect only if
-		// the engine has an Entailer wired.
-		NLIFusionWeight: 0.5,
 	}
 }

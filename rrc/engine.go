@@ -36,7 +36,6 @@ import (
 type Engine struct {
 	mu         sync.Mutex
 	classifier Classifier
-	entailer   Entailer    // optional — composite NLI stage layered on top of classifier
 	dag        *DAG
 	scores     *scoreCache
 	cfg        EngineConfig
@@ -75,12 +74,6 @@ type ChunkOracle interface {
 // NewEngine; the engine is fully formed when NewEngine returns and
 // has no public mutation surface.
 type Option func(*Engine)
-
-// WithEntailer wires the optional NLI second stage. Passing nil is
-// equivalent to omitting the option.
-func WithEntailer(en Entailer) Option {
-	return func(e *Engine) { e.entailer = en }
-}
 
 // WithChunkOracle wires the chunk + vector resolver. Required for
 // OnMessage to score; absent oracle ⇒ OnMessage returns
@@ -127,9 +120,9 @@ func WithLoadedScores(scores []PersistedScore) Option {
 }
 
 // NewEngine constructs an RRC engine. The classifier is the only
-// required external dependency; everything else (entailer, oracle,
-// persister, hydrated DAG / scores) flows in via Option. The engine
-// is immutable post-construction — any setting change rebuilds.
+// required external dependency; everything else (oracle, persister,
+// hydrated DAG / scores) flows in via Option. The engine is
+// immutable post-construction — any setting change rebuilds.
 func NewEngine(cfg EngineConfig, classifier Classifier, opts ...Option) *Engine {
 	e := &Engine{
 		classifier: classifier,
@@ -367,34 +360,6 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 			if rerr != nil {
 				return nil, fmt.Errorf("%w: %v", ErrClassifierFailed, rerr)
 			}
-			// Composite NLI stage — fuse entailment on the same
-			// top-K the reranker just scored. Guard: only when
-			// entailer is wired AND NLIFusionWeight is in (0,1).
-			// At the extremes (0 or 1), the fusion degenerates to
-			// NLI-only or bge-only respectively, which callers
-			// should express by un-wiring the entailer rather than
-			// paying the NLI round-trip for a no-op fusion.
-			//
-			// Failure propagates as ErrClassifierFailed, same as a
-			// reranker failure — when the user wires an entailer
-			// they've chosen to make it part of the scoring
-			// substrate, and silent fusion-skipped-for-this-round
-			// would leave the caller unaware that their composite
-			// pipeline is running one-legged.
-			if e.entailer != nil && e.cfg.NLIFusionWeight > 0 && e.cfg.NLIFusionWeight < 1 && len(candidates) > 0 {
-				nliScores, nerr := e.entailer.Score(ctx, nc.Text, candidates)
-				if nerr != nil {
-					return nil, fmt.Errorf("%w: entailer: %v", ErrClassifierFailed, nerr)
-				}
-				if len(nliScores) != len(scores) {
-					return nil, fmt.Errorf("%w: entailer returned %d scores for %d candidates",
-						ErrClassifierFailed, len(nliScores), len(scores))
-				}
-				alpha := e.cfg.NLIFusionWeight
-				for i := range scores {
-					scores[i] = alpha*scores[i] + (1-alpha)*nliScores[i]
-				}
-			}
 			// Cross-thread visibility: count how many of the reranked
 			// candidates came from threads other than the current one,
 			// and what their max score was. Makes "scope=all_threads
@@ -452,8 +417,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 
 	// Emit message-pair edges.
 	//
-	// Edge formation gates on raw CE (post-NLI fusion if an entailer
-	// is wired). Earlier designs combined CE with temporal proximity
+	// Edge formation gates on raw CE. Earlier designs combined CE with temporal proximity
 	// — that introduced an asymmetric score distribution between
 	// same-thread (CE+temporal) and cross-thread (CE-only) candidates
 	// and forced two thresholds. Temporal-as-edge-signal duplicated
@@ -780,8 +744,8 @@ func (e *Engine) ApplyMMR(ctx context.Context, selected []*pb.SelectedMessage, l
 
 // Fork creates an ephemeral engine for a subagent thread. Inherits a
 // snapshot of the parent's DAG and score cache; same classifier,
-// entailer, oracle, and config. The parent's persister is reused so
-// any new edges the fork emits write through to the same storage.
+// oracle, and config. The parent's persister is reused so any new
+// edges the fork emits write through to the same storage.
 //
 // Internal lock around the snapshot read so a concurrent OnMessage
 // in the parent doesn't yield a partial copy.
@@ -791,7 +755,6 @@ func (e *Engine) Fork() *Engine {
 
 	fork := &Engine{
 		classifier: e.classifier,
-		entailer:   e.entailer,
 		dag:        newDAG(),
 		scores:     newScoreCache(),
 		cfg:        e.cfg,

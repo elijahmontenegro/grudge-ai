@@ -378,7 +378,6 @@ func (k *Kernel) UpdateEngineConfig(ctx context.Context, cfg rrc.EngineConfig, o
 		DiversityLambda:       cfg.DiversityLambda,
 		BudgetHeadroomPct:     cfg.BudgetHeadroomPct,
 		PerMsgDelimiterTokens: cfg.PerMsgDelimiterTokens,
-		NLIFusionWeight:       cfg.NLIFusionWeight,
 	}
 	subs, err := substrate.Build(ctx, k.Config, k.DB, opts...)
 	if err != nil {

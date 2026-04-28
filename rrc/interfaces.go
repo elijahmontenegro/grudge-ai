@@ -15,30 +15,15 @@ type Scorer interface {
 	Score(ctx context.Context, query string, candidates []string) ([]float64, error)
 }
 
-// Classifier is the Scorer used for surface-relevance reranking
-// (bge-reranker-v2-m3 in the production build). Earlier iterations
-// used an NLI classifier (pair-wise entailment); that was
-// structurally wrong for reference material, which *informs* rather
-// than *entails* the content that cites it.
+// Classifier is the Scorer used for relevance-and-dependency
+// scoring. Production wires the composite NLI + embedding-similarity
+// classifier from core/adapter/tei; pure bge-reranker satisfies the
+// same interface. The single Scorer slot is the whole substrate —
+// any directional or entailment fusion happens inside the
+// implementation, not as a second stage in the engine.
 //
 // Type alias rather than a separate interface so any Scorer instance
 // fits — the consumer expresses intent ("this Scorer is the
 // reranker") via field name, not type name.
 type Classifier = Scorer
 
-// Entailer is the Scorer used for the optional NLI second stage,
-// layered on top of the Classifier per the composite-scoring design.
-// Same contract as Classifier; the named alias documents role.
-//
-// Why NLI on top of reranker: bge scores surface relevance ("this
-// content is about the same topic"). That conflates two signals:
-//
-//   - Content that INFORMS the query (a chapter body referenced for
-//     continuation) — desired.
-//   - Content that MIRRORS the query's language (the model's own
-//     prior meta-thinking: "let me check what chapter we're on") —
-//     undesired for prerequisite selection.
-//
-// NLI scores ENTAILMENT — does premise support hypothesis. That
-// distinguishes the two cases.
-type Entailer = Scorer
