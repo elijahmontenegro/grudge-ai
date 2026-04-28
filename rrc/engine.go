@@ -452,49 +452,31 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 
 	// Emit message-pair edges.
 	//
-	// Prerequisite detection has two orthogonal axes that both contribute
-	// to whether a prior message is a prerequisite of the current one:
+	// Edge formation gates on raw CE (post-NLI fusion if an entailer
+	// is wired). Earlier designs combined CE with temporal proximity
+	// — that introduced an asymmetric score distribution between
+	// same-thread (CE+temporal) and cross-thread (CE-only) candidates
+	// and forced two thresholds. Temporal-as-edge-signal duplicated
+	// Radius's job (Radius unconditionally pads same-thread tail on
+	// the wire); outside that window temporal contribution decayed
+	// to negligible. Edge formation is now a single signal scored
+	// against a single threshold across both regimes.
 	//
-	//   1. Semantic (reranker CE score). "This content is about the same
-	//      thing the current turn is producing." Captured by the cross-
-	//      encoder's chunk-pair scoring.
-	//   2. Structural / temporal (trajectory proximity). "This is what
-	//      the current turn is continuing from." Not captured by the
-	//      reranker — a focused autonomous run where every prior is on-
-	//      topic flattens reranker signal, and conversely a sharp topic
-	//      pivot makes the immediately-prior turn look irrelevant
-	//      semantically when it's structurally critical.
-	//
-	// FuseScore(WeightCE*reranker + WeightTemp*temporal) combines both
-	// into a single score. The edge forms iff that fused score clears
-	// EdgeThreshold. Same-thread and cross-thread are treated uniformly
-	// here — the temporal term is near-zero for cross-thread pairs
-	// (positions diverge across threads), so structural signal only
-	// boosts same-thread priors meaningfully. Per protocol §6.4
-	// (Discriminative), edges only form when the combined signal is
-	// above the configured threshold.
 	// Build the per-query candidate batch for the adaptive gates.
 	// Only priors that actually had chunks rescored by the reranker
 	// form the distribution — the rest have bestScore[id]=0 and
 	// would depress mean / inflate stddev artificially, making the
 	// gates fire against the wrong baseline.
 	type candidate struct {
-		prior    *pb.Message
-		ce       float64
-		temporal float64
-		fused    float64
+		prior *pb.Message
+		ce    float64
 	}
 	candidates := make([]candidate, 0, len(priors))
 	for _, p := range priors {
 		if _, rescored := bestCE[p.Id]; !rescored {
 			continue
 		}
-		s := bestScore[p.Id]
-		temporal := TemporalProximity(p.Position, msg.Position)
-		fused := FuseScore(e.cfg, s, temporal, p.ThreadId != msg.ThreadId)
-		candidates = append(candidates, candidate{
-			prior: p, ce: s, temporal: temporal, fused: fused,
-		})
+		candidates = append(candidates, candidate{prior: p, ce: bestScore[p.Id]})
 	}
 
 	// Compute batch mean and stddev for the adaptive gates. Single
@@ -503,12 +485,12 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 	var batchMean, batchStddev float64
 	if len(candidates) > 0 {
 		for _, c := range candidates {
-			batchMean += c.fused
+			batchMean += c.ce
 		}
 		batchMean /= float64(len(candidates))
 		var variance float64
 		for _, c := range candidates {
-			d := c.fused - batchMean
+			d := c.ce - batchMean
 			variance += d * d
 		}
 		variance /= float64(len(candidates))
@@ -531,12 +513,8 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 	var skippedAbsolute, skippedZScore int
 	for _, c := range candidates {
 		// Gate 1: absolute threshold. Cuts noise floor (candidates
-		// with fused score too low to be plausible prereqs at all).
-		// Cross-thread candidates gate against
-		// CrossThreadEdgeThreshold because their fused score has no
-		// temporal contribution — see config.go for the asymmetry.
-		crossThread := c.prior.ThreadId != msg.ThreadId
-		if c.fused < e.cfg.EdgeThresholdFor(crossThread) {
+		// with CE too low to be plausible prereqs at all).
+		if c.ce < e.cfg.EdgeThreshold {
 			skippedAbsolute++
 			continue
 		}
@@ -544,24 +522,23 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 		// candidates (cluster of similar scores where nothing truly
 		// stands out). Zero ZScoreThreshold or zero stddev disables.
 		if e.cfg.ZScoreThreshold > 0 && batchStddev > 0 {
-			z := (c.fused - batchMean) / batchStddev
+			z := (c.ce - batchMean) / batchStddev
 			if z < e.cfg.ZScoreThreshold {
 				skippedZScore++
 				continue
 			}
 		}
 		edgeCount++
-		sumEdge += c.fused
-		if c.fused > maxEdge {
-			maxEdge = c.fused
+		sumEdge += c.ce
+		if c.ce > maxEdge {
+			maxEdge = c.ce
 		}
 		edge := &pb.Edge{
 			FromMessageId:     c.prior.Id,
 			ToMessageId:       msg.Id,
-			Score:             float32(c.fused),
+			Score:             float32(c.ce),
 			Source:            pb.EdgeSource_EDGE_SOURCE_CROSS_ENCODER,
 			CrossEncoderScore: float32(c.ce),
-			TemporalProximity: float32(c.temporal),
 			DetectedAt:        timestamppb.Now(),
 			FromThreadId:      c.prior.ThreadId,
 			ToThreadId:        msg.ThreadId,

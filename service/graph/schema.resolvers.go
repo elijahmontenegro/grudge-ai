@@ -575,16 +575,14 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		if err := json.Unmarshal([]byte(*input.Engine), &cfg); err != nil {
 			return nil, fmt.Errorf("invalid engine JSON: %w", err)
 		}
-		// Reject negatives at the boundary. Zero is a legitimate value for
-		// every field (WeightCE=0 → pure-temporal scoring; ScoreFloor=0 →
-		// no cutoff; EdgeThreshold=0 → accept all edges; RadiusSize=0 →
-		// no radius pad; WeightTemp=0 → pure-semantic; RerankTopK=0 →
-		// rerank disabled). Clamping on `> 0` would silently drop valid
-		// zero-saves and create an "unset vs zero" ambiguity the input
-		// shape doesn't carry.
-		if cfg.EdgeThreshold < 0 || cfg.CrossThreadEdgeThreshold < 0 ||
+		// Reject negatives at the boundary. Zero is a legitimate value
+		// for every field (ScoreFloor=0 → no cutoff; EdgeThreshold=0 →
+		// accept all edges; RadiusSize=0 → no radius pad; RerankTopK=0
+		// → rerank disabled). Clamping on `> 0` would silently drop
+		// valid zero-saves and create an "unset vs zero" ambiguity the
+		// input shape doesn't carry.
+		if cfg.EdgeThreshold < 0 ||
 			cfg.ScoreFloor < 0 ||
-			cfg.WeightCE < 0 || cfg.WeightTemp < 0 ||
 			cfg.ZScoreThreshold < 0 || cfg.MinBatchStdDev < 0 ||
 			cfg.RadiusSize < 0 || cfg.RerankTopK < 0 ||
 			cfg.MinPerThreadInTopK < 0 ||
@@ -597,19 +595,17 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		}
 		s.Engine = cfg
 		// Apply to a fresh engine. Stored DAG edges are unchanged —
-		// substrate.Build reloads them from disk so the rebuilt
-		// engine carries the same raw score components (reranker CE +
-		// temporal) reprojected under the new config at walk time.
+		// substrate.Build reloads them from disk; edge gating now uses
+		// the stored CrossEncoderScore directly under current config.
 		// Threshold tightening immediately hides edges that no longer
-		// qualify; loosening restores them.
+		// qualify. Loosening only surfaces edges that previously formed
+		// at OnMessage time — chunk-pair scores below the old threshold
+		// stayed in the score cache but produced no edge, and a fresh
+		// rebuild from chunk_scores under the loosened threshold is
+		// not wired here (separate concern).
 		live := r.Engine().Config()
 		live.EdgeThreshold = cfg.EdgeThreshold
-		// User-zero ⇒ explicitly opt out of cross-thread carve-out;
-		// fallthrough is to EdgeThreshold per EdgeThresholdFor.
-		live.CrossThreadEdgeThreshold = cfg.CrossThreadEdgeThreshold
 		live.ScoreFloor = cfg.ScoreFloor
-		live.WeightCE = cfg.WeightCE
-		live.WeightTemp = cfg.WeightTemp
 		live.ZScoreThreshold = cfg.ZScoreThreshold
 		live.MinBatchStdDev = cfg.MinBatchStdDev
 		live.RadiusSize = cfg.RadiusSize
@@ -623,11 +619,12 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		if err := r.UpdateEngineConfig(ctx, live); err != nil {
 			return nil, fmt.Errorf("update engine config: %w", err)
 		}
-		log.Printf("[Settings] Engine config applied live: thr=%.3f xThr=%.3f floor=%.3f wCE=%.2f wT=%.2f z=%.2f minStd=%.3f radius=%d topK=%d budget=%d λ=%.2f headroom=%.2f delim=%d α=%.2f",
-			live.EdgeThreshold, live.CrossThreadEdgeThreshold,
-			live.ScoreFloor, live.WeightCE, live.WeightTemp,
+		log.Printf("[Settings] Engine config applied live: thr=%.3f floor=%.3f z=%.2f minStd=%.3f radius=%d topK=%d quota=%d budget=%d λ=%.2f headroom=%.2f delim=%d α=%.2f",
+			live.EdgeThreshold,
+			live.ScoreFloor,
 			live.ZScoreThreshold, live.MinBatchStdDev,
-			live.RadiusSize, live.RerankTopK, live.ContextBudgetTokens,
+			live.RadiusSize, live.RerankTopK, live.MinPerThreadInTopK,
+			live.ContextBudgetTokens,
 			live.DiversityLambda, live.BudgetHeadroomPct, live.PerMsgDelimiterTokens, live.NLIFusionWeight)
 	}
 	if err := r.Config.Save(); err != nil {
@@ -977,17 +974,14 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	// zero-value engine fields).
 	engineCfg := r.Engine().Config()
 	engine, err := json.Marshal(map[string]any{
-		"edge_threshold":              engineCfg.EdgeThreshold,
-		"cross_thread_edge_threshold": engineCfg.CrossThreadEdgeThreshold,
-		"score_floor":                 engineCfg.ScoreFloor,
-		"weight_ce":                   engineCfg.WeightCE,
-		"weight_temp":                 engineCfg.WeightTemp,
-		"z_score_threshold":           engineCfg.ZScoreThreshold,
-		"min_batch_stddev":            engineCfg.MinBatchStdDev,
-		"radius_size":                 engineCfg.RadiusSize,
-		"rerank_top_k":                engineCfg.RerankTopK,
-		"min_per_thread_in_top_k":     engineCfg.MinPerThreadInTopK,
-		"context_budget_tokens":       engineCfg.ContextBudgetTokens,
+		"edge_threshold":          engineCfg.EdgeThreshold,
+		"score_floor":             engineCfg.ScoreFloor,
+		"z_score_threshold":       engineCfg.ZScoreThreshold,
+		"min_batch_stddev":        engineCfg.MinBatchStdDev,
+		"radius_size":             engineCfg.RadiusSize,
+		"rerank_top_k":            engineCfg.RerankTopK,
+		"min_per_thread_in_top_k": engineCfg.MinPerThreadInTopK,
+		"context_budget_tokens":   engineCfg.ContextBudgetTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal engine config: %w", err)

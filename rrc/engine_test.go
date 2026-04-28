@@ -171,11 +171,8 @@ func TestOnMessage_NilOracle(t *testing.T) {
 }
 
 func TestOnMessage_BelowThreshold_SameThread(t *testing.T) {
-	// Three-gate discrimination replaced the old trajectory-fallback
-	// behavior: below-EdgeThreshold fused scores produce no edge,
-	// same-thread or otherwise. The structural temporal signal is
-	// folded into the fused score via FuseScore, it doesn't bypass
-	// the threshold.
+	// Edge formation gates on raw CE — below EdgeThreshold produces
+	// no edge regardless of thread relationship.
 	mc := newMockClassifier()
 	mc.SetScore("hi", "hello", 0.3) // reranker 0.3
 	o := newMockChunkOracle()
@@ -188,9 +185,9 @@ func TestOnMessage_BelowThreshold_SameThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Fused = 0.6*0.3 + 0.4*0.5 = 0.18 + 0.2 = 0.38, below EdgeThreshold 0.5.
+	// CE=0.3 < EdgeThreshold=0.5 → no edge.
 	if len(edges) != 0 {
-		t.Fatalf("below-threshold fused score should produce no edge, got %d", len(edges))
+		t.Fatalf("below-threshold CE should produce no edge, got %d", len(edges))
 	}
 }
 
@@ -207,8 +204,7 @@ func TestOnMessage_BelowThreshold_CrossThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Cross-thread temporal proximity is effectively zero (positions
-	// are thread-local). Fused = 0.6*0.3 + 0.4*~0 ≈ 0.18, below threshold.
+	// Cross-thread or same-thread, the gate is the same: CE 0.3 < 0.5.
 	if len(edges) != 0 {
 		t.Fatalf("cross-thread below-threshold pair should create no edge, got %d", len(edges))
 	}
@@ -227,7 +223,7 @@ func TestOnMessage_AboveThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Fused = 0.6*0.8 + 0.4*0.5 = 0.68. Above EdgeThreshold.
+	// CE=0.8 ≥ EdgeThreshold=0.5 → edge.
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
@@ -263,10 +259,7 @@ func TestOnMessage_MultipleCorpusMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Fused scores (CE=0.6, Temp=0.4 per DefaultConfig):
-	//   m0 (d=3, temporal=0.25): 0.6*0.7 + 0.4*0.25 = 0.52  → above 0.5
-	//   m1 (d=2, temporal=0.333): 0.6*0.2 + 0.4*0.333 = 0.253 → below
-	//   m2 (d=1, temporal=0.5):   0.6*0.6 + 0.4*0.5 = 0.56   → above
+	// CE-only gating: 0.7 ≥ 0.5 (m0), 0.2 < 0.5 (m1), 0.6 ≥ 0.5 (m2).
 	// With adaptive gates disabled by testEngine, just the absolute
 	// threshold applies: 2 edges.
 	if len(edges) != 2 {
@@ -288,14 +281,14 @@ func TestSelect_NoEdges(t *testing.T) {
 
 func TestSelect_LinearChain(t *testing.T) {
 	mc := newMockClassifier()
-	// Reranker scores; fused = 0.6*CE + 0.4*temporal (adjacent temporal=0.5).
-	// Adjacent pairs: fused = 0.6*CE + 0.2.
-	mc.SetScore("a", "b", 0.8) // fused 0.68
-	mc.SetScore("b", "c", 0.7) // fused 0.62
-	mc.SetScore("c", "d", 0.9) // fused 0.74
-	mc.SetScore("a", "c", 0.3) // d=2 temporal=0.333 → fused 0.313
-	mc.SetScore("a", "d", 0.2) // d=3 temporal=0.25  → fused 0.22
-	mc.SetScore("b", "d", 0.3) // d=2 temporal=0.333 → fused 0.313
+	// CE-only gating. Above-threshold (≥0.5) chain: a→b→c→d. Below-
+	// threshold off-chain links should not form edges.
+	mc.SetScore("a", "b", 0.8)
+	mc.SetScore("b", "c", 0.7)
+	mc.SetScore("c", "d", 0.9)
+	mc.SetScore("a", "c", 0.3)
+	mc.SetScore("a", "d", 0.2)
+	mc.SetScore("b", "d", 0.3)
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
@@ -362,9 +355,9 @@ func TestSelect_ScoreFloorCutoff(t *testing.T) {
 func TestSelect_ThreadScope(t *testing.T) {
 	e := testEngine(newMockClassifier(), newMockChunkOracle())
 
-	// Edges set CrossEncoderScore directly because extractSubgraph
-	// re-projects Score from raw components under the current config.
-	// CE=1.0 with Temp=0 → fused 0.6, above EdgeThreshold 0.5.
+	// Edges set CrossEncoderScore directly — extractSubgraph reads it
+	// via edgeScoreUnderConfig as the gating signal. CE=1.0 ≥ 0.5
+	// EdgeThreshold → both edges qualify.
 	e.dag.AddEdge(&pb.Edge{
 		FromMessageId: "m0", ToMessageId: "m2",
 		Score: 0.8, CrossEncoderScore: 1.0,
@@ -393,62 +386,6 @@ func TestSelect_ThreadScope(t *testing.T) {
 	}
 	if len(result.Selected) != 2 {
 		t.Fatalf("all-threads scope should select 2, got %d", len(result.Selected))
-	}
-}
-
-func TestFuseScore(t *testing.T) {
-	cfg := DefaultConfig()
-	// Same-thread, defaults WeightCE=0.6, WeightTemp=0.4:
-	//   0.6*0.8 + 0.4*0.5 = 0.48 + 0.2 = 0.68
-	score := FuseScore(cfg, 0.8, 0.5, false)
-	if diff := score - 0.68; diff > 0.001 || diff < -0.001 {
-		t.Fatalf("same-thread: expected 0.68, got %f", score)
-	}
-}
-
-func TestFuseScore_CEOnly(t *testing.T) {
-	cfg := DefaultConfig()
-	// Same-thread zero temporal: 0.6*0.6 + 0.4*0 = 0.36
-	score := FuseScore(cfg, 0.6, 0, false)
-	if diff := score - 0.36; diff > 0.001 || diff < -0.001 {
-		t.Fatalf("same-thread zero-temporal: expected 0.36, got %f", score)
-	}
-}
-
-func TestFuseScore_CrossThread(t *testing.T) {
-	cfg := DefaultConfig()
-	// Cross-thread: temporal is meaningless across threads, so the
-	// fused score is the raw rerank. This levels the gating with
-	// same-thread (both clear EdgeThreshold=0.5 at CE=0.83 same-
-	// thread-zero-temporal vs CE=0.5 cross-thread).
-	score := FuseScore(cfg, 0.7, 0.0, true)
-	if diff := score - 0.7; diff > 0.001 || diff < -0.001 {
-		t.Fatalf("cross-thread: expected 0.7 (raw rerank), got %f", score)
-	}
-	// Even with a non-zero temporal value (which shouldn't happen
-	// but isn't an error), cross-thread ignores it.
-	score = FuseScore(cfg, 0.6, 0.5, true)
-	if diff := score - 0.6; diff > 0.001 || diff < -0.001 {
-		t.Fatalf("cross-thread temporal-ignored: expected 0.6, got %f", score)
-	}
-}
-
-func TestTemporalProximity(t *testing.T) {
-	tests := []struct {
-		posA, posB int64
-		expected   float64
-	}{
-		{0, 1, 0.5},
-		{0, 0, 1.0},
-		{0, 9, 0.1},
-		{0, 99, 0.01},
-		{5, 3, 0.333},
-	}
-	for _, tt := range tests {
-		got := TemporalProximity(tt.posA, tt.posB)
-		if diff := got - tt.expected; diff > 0.01 || diff < -0.01 {
-			t.Errorf("TemporalProximity(%d,%d) = %f, want ~%f", tt.posA, tt.posB, got, tt.expected)
-		}
 	}
 }
 
@@ -601,18 +538,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.EdgeThreshold != 0.5 {
 		t.Fatalf("expected threshold 0.5, got %f", cfg.EdgeThreshold)
 	}
-	if cfg.WeightCE != 0.6 {
-		t.Fatalf("expected CE weight 0.6, got %f", cfg.WeightCE)
-	}
-	if cfg.WeightTemp != 0.4 {
-		t.Fatalf("expected temp weight 0.4, got %f", cfg.WeightTemp)
-	}
 	if cfg.ScoreFloor != 0.3 {
 		t.Fatalf("expected floor 0.3, got %f", cfg.ScoreFloor)
-	}
-	sum := cfg.WeightCE + cfg.WeightTemp
-	if diff := sum - 1.0; diff > 0.001 || diff < -0.001 {
-		t.Fatalf("weights should sum to 1.0, got %f", sum)
 	}
 }
 
@@ -677,9 +604,8 @@ func TestOnMessage_SkipsSelf(t *testing.T) {
 // baseline.
 
 // threeGateConfig enables the adaptive gates that testEngine disables.
-// Priors at position 0 (various threads), query at position 0 too —
-// temporal proximity = 1.0 for every pair, so fused = 0.6*CE + 0.4
-// and we can drive the distribution purely via mock CE scores.
+// Edge-gating substrate is raw CE — the mock CE values drive the
+// distribution directly.
 func threeGateConfig() EngineConfig {
 	cfg := DefaultConfig()
 	cfg.ZScoreThreshold = 1.0
@@ -692,11 +618,7 @@ func threeGateEngine(mc *mockClassifier, o *mockChunkOracle) *Engine {
 }
 
 func TestOnMessage_Gate1_AbsoluteThreshold(t *testing.T) {
-	// Two priors: one clears 0.5, one doesn't. With cross-thread
-	// priors at pos 0 and query at pos 0, temporal=1.0 → fused =
-	// 0.6*CE + 0.4.
-	//   CE=0.1 → fused=0.46 (below threshold)
-	//   CE=0.5 → fused=0.70 (above threshold)
+	// CE-only gating: one clears EdgeThreshold=0.5, one doesn't.
 	// Note CE=0.1 rather than 0.0: the engine's aggregation uses a
 	// strict `>` against zero-init, so CE=0.0 is treated as unscored
 	// and the candidate never enters the batch. Any non-zero CE
@@ -715,11 +637,11 @@ func TestOnMessage_Gate1_AbsoluteThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Batch stats over [0.46, 0.70]: mean=0.58, stddev=0.12.
-	// Gate 3: 0.12 > 0.05 — no fire.
-	// Gate 1: 0.46 < 0.5 fails, 0.70 passes.
-	// Gate 2: z(0.70) = (0.70-0.58)/0.12 = 1.0 exactly; `z<1.0` is
-	// false, so high passes gate 2 too.
+	// Batch stats over [0.1, 0.5]: mean=0.3, stddev=0.2.
+	// Gate 3: 0.2 > 0.05 — no fire.
+	// Gate 1: 0.1 < 0.5 fails, 0.5 not<0.5 passes.
+	// Gate 2: z(0.5) = (0.5-0.3)/0.2 = 1.0 exactly; `z<1.0` is false,
+	// so high passes gate 2 too.
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge (low gated by gate 1), got %d", len(edges))
 	}
@@ -728,71 +650,50 @@ func TestOnMessage_Gate1_AbsoluteThreshold(t *testing.T) {
 	}
 }
 
-func TestOnMessage_CrossThreadEdgeThreshold(t *testing.T) {
-	// Cross-thread fused score = raw CE (FuseScore short-circuits
-	// the temporal term). At default same-thread EdgeThreshold=0.5,
-	// a cross-thread CE in the 0.40-0.50 band — the band where bge-
-	// reranker-v2-m3 lands genuinely-related cross-thread material —
-	// would be silently rejected.
-	//
-	// CrossThreadEdgeThreshold separates the gate. With it set to
-	// 0.4, a cross-thread CE=0.45 forms an edge; flipping it back to
-	// 0.5 (single-knob legacy) suppresses it.
+func TestOnMessage_CrossThreadGatesUniformly(t *testing.T) {
+	// After the WeightTemp removal, edge formation is a single CE
+	// gate that applies uniformly to same-thread and cross-thread
+	// candidates — no asymmetric distribution, no second threshold.
+	// CE=0.6 clears 0.5 EdgeThreshold from either thread relationship.
 	cfg := DefaultConfig()
 	cfg.ZScoreThreshold = 0
 	cfg.MinBatchStdDev = 0
-	cfg.EdgeThreshold = 0.5
-	cfg.CrossThreadEdgeThreshold = 0.4
 
 	mc := newMockClassifier()
-	mc.SetScore("borderline", "q", 0.45)
+	mc.SetScore("cross", "q", 0.6)
+	mc.SetScore("same", "q", 0.6)
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	m0 := addMsg(o, "m0", 0, "tA", "borderline")
-	q := addMsg(o, "q", 0, "tQ", "q")
+	mCross := addMsg(o, "mCross", 0, "tOther", "cross")
+	mSame := addMsg(o, "mSame", 0, "tQ", "same")
+	q := addMsg(o, "q", 1, "tQ", "q")
 
-	edges, err := e.OnMessage(context.Background(), q, []*pb.Message{m0})
+	edges, err := e.OnMessage(context.Background(), q, []*pb.Message{mCross, mSame})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(edges) != 1 {
-		t.Fatalf("cross-thread CE=0.45 should clear CrossThreadEdgeThreshold=0.4, got %d edges", len(edges))
+	if len(edges) != 2 {
+		t.Fatalf("CE=0.6 should clear EdgeThreshold=0.5 for both thread relationships, got %d edges", len(edges))
 	}
-	// Sanity: same CE on a same-thread prior would clear neither
-	// threshold (fused = 0.6*0.45 + 0.4*1.0 = 0.67 — actually clears
-	// here because temporal=1.0). Use a positionally-distant same-
-	// thread prior so temporal contribution drops.
+	// Sub-threshold CE rejected uniformly too.
 	mc2 := newMockClassifier()
-	mc2.SetScore("borderline-same", "q2", 0.45)
+	mc2.SetScore("low-cross", "q2", 0.4)
+	mc2.SetScore("low-same", "q2", 0.4)
 	o2 := newMockChunkOracle()
 	e2 := NewEngine(cfg, mc2, WithChunkOracle(o2))
-	pSame := addMsg(o2, "p", 0, "tQ", "borderline-same")
-	q2 := addMsg(o2, "q2", 100, "tQ", "q2") // d=100, temporal=1/101 ≈ 0.0099
-	sameEdges, err := e2.OnMessage(context.Background(), q2, []*pb.Message{pSame})
+	addMsg(o2, "lowCross", 0, "tOther", "low-cross")
+	addMsg(o2, "lowSame", 0, "tQ", "low-same")
+	q2 := addMsg(o2, "q2", 1, "tQ", "q2")
+	rejected, err := e2.OnMessage(context.Background(), q2, []*pb.Message{
+		makeMsg("lowCross", 0, "tOther", "low-cross"),
+		makeMsg("lowSame", 0, "tQ", "low-same"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Same-thread fused = 0.6*0.45 + 0.4*0.0099 ≈ 0.274 < 0.5 → no edge.
-	if len(sameEdges) != 0 {
-		t.Fatalf("same-thread CE=0.45 with weak temporal should not clear EdgeThreshold=0.5, got %d edges", len(sameEdges))
-	}
-
-	// Now disable the cross-thread carve-out and confirm legacy
-	// behavior: cross-thread CE=0.45 is suppressed under 0.5.
-	cfg.CrossThreadEdgeThreshold = 0 // fall through to EdgeThreshold
-	mc3 := newMockClassifier()
-	mc3.SetScore("borderline", "q", 0.45)
-	o3 := newMockChunkOracle()
-	e3 := NewEngine(cfg, mc3, WithChunkOracle(o3))
-	m0b := addMsg(o3, "m0b", 0, "tA", "borderline")
-	qb := addMsg(o3, "qb", 0, "tQ", "q")
-	legacyEdges, err := e3.OnMessage(context.Background(), qb, []*pb.Message{m0b})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(legacyEdges) != 0 {
-		t.Fatalf("CrossThreadEdgeThreshold=0 should fall through to EdgeThreshold=0.5; CE=0.45 cross-thread should be suppressed, got %d edges", len(legacyEdges))
+	if len(rejected) != 0 {
+		t.Fatalf("CE=0.4 should be gated by EdgeThreshold=0.5, got %d edges", len(rejected))
 	}
 }
 
@@ -800,18 +701,18 @@ func TestOnMessage_Gate2_ZScoreBlocksCluster(t *testing.T) {
 	// Three priors all above absolute threshold. Two form a cluster,
 	// one is a clear outlier. Gate 2 keeps the outlier only — the
 	// cluster z-scores sit below ZScoreThreshold.
-	//   CE=0.25 → fused=0.55  (x2, cluster)
-	//   CE=0.50 → fused=0.70  (outlier)
+	//   CE=0.55  (x2, cluster)
+	//   CE=0.70  (outlier)
 	mc := newMockClassifier()
-	mc.SetScore("a", "q", 0.25)
-	mc.SetScore("b", "q", 0.25)
-	mc.SetScore("c", "q", 0.50)
+	mc.SetScore("a", "q", 0.55)
+	mc.SetScore("b", "q", 0.55)
+	mc.SetScore("c", "q", 0.70)
 	o := newMockChunkOracle()
 	e := threeGateEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "tA", "a")
-	m1 := addMsg(o, "m1", 0, "tB", "b")
-	m2 := addMsg(o, "m2", 0, "tC", "c")
+	m0 := addMsg(o, "m0", 0, "tQ", "a")
+	m1 := addMsg(o, "m1", 0, "tQ", "b")
+	m2 := addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
 	edges, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1, m2})
@@ -831,22 +732,18 @@ func TestOnMessage_Gate2_ZScoreBlocksCluster(t *testing.T) {
 }
 
 func TestOnMessage_Gate2_Disabled(t *testing.T) {
-	// ZScoreThreshold=0 disables the gate — cluster candidates survive.
+	// ZScoreThreshold=0 disables gate 2 — every gate-1 clearer
+	// survives. Spread CE values wide enough that gate 3's stddev
+	// floor (0.05 from threeGateConfig) doesn't fire.
 	cfg := threeGateConfig()
 	cfg.ZScoreThreshold = 0
 	mc := newMockClassifier()
-	mc.SetScore("a", "q", 0.25)
-	mc.SetScore("b", "q", 0.25)
-	mc.SetScore("c", "q", 0.50)
+	mc.SetScore("a", "q", 0.6)
+	mc.SetScore("b", "q", 0.7)
+	mc.SetScore("c", "q", 0.8)
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	// Same-thread setup: with positions=0 all temporal=1.0, fused
-	// = 0.6*CE + 0.4 lands at 0.55 / 0.55 / 0.70. Cross-thread
-	// would skip temporal entirely (FuseScore semantics), so the
-	// fused floor would drop below EdgeThreshold for the 0.25
-	// candidates — that's a separate test surface; this one is
-	// about gate behavior given clean fused scores.
 	m0 := addMsg(o, "m0", 0, "tQ", "a")
 	m1 := addMsg(o, "m1", 0, "tQ", "b")
 	m2 := addMsg(o, "m2", 0, "tQ", "c")
@@ -856,8 +753,8 @@ func TestOnMessage_Gate2_Disabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// All three clear gate 1; gate 2 disabled; gate 3 stddev > 0.05.
-	// Expect 3 edges.
+	// Batch [0.6, 0.7, 0.8]: mean=0.7, stddev≈0.0816 > 0.05 → gate 3
+	// no fire. Gate 1: all ≥ 0.5 pass. Gate 2 disabled. 3 edges.
 	if len(edges) != 3 {
 		t.Fatalf("gate 2 disabled should pass all gate-1 clearers, got %d", len(edges))
 	}
@@ -867,27 +764,25 @@ func TestOnMessage_Gate3_BatchIndiscriminate(t *testing.T) {
 	// Tight cluster of above-threshold candidates — stddev falls
 	// below MinBatchStdDev. Gate 3 fires for the whole batch: zero
 	// edges even though every candidate clears gate 1.
-	//   CE=0.183 → fused=0.51
-	//   CE=0.200 → fused=0.52
-	//   CE=0.217 → fused=0.53
 	mc := newMockClassifier()
-	mc.SetScore("a", "q", 0.183)
-	mc.SetScore("b", "q", 0.200)
-	mc.SetScore("c", "q", 0.217)
+	mc.SetScore("a", "q", 0.51)
+	mc.SetScore("b", "q", 0.52)
+	mc.SetScore("c", "q", 0.53)
 	o := newMockChunkOracle()
 	e := threeGateEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "tA", "a")
-	m1 := addMsg(o, "m1", 0, "tB", "b")
-	m2 := addMsg(o, "m2", 0, "tC", "c")
+	m0 := addMsg(o, "m0", 0, "tQ", "a")
+	m1 := addMsg(o, "m1", 0, "tQ", "b")
+	m2 := addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
 	edges, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1, m2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Batch [0.51, 0.52, 0.53]: stddev ≈ 0.00816 < MinBatchStdDev.
-	// Gate 3 short-circuits → no edges.
+	// Batch [0.51, 0.52, 0.53]: stddev ≈ 0.00816 < MinBatchStdDev=0.05.
+	// Gate 3 short-circuits → no edges (even though all three clear
+	// EdgeThreshold=0.5).
 	if len(edges) != 0 {
 		t.Fatalf("tight cluster must return zero edges via gate 3, got %d", len(edges))
 	}
@@ -897,20 +792,16 @@ func TestOnMessage_Gate3_Disabled(t *testing.T) {
 	// MinBatchStdDev=0 disables gate 3 — tight cluster still has to
 	// pass gates 1 and 2. With all three so close, z-scores all sit
 	// below 1.0 except the max. Expect exactly 1 edge (top of
-	// cluster clears gate 2 with z = sqrt(3/2) ≈ 1.22).
+	// cluster clears gate 2 with z ≈ 1.22).
 	cfg := threeGateConfig()
 	cfg.MinBatchStdDev = 0
 	mc := newMockClassifier()
-	mc.SetScore("a", "q", 0.183)
-	mc.SetScore("b", "q", 0.200)
-	mc.SetScore("c", "q", 0.217)
+	mc.SetScore("a", "q", 0.51)
+	mc.SetScore("b", "q", 0.52)
+	mc.SetScore("c", "q", 0.53)
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	// Same-thread setup so temporal=1.0 contributes to fused, lifting
-	// the tight CE cluster (0.51 / 0.52 / 0.53) just over EdgeThreshold.
-	// Cross-thread would skip temporal and the cluster would all sit
-	// below the threshold — different test surface.
 	m0 := addMsg(o, "m0", 0, "tQ", "a")
 	m1 := addMsg(o, "m1", 0, "tQ", "b")
 	m2 := addMsg(o, "m2", 0, "tQ", "c")
@@ -936,7 +827,7 @@ func TestOnMessage_Gate2_SingleCandidateNoOp(t *testing.T) {
 	cfg := threeGateConfig()
 	cfg.MinBatchStdDev = 0
 	mc := newMockClassifier()
-	mc.SetScore("a", "q", 0.5) // fused = 0.6*0.5 + 0.4 = 0.7
+	mc.SetScore("a", "q", 0.5) // CE=0.5 ≥ EdgeThreshold=0.5 → passes gate 1
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
@@ -954,27 +845,23 @@ func TestOnMessage_Gate2_SingleCandidateNoOp(t *testing.T) {
 
 func TestOnMessage_RescoredFilterInvariant(t *testing.T) {
 	// Batch stats must be computed over rescored priors only. Priors
-	// beyond RerankTopK with no cached score contribute no fused
-	// score and must be excluded from mean/stddev — otherwise synthetic
-	// zeros depress the mean and inflate stddev, and the gates fire
+	// beyond RerankTopK with no cached score contribute no CE and
+	// must be excluded from mean/stddev — otherwise synthetic zeros
+	// depress the mean and inflate stddev, and the gates fire
 	// against the wrong baseline.
 	//
-	// Setup: 5 priors with CE that would produce fused [0.68, 0.62,
-	// 0, 0, 0] if ALL were counted (broken path), or [0.68, 0.62] if
-	// only the first two are scored (correct path). RerankTopK=2.
-	//
-	// Correct path: stddev of [0.68, 0.62] = 0.03, below MinBatchStdDev
-	// (0.05) → gate 3 fires → 0 edges.
-	// Broken path: stddev of [0.68, 0.62, 0, 0, 0] ≈ 0.294 → gate 3
-	// no-fire, gate 1 passes top two, gate 2 z=1.43 and 1.22 both
-	// pass → 2 edges.
+	// Setup: 5 priors with CE values such that only the top 2 are
+	// scored under RerankTopK=2. Tight CE cluster (0.78/0.72) has
+	// stddev=0.03 — below MinBatchStdDev=0.05 — so gate 3 fires
+	// when stats are computed over the actual two-element batch.
+	// If priors beyond top-K were synthesized as zeros, stddev
+	// would explode and gate 3 wouldn't fire.
 	cfg := threeGateConfig()
 	cfg.RerankTopK = 2
 
 	mc := newMockClassifier()
-	// Temporal for adjacent positions (d=1) = 0.5; fused = 0.6*CE + 0.2.
-	mc.SetScore("a", "q", 0.8) // fused = 0.68
-	mc.SetScore("b", "q", 0.7) // fused = 0.62
+	mc.SetScore("a", "q", 0.78)
+	mc.SetScore("b", "q", 0.72)
 	mc.SetScore("c", "q", 0.6) // not scored under RerankTopK=2
 	mc.SetScore("d", "q", 0.5) // not scored
 	mc.SetScore("e", "q", 0.4) // not scored
@@ -1219,9 +1106,8 @@ func TestOnMessage_NLIFusion(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
-	// FuseScore combines CE score with temporal proximity, so we
-	// only verify the CE field itself — that's the fused component.
-	// α=0.5: 0.5*0.8 + 0.5*0.4 = 0.6.
+	// NLI fusion replaces the raw bge score; the edge's CE field
+	// holds the post-fusion value. α=0.5: 0.5*0.8 + 0.5*0.4 = 0.6.
 	wantCE := 0.6
 	got := float64(edges[0].CrossEncoderScore)
 	if diff := got - wantCE; diff < -1e-6 || diff > 1e-6 {

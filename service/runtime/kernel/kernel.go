@@ -369,12 +369,11 @@ func (k *Kernel) UpdateEngineConfig(ctx context.Context, cfg rrc.EngineConfig, o
 	k.Config.Settings.Engine = config.EngineConfig{
 		EdgeThreshold:         cfg.EdgeThreshold,
 		ScoreFloor:            cfg.ScoreFloor,
-		WeightCE:              cfg.WeightCE,
-		WeightTemp:            cfg.WeightTemp,
 		ZScoreThreshold:       cfg.ZScoreThreshold,
 		MinBatchStdDev:        cfg.MinBatchStdDev,
 		RadiusSize:            cfg.RadiusSize,
 		RerankTopK:            cfg.RerankTopK,
+		MinPerThreadInTopK:    cfg.MinPerThreadInTopK,
 		ContextBudgetTokens:   cfg.ContextBudgetTokens,
 		DiversityLambda:       cfg.DiversityLambda,
 		BudgetHeadroomPct:     cfg.BudgetHeadroomPct,

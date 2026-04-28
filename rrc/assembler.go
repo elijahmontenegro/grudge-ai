@@ -17,17 +17,15 @@ type selectionEntry struct {
 	CrossThread    bool
 }
 
-// edgeScoreUnderConfig computes an edge's fused score from its stored
-// raw components (CrossEncoderScore, TemporalProximity) using the
-// CURRENT engine config. Stored edges' Score field was set to whatever
-// config was in effect at creation time — using it directly would
-// freeze walks against historical config. By recomputing from raw
-// components on every walk, the DAG becomes a derived view of
-// (stored_edges, current_config): change config and the graph
-// reprojects immediately, no rebuild or invalidation step needed.
-func edgeScoreUnderConfig(edge *pb.Edge, cfg EngineConfig) float64 {
-	crossThread := edge.FromThreadId != edge.ToThreadId
-	return FuseScore(cfg, float64(edge.CrossEncoderScore), float64(edge.TemporalProximity), crossThread)
+// edgeScoreUnderConfig returns the gating score for an edge under
+// current config. Edge scoring is now a single signal — the stored
+// CrossEncoderScore — so this function reads that field directly.
+// Kept as a named function because callers gate against
+// cfg.EdgeThreshold on the result; future score adjustments (e.g.
+// per-edge weighting, age decay) would land here without touching
+// callsites.
+func edgeScoreUnderConfig(edge *pb.Edge, _ EngineConfig) float64 {
+	return float64(edge.CrossEncoderScore)
 }
 
 // extractSubgraph performs best-first backward traversal from promptID through
@@ -52,10 +50,10 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 			continue
 		}
 		score := edgeScoreUnderConfig(edge, cfg)
-		crossThread := edge.FromThreadId != promptThreadID
-		if score < cfg.EdgeThresholdFor(crossThread) {
+		if score < cfg.EdgeThreshold {
 			continue // edge doesn't qualify under current config
 		}
+		crossThread := edge.FromThreadId != promptThreadID
 		heap.Push(pq, &pqItem{
 			entry: selectionEntry{
 				MessageID:      edge.FromMessageId,
@@ -95,11 +93,11 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 				continue
 			}
 			edgeScore := edgeScoreUnderConfig(edge, cfg)
-			crossThread := edge.FromThreadId != promptThreadID
-			if edgeScore < cfg.EdgeThresholdFor(crossThread) {
+			if edgeScore < cfg.EdgeThreshold {
 				continue
 			}
 			effectiveScore := edgeScore * entry.EffectiveScore
+			crossThread := edge.FromThreadId != promptThreadID
 			heap.Push(pq, &pqItem{
 				entry: selectionEntry{
 					MessageID:      edge.FromMessageId,

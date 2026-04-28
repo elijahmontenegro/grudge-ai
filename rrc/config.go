@@ -2,56 +2,42 @@ package rrc
 
 // EngineConfig holds tunable parameters for the RRC engine.
 //
-// WeightQUD / QUDExtractionPrompt were removed along with the
-// small-fast-model QUD extractor — both were hacks riding on top of the
-// classifier. Cross-encoder + temporal is the whole substrate now, and
-// the weights still sum to 1.0.
+// Edge formation is gated on raw cross-encoder score (CE). Earlier
+// designs fused CE with temporal proximity (WeightCE*CE +
+// WeightTemp*temporal); that produced two distinct score
+// distributions — same-thread fused was biased upward by the
+// temporal term, cross-thread fused had no temporal term — and
+// forced a second threshold to compensate. The fix was structural:
+// temporal-as-edge-signal duplicates Radius's job (Radius
+// unconditionally includes the last N same-thread messages on the
+// wire), and outside the Radius window temporal contribution decays
+// to negligible. Edge formation is now a pure CE gate; trajectory
+// continuity is Radius's exclusive concern.
 type EngineConfig struct {
-	EdgeThreshold float64 // Absolute edge creation threshold (fused score must clear this)
-
-	// CrossThreadEdgeThreshold gates cross-thread fused scores
-	// separately because the score distributions are not the same.
-	// Same-thread fused = WeightCE*CE + WeightTemp*temporal — the
-	// temporal contribution adds up to WeightTemp (≈0.4) to the
-	// fused score for adjacent priors. Cross-thread fused = CE only
-	// (FuseScore short-circuits — temporal positions across threads
-	// are incommensurable). At default weights, a same-thread CE of
-	// 0.17 with adjacent temporal=1.0 already clears EdgeThreshold
-	// 0.5; a cross-thread chunk needs CE ≥ 0.5 to clear the same
-	// gate. That asymmetry isn't a calibration of relevance — it's
-	// the temporal contribution showing up as a structural handicap
-	// against cross-thread material.
-	//
-	// Holding cross-thread to its own threshold lets the two
-	// regimes be tuned independently. Set to 0 to fall back to
-	// EdgeThreshold (legacy behavior — useful for tests and for
-	// users who want the single-knob model).
-	CrossThreadEdgeThreshold float64
-
-	WeightCE      float64 // Cross-encoder (reranker) weight
-	WeightTemp    float64 // Temporal proximity weight
+	EdgeThreshold float64 // Absolute edge creation threshold (CE must clear this)
 	ScoreFloor    float64 // DAG-traversal cutoff
 
 	// ZScoreThreshold is the adaptive discrimination gate applied
 	// per OnMessage batch. After the reranker scores the top-K
-	// candidates for a new message, their fused scores form a
+	// candidates for a new message, their CE scores form a
 	// per-query distribution. Edges only form when a candidate's
-	// fused score is at least ZScoreThreshold standard deviations
-	// above the batch mean. This is the paper's §3.2 Gate 1 adapted
-	// to our fused-score mechanism: absolute thresholds handle
-	// "score too low to matter," z-score handles "doesn't stand out
-	// from this query's field." Zero disables the adaptive gate.
+	// CE is at least ZScoreThreshold standard deviations above the
+	// batch mean. This is the paper's §3.2 Gate 1 adapted to a
+	// single-signal substrate: absolute thresholds handle "score
+	// too low to matter," z-score handles "doesn't stand out from
+	// this query's field." Zero disables the adaptive gate.
 	//
-	// Why additive to EdgeThreshold: absolute thresholds are brittle
-	// under scorer drift (model swap, weight retuning). A candidate
-	// that clears an absolute threshold but is indistinguishable from
-	// the rest of its batch is not a prerequisite, it's a member of a
-	// high-floor cluster. A z-score gate catches that class of false
-	// positive without needing the absolute threshold to move.
+	// Why additive to EdgeThreshold: absolute thresholds are
+	// brittle under scorer drift (model swap, weight retuning). A
+	// candidate that clears an absolute threshold but is
+	// indistinguishable from the rest of its batch is not a
+	// prerequisite, it's a member of a high-floor cluster. A
+	// z-score gate catches that class of false positive without
+	// needing the absolute threshold to move.
 	ZScoreThreshold float64
 
 	// MinBatchStdDev is the meta-discriminator (paper §3.2 Gate 3):
-	// if the per-query fused-score distribution is too flat
+	// if the per-query CE distribution is too flat
 	// (stddev < MinBatchStdDev), the reranker cannot discriminate
 	// on this query and the engine returns zero edges rather than
 	// picking noise. Per protocol §6.4, Selection SHOULD return
@@ -84,22 +70,15 @@ type EngineConfig struct {
 	// are present, so quotas can't over-allocate.
 	MinPerThreadInTopK int
 
-	// Radius is the last-N window per protocol §2 / §3.3. The Network
-	// Regime places Radius between Selected and Current Turn so the
-	// model sees continuous recent context bridging deep-history
-	// prerequisites and the current Event. Counts messages in the
-	// current thread — conversational coherence is thread-local;
-	// cross-thread material enters via Selection, not Radius.
-	//
-	// Radius plays a different role than trajectory signal in
-	// Selection. Radius is unconditional rolling context preservation
-	// on the wire; trajectory contribution inside FuseScore is a
-	// prerequisite-detection signal scored against EdgeThreshold.
-	// The two are complementary, not redundant: Radius guarantees
-	// near-term messages are present regardless of Selection, and
-	// trajectory signal lets older same-thread messages qualify as
-	// prerequisites when they carry enough combined signal to clear
-	// the threshold.
+	// RadiusSize is the last-N window per protocol §2 / §3.3. The
+	// Network Regime places Radius between Selected and Current
+	// Turn so the model sees continuous recent context bridging
+	// deep-history prerequisites and the current Event. Counts
+	// messages in the current thread — conversational coherence is
+	// thread-local; cross-thread material enters via Selection,
+	// not Radius. Radius is also where trajectory continuity
+	// lives: same-thread adjacency is preserved unconditionally on
+	// the wire, independent of edge scoring.
 	RadiusSize int
 
 	// Chunk controls how long messages are split for embedding and
@@ -164,89 +143,33 @@ type EngineConfig struct {
 	PerMsgDelimiterTokens int
 
 	// NLIFusionWeight is α in the composite scoring fusion:
-	// fused = α · bge_rerank_score + (1-α) · nli_entailment_score.
+	// score = α · bge_rerank + (1-α) · nli_entailment.
 	// At α=1 fusion degenerates to bge-only (today's behavior); at
 	// α=0 to NLI-only. 0.5 balances the two — bge captures surface
 	// relevance well, NLI captures the directional dependency
 	// ("this content answers that query") that bge-reranker-v2-m3
 	// misses, surfacing prerequisite content over process-thinking
 	// that merely shares query language. Takes effect only when an
-	// Entailer is wired on the Engine; otherwise ignored.
+	// Entailer is wired on the Engine; otherwise ignored. The fused
+	// output replaces the raw bge score everywhere downstream — it
+	// is what gets cached in chunk_scores and what feeds
+	// EdgeThreshold gating.
 	NLIFusionWeight float64
-}
-
-// EdgeThresholdFor returns the gating threshold appropriate for a
-// candidate of the given thread relationship to the target. Cross-
-// thread candidates use CrossThreadEdgeThreshold when configured,
-// because their fused score distribution is shifted down relative
-// to same-thread (no temporal contribution). Zero
-// CrossThreadEdgeThreshold falls back to EdgeThreshold for the
-// single-knob legacy model.
-func (cfg EngineConfig) EdgeThresholdFor(crossThread bool) float64 {
-	if crossThread && cfg.CrossThreadEdgeThreshold > 0 {
-		return cfg.CrossThreadEdgeThreshold
-	}
-	return cfg.EdgeThreshold
 }
 
 // DefaultConfig returns the default engine configuration.
 //
-// EdgeThreshold 0.35 / ScoreFloor 0.01 are the calibrated baseline
-// from the prior NLI-to-reranker migration. Tuning these needs
-// startup-time invalidation (filter loaded edges against current
-// threshold) to be meaningful across existing threads — without
-// it, config changes only bite new threads, producing workflow
-// friction and inconsistent experiments. Leaving these at the
-// known baseline until invalidation lands.
-//
-// WeightCE 0.6, WeightTemp 0.4: both axes of prerequisite signal
-// get meaningful weight in the fused score.
-//
-//   - Semantic axis (reranker): "this content is about the same
-//     thing the current turn is producing."
-//   - Structural axis (temporal proximity): "this is what the
-//     current turn is continuing from."
-//
-// Both are legitimate prerequisite indicators and neither subsumes
-// the other. A focused autonomous run flattens reranker signal
-// across the on-topic corpus — temporal distinguishes which
-// priors the current turn actually continues from. A sharp topic
-// pivot can make the immediately-prior turn look semantically
-// irrelevant when it's structurally critical — temporal keeps it
-// in.
-//
-// The weights combine linearly in FuseScore. Edges require the
-// fused score to clear EdgeThreshold (§6.4 discriminativity). No
-// trajectory-as-override clause — every edge earns its place via
-// the combined signal.
+// Edge formation gates on raw CE (post-NLI fusion if an entailer is
+// wired). EdgeThreshold 0.5 / ScoreFloor 0.3 are tuned for the
+// protocol's discrimination contract (§6.4): Selection SHOULD return
+// nothing rather than low-confidence results. Observed CE
+// distribution on a 9.4k-edge corpus: confident-prerequisite
+// candidates score above 0.5 across both same-thread and cross-
+// thread populations, so a single threshold suffices once the
+// fused-score asymmetry is removed.
 func DefaultConfig() EngineConfig {
 	return EngineConfig{
-		// EdgeThreshold 0.5 / ScoreFloor 0.3. Tuned for the protocol's
-		// discrimination contract (§6.4): "Selection SHOULD return
-		// nothing rather than return low-confidence results." Observed
-		// fused-score distribution on a 9.4k-edge corpus: ~78% of edges
-		// have fused score < 0.3 (noise shoulder), the confident-
-		// prerequisite population sits above 0.5. EdgeThreshold at 0.5
-		// only admits confident edges into the DAG. ScoreFloor at 0.3
-		// trims multi-hop walks once the multiplicative decay crosses
-		// into the noise band. Earlier baseline (0.35 / 0.01) was
-		// calibrated against an older NLI classifier's output range
-		// and became wildly permissive under the bge-reranker-v2-m3
-		// distribution — Selection routinely returned 50%+ of the
-		// corpus, which is the opposite of hyperselection. These new
-		// values produce 5-30 selections per query on the same corpus.
-		EdgeThreshold: 0.5,
-		// CrossThreadEdgeThreshold 0.4. With cross-thread fused = CE
-		// (no temporal term), 0.5 was too tight: bge-reranker-v2-m3
-		// produces cross-thread CE in the 0.40-0.50 band on
-		// genuinely-related material across novel-style threads, so
-		// the same-thread 0.5 gate was suppressing legitimate cross-
-		// thread edges. 0.4 admits that band while still rejecting
-		// the noise floor (most cross-thread CE on unrelated
-		// material sits below 0.3).
-		CrossThreadEdgeThreshold: 0.4,
-		WeightCE:                 0.6,
-		WeightTemp:      0.4,
+		EdgeThreshold:   0.5,
 		ScoreFloor:      0.3,
 		ZScoreThreshold: 1.0,
 		MinBatchStdDev:  0.05,
@@ -256,7 +179,7 @@ func DefaultConfig() EngineConfig {
 		// RerankTopK/N to avoid over-allocation.
 		MinPerThreadInTopK: 8,
 		RadiusSize:         10,
-		Chunk:           DefaultChunkConfig(),
+		Chunk:              DefaultChunkConfig(),
 		// Safety-net boundary for the Network payload. Measured in
 		// "approximate tokens" — specifically (UTF-8 rune count)/4,
 		// a rough English-prose heuristic, not an actual tokenizer

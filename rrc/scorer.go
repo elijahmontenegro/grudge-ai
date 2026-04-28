@@ -83,36 +83,3 @@ func (sc *scoreCache) all() map[scoreKey]float64 {
 	return out
 }
 
-// FuseScore computes the fused edge score. Cross-encoder relevance
-// (reranker output) is the dominant semantic signal; temporal
-// proximity breaks ties between comparably-scored candidates.
-// Weights live in EngineConfig so tuning is configuration, not code.
-//
-// crossThread=true returns the raw rerank score: cross-thread pairs
-// have no meaningful temporal-proximity signal (positions are
-// thread-local; a chunk in thread A at position 1979 and a chunk
-// in thread B at position 23 have temporal=1/1957 ≈ 0, which
-// effectively subtracts WeightTemp from cross-thread fused scores
-// vs. same-thread baselines). Without this carve-out, cross-thread
-// chunks need rerank > EdgeThreshold/WeightCE (≈0.83 at default
-// 0.5/0.6) to clear the threshold while same-thread chunks clear
-// at much lower CE thanks to their temporal contribution. That's a
-// structural handicap that effectively starves cross-thread recall
-// at scope=ALL.
-func FuseScore(cfg EngineConfig, rerankerScore, temporalProximity float64, crossThread bool) float64 {
-	if crossThread {
-		return rerankerScore
-	}
-	return cfg.WeightCE*rerankerScore + cfg.WeightTemp*temporalProximity
-}
-
-// TemporalProximity computes 1/(1+distance) where distance is the
-// absolute position difference between two messages. Hyperbolic
-// decay: adjacent ~0.5, 9 apart ~0.1, 99 apart ~0.01.
-func TemporalProximity(posA, posB int64) float64 {
-	d := posA - posB
-	if d < 0 {
-		d = -d
-	}
-	return 1.0 / (1.0 + float64(d))
-}

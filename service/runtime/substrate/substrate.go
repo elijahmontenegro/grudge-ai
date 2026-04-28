@@ -208,22 +208,11 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	// RRC engine. Config precedence: zero Settings.Engine → DefaultConfig
 	// (first run / pre-engine-block legacy config). Otherwise trust the
 	// persisted snapshot verbatim — zero in an individual field is
-	// intentional (WeightCE=0 → pure-temporal, ScoreFloor=0 → no
-	// cutoff).
+	// intentional (ScoreFloor=0 → no cutoff, etc.).
 	rrcCfg := rrc.DefaultConfig()
 	if se := cfg.Settings.Engine; se != (config.EngineConfig{}) {
 		rrcCfg.EdgeThreshold = se.EdgeThreshold
-		// Preserve DefaultConfig CrossThreadEdgeThreshold when the
-		// persisted settings predate the field (zero ⇒ legacy unset).
-		// Explicit zero from a user means "use single-knob behavior"
-		// — they can disable by setting it back to 0 deliberately,
-		// at which point the rrc fallthrough does the right thing.
-		if se.CrossThreadEdgeThreshold > 0 {
-			rrcCfg.CrossThreadEdgeThreshold = se.CrossThreadEdgeThreshold
-		}
 		rrcCfg.ScoreFloor = se.ScoreFloor
-		rrcCfg.WeightCE = se.WeightCE
-		rrcCfg.WeightTemp = se.WeightTemp
 		rrcCfg.ZScoreThreshold = se.ZScoreThreshold
 		rrcCfg.MinBatchStdDev = se.MinBatchStdDev
 		rrcCfg.RadiusSize = se.RadiusSize

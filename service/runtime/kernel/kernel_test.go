@@ -226,8 +226,6 @@ func TestKernel_MidAssembleEngineSwap(t *testing.T) {
 	cfg.Settings.Engine = config.EngineConfig{
 		EdgeThreshold:   0.5,
 		ScoreFloor:      0.0,
-		WeightCE:        0.6,
-		WeightTemp:      0.4,
 		ZScoreThreshold: 0,
 		MinBatchStdDev:  0,
 		RadiusSize:      0,
