@@ -17,10 +17,22 @@ web/node_modules/
 node_modules/
 
 # Frontend build output. web/dist is the Vite output; the
-# service/cmd/spidey/dist copy is the //go:embed source synced by the
+# go/service/cmd/spidey/dist copy is the //go:embed source synced by the
 # Taskfile's embed-sync task. Both are build artifacts.
 web/dist/
-service/cmd/spidey/dist/
+go/service/cmd/spidey/dist/
+
+# Local backups (e.g. novel-backup-* dirs from autonomous-run safety copies).
+novel-backup-*/
+
+# Python build / cache (eval/ and model/ are mixed Python research code).
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
 
 # Generated proto code (gen/go) is intentionally checked in for
 # external go-get consumption — see go.mod replace directives.

@@ -1,9 +1,9 @@
 go 1.25.0
 
 use (
-	./core
-	./gen/go
-	./rrc
-	./scripts/verifydeps
-	./service
+	./go/core
+	./go/gen/go
+	./go/rrc
+	./go/scripts/verifydeps
+	./go/service
 )

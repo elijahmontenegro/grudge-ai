@@ -4,7 +4,7 @@ version: '3'
 # without WSL via go-task). Replaces ad-hoc per-module commands.
 
 vars:
-  MODULES: gen/go core rrc service
+  MODULES: go/gen/go go/core go/rrc go/service
 
 tasks:
   default:
@@ -17,13 +17,13 @@ tasks:
     desc: Build all Go modules
     deps: [embed-sync]
     cmds:
-      - for: [gen/go, core, rrc, service]
+      - for: [go/gen/go, go/core, go/rrc, go/service]
         cmd: cd {{.ITEM}} && go build ./...
 
   test:
     desc: Test all Go modules
     cmds:
-      - for: [rrc, core, service]
+      - for: [go/rrc, go/core, go/service]
         cmd: cd {{.ITEM}} && go test ./...
 
   lint:
@@ -34,20 +34,20 @@ tasks:
           goroutines); excluding only that package preserves rigor on
           hand-written code.
     cmds:
-      - for: [gen/go, core, rrc]
+      - for: [go/gen/go, go/core, go/rrc]
         cmd: cd {{.ITEM}} && go vet ./...
-      - cd service && go vet $(go list ./... | grep -v '/graph$')
-      - cd service && go vet -copylocks=false ./graph/...
+      - cd go/service && go vet $(go list ./... | grep -v '/graph$')
+      - cd go/service && go vet -copylocks=false ./graph/...
 
   verify:deps:
     desc: Cross-module dependency-graph invariants (storage boundary, tiktoken decoupling)
     cmds:
-      - go run ./scripts/verifydeps
+      - go run ./go/scripts/verifydeps
 
   verify:external:
     desc: Build a foreign module that imports rrc — proves rrc is `go get`-shaped
     cmds:
-      - cd scripts/verifydeps && go test -run TestRRC_BuildsFromForeignModule
+      - cd go/scripts/verifydeps && go test -run TestRRC_BuildsFromForeignModule
 
   verify:
     desc: Run every CI invariant — lint, dep-graph checks, foreign-module
@@ -62,7 +62,7 @@ tasks:
   tidy:
     desc: Run go mod tidy in each module
     cmds:
-      - for: [gen/go, core, rrc, service]
+      - for: [go/gen/go, go/core, go/rrc, go/service]
         cmd: cd {{.ITEM}} && go mod tidy
 
   proto:
@@ -74,7 +74,7 @@ tasks:
     desc: Verify gen/go is up to date with proto sources (CI)
     cmds:
       - buf generate
-      - git diff --exit-code gen/go/
+      - git diff --exit-code go/gen/go/
 
   web:install:
     desc: Install frontend dependencies
@@ -101,30 +101,84 @@ tasks:
       - npm run dev
 
   embed-sync:
-    desc: Sync web/dist into service/cmd/spidey/dist for go:embed
+    desc: Sync web/dist into go/service/cmd/spidey/dist for go:embed
     deps: [web:build]
     cmds:
-      - rm -rf service/cmd/spidey/dist
-      - cp -r web/dist service/cmd/spidey/dist
+      - rm -rf go/service/cmd/spidey/dist
+      - cp -r web/dist go/service/cmd/spidey/dist
     sources:
       - web/dist/**/*
     generates:
-      - service/cmd/spidey/dist/**/*
+      - go/service/cmd/spidey/dist/**/*
 
   run:
     desc: Build everything and run spidey
     deps: [build]
     cmds:
-      - service/spidey.exe
+      - go/service/spidey.exe
+
+  stop:
+    desc: |
+      Stop spidey gracefully. Sends Ctrl+C-style termination via
+      taskkill /PID (NOT /F) so the in-process signal handler runs
+      k.Shutdown() + srv.Shutdown() and drains the SQLite WAL before
+      exit. Do NOT use `Stop-Process -Force` from PowerShell — that's
+      TerminateProcess (SIGKILL-equivalent on Windows) and leaves the
+      WAL mid-write. ncruces' WAL replay does not always recover from
+      that state, and recovering via the modernc driver can leave
+      vec0-table writes broken in the next process. The autonomous
+      experiment lost 9 hours of corpus persistence to that exact
+      sequence on 2026-05-25.
+    cmds:
+      - powershell -NoProfile -Command "$p = Get-Process spidey -ErrorAction SilentlyContinue; if ($p) { taskkill /PID $p.Id; Start-Sleep -Seconds 6; if (Get-Process spidey -ErrorAction SilentlyContinue) { Write-Host 'still alive after graceful taskkill — wait longer or escalate'; exit 1 } else { Write-Host 'spidey stopped cleanly' } } else { Write-Host 'spidey not running' }"
 
   sandbox:image:
     desc: Build the sandbox docker image
     cmds:
       - docker build -t spidey-sandbox -f Dockerfile.sandbox .
 
+  substrate:up:
+    desc: Bring up the full production substrate sequentially — tei-embed
+          first, then vllm, then searxng. Sequencing lives here, not in
+          compose's depends_on:service_healthy, so the healthcheck values
+          stay tight (runtime serving signal only) and startup ordering
+          is explicit. --wait blocks until each service is healthy;
+          --wait-timeout=1200s covers worst-case first cold boot
+          (vllm bnb compile + CUDA graphs + KV pool init); warm
+          restarts complete in <60s. SearXNG comes last because it has
+          no GPU footprint and no model weights to load — cheap, fast.
+    cmds:
+      - docker compose up -d --wait --wait-timeout 1200 tei-embed
+      - docker compose up -d --wait --wait-timeout 1200 vllm
+      - docker compose up -d --wait --wait-timeout 60 searxng
+
+  substrate:down:
+    desc: Stop the inference substrate. Containers stay (model weights cached
+          in named volumes); use substrate:up to restart fast.
+    cmds:
+      - docker compose stop vllm tei-embed searxng
+
+  substrate:status:
+    desc: Show substrate container health + GPU memory used
+    cmds:
+      - docker ps --filter "name=spidey-vllm-1" --filter "name=spidey-tei-embed-1" --format "table {{`{{.Names}}`}}\t{{`{{.Status}}`}}"
+      - nvidia-smi --query-gpu=memory.used,memory.free --format=csv
+
+  substrate:logs:
+    desc: Tail logs from both substrate services
+    cmds:
+      - docker compose logs -f --tail=50 tei-embed vllm
+
+  substrate:smoke:
+    desc: Run the live-service smoke test against running tei-embed + vllm.
+          Compares against the eval-baseline (R2 r@5 = 31/31 = lossless contract).
+          Requires substrate:up to have completed; uses the WSL eval venv.
+    cmds:
+      - wsl -d Ubuntu-22.04 -e bash -c "cd /mnt/c/Code/spidey/eval && ~/eval-venv/bin/python run_live_smoke.py"
+
   clean:
     desc: Remove build artifacts
     cmds:
       - rm -rf web/dist
-      - rm -rf service/cmd/spidey/dist
-      - rm -f service/spidey.exe service/spidey-web.exe
+      - rm -rf go/service/cmd/spidey/dist
+      - rm -f go/service/spidey.exe go/service/spidey-web.exe

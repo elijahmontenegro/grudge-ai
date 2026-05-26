@@ -6,18 +6,22 @@
 # the Ollama app separately — it's NOT in this compose file.
 #
 # Services in this file:
-#   tei-rerank  — Cross-encoder reranker    (http://localhost:8080)
-#                   BAAI/bge-reranker-v2-m3, 8192 ctx
-#   tei-embed   — Dense embedding model     (http://localhost:8081)
-#                   BAAI/bge-m3, 8192 ctx
-#   searxng     — Web search                 (http://localhost:8888)
+#   vllm      — vLLM serving zerank-1-small reranker  (http://localhost:8000)
+#                zeroentropy/zerank-1-small — 1.7B Qwen3-based causal LM
+#                repurposed as cross-encoder reranker via Yes-token logprob.
+#                Apache 2.0. bf16, no quantization, fits ~3.4GB.
+#   tei-embed — TEI serving Qwen3-Embedding-0.6B  (http://localhost:8080)
+#                Qwen/Qwen3-Embedding-0.6B — 0.6B asymmetric instruction-tuned
+#                embedder. Apache 2.0. The query-side Instruct/Query prefix
+#                is applied client-side by core/adapter/tei (TEI doesn't have
+#                per-request prompt support, but Qwen3 expects the
+#                instruction inline in the query text — so client-prepending
+#                is the correct shape). Documents plain-encoded.
+#   searxng   — Web search                          (http://localhost:8888)
 #
-# Model choices: both are 8192-token context so chunked text (<=2000
-# chars ≈ 500 tokens) fits with plenty of headroom. bge-reranker-v2-m3
-# is trained for relevance ranking — structurally the right signal for
-# prerequisite detection (NLI-entailment was wrong tool for the job:
-# reference material like a character bible doesn't *entail* a chapter,
-# it *informs* it, and NLI has no label for that).
+# Together vllm (~3.4GB) + tei-embed (~1.2GB) co-resident on 12GB GPU with
+# ~7GB headroom for KV cache and CUDA graphs. No quantization, no sequential
+# loading, no model-swap latency.
 
 services:
   # Agent tool-execution sandbox. Not started by `up` — it's a one-shot
@@ -35,74 +39,42 @@ services:
     # only ever invoked ephemerally by the Go runtime.
     command: ["true"]
 
-  # GPU image targeted at Ampere SM_86 (RTX 30xx — this machine has a
-  # 3080 Ti). TEI auto-selects the CUDA backend when an NVIDIA device
-  # is visible; the `deploy.resources.reservations.devices` block
-  # requests one GPU from Docker's runtime. Falls back cleanly if no
-  # GPU is present, but that path isn't in scope here.
-  # GPU image targeted at Ampere SM_86 (RTX 30xx). Model weights
-  # persist to a named volume so container restarts don't re-download
-  # the ~500MB/1GB bundles each time.
-  # --max-client-batch-size 256 so one OnMessage round's candidates
-  # (capped by RerankTopK=256 in engine config) goes in a single HTTP
-  # call. Default is 32 — at that ceiling a large-corpus OnMessage
-  # chains 4-8 serial HTTP round trips and ~3× the wall-clock per
-  # round. TEI still micro-batches internally to match the GPU's
-  # preferred shape, so the server limit is only about HTTP overhead,
-  # not model forward-pass size.
-  # 2026-04-23 operational notes:
-  #
-  # 1. GPU sharing. Both tei-rerank and tei-embed reserve 1 GPU on a
-  #    single-GPU host, which means they SHARE the device — the NVIDIA
-  #    container runtime does not isolate, it context-switches. Under
-  #    sustained concurrent load (rerank for RRC + embed for search
-  #    indexing), we observed progressive slowdown followed by a silent
-  #    /rerank hang with /info still responding — the CUDA command
-  #    buffer deadlock signature documented in NVIDIA
-  #    open-gpu-kernel-modules#968 and TEI#713. The service-side
-  #    mitigation is the bounded embed worker pool in the Go backend
-  #    (service/search/embedqueue.go); container-side mitigation is
-  #    the healthcheck below plus `restart: unless-stopped` so a wedge
-  #    auto-recovers instead of requiring manual intervention.
-  #
-  # 2. Healthcheck probes a real rerank — /info responds when the HTTP
-  #    layer is up even though the inference worker is wedged, which
-  #    was exactly the failure mode we hit. A canary /rerank call is
-  #    the only probe that catches dead inference.
-  #
-  # 3. Prometheus metrics. TEI exposes /metrics on the main HTTP port
-  #    (te_request_count, te_request_success, te_predict_count, plus
-  #    latency histograms). Scrape http://localhost:8080/metrics for
-  #    rerank and http://localhost:8081/metrics for embed. A separate
-  #    --prometheus-port flag is not supported by this image.
-  tei-rerank:
-    image: ghcr.io/huggingface/text-embeddings-inference:86-latest
+  # vllm — zerank-1-small reranker via OpenAI-compatible completion API.
+  # zerank-1-small is a 1.7B Qwen3-based causal LM; vLLM is the right
+  # serving stack for causal LMs and gives prefix KV caching for free.
+  # The Go adapter (core/adapter/zerank/) sends one /v1/chat/completions
+  # call per candidate with system=query, user=document, max_tokens=1,
+  # logprobs=true, top_logprobs=20. The "Yes" token logprob is extracted
+  # and sigmoid(logit/5) yields the relevance score.
+  vllm:
+    build:
+      context: ./containers/vllm
+      dockerfile: Dockerfile
+    image: spidey-vllm:latest
     ports:
-      - "8080:80"
-    command:
-      - "--model-id"
-      - "BAAI/bge-reranker-v2-m3"
-      - "--max-client-batch-size"
-      - "256"
+      - "8000:8000"
     volumes:
-      - tei-rerank-data:/data
+      # HF cache so weights persist across container restarts.
+      - vllm-hf-cache:/root/.cache/huggingface
     dns:
       - 1.1.1.1
       - 8.8.8.8
     labels:
       - "autoheal=true"
     restart: unless-stopped
+    # start_period is the cold-boot SLO: the upper bound on time-to-ready
+    # we commit to. Beyond this, treat the service as broken (Docker has
+    # no "still loading" status distinct from "unhealthy" — the grace
+    # window IS the load contract). 600s covers vllm's worst case:
+    # weight load + bnb int8 dequant + CUDA graph capture + KV pool init.
+    # Warm restarts complete inside this comfortably. Sequencing across
+    # services lives in the Taskfile (substrate:up runs `up --wait` per
+    # service in order); this value is purely the per-service SLO.
     healthcheck:
-      test:
-        - "CMD-SHELL"
-        - >
-          curl -fs --max-time 10 -X POST http://127.0.0.1/rerank
-          -H 'Content-Type: application/json'
-          -d '{"query":"hc","texts":["ok"]}'
-          || exit 1
+      test: ["CMD-SHELL", "curl -fs --max-time 10 http://127.0.0.1:8000/health || exit 1"]
       interval: 30s
       timeout: 15s
-      start_period: 60s
+      start_period: 600s
       retries: 3
     deploy:
       resources:
@@ -112,34 +84,42 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # tei-embed — Qwen3-Embedding-0.6B via Hugging Face TEI.
+  # Native TEI image. Qwen3-Embedding's asymmetry (Instruct/Query prefix
+  # on queries, plain on documents) is text-level, not server-side
+  # prompt config, so TEI handles it without modification — the
+  # core/adapter/tei client prepends the prefix on EmbedQuery calls.
+  # This replaces the custom Python service from the prior session
+  # (services/zembed/) that was needed only because zembed-1 used
+  # sentence-transformers' encode_query/encode_document methods that
+  # don't fit TEI's per-server prompt model. Qwen3-Embedding's
+  # text-prefix recipe sidesteps that limitation entirely.
   tei-embed:
-    image: ghcr.io/huggingface/text-embeddings-inference:86-latest
+    image: ghcr.io/huggingface/text-embeddings-inference:cuda-1.9
     ports:
-      - "8081:80"
-    command:
-      - "--model-id"
-      - "BAAI/bge-m3"
-      - "--max-client-batch-size"
-      - "256"
+      - "8080:80"
     volumes:
-      - tei-embed-data:/data
+      - tei-hf-cache:/data
+    command:
+      - --model-id
+      - Qwen/Qwen3-Embedding-0.6B
+      - --dtype
+      - float16
     dns:
       - 1.1.1.1
       - 8.8.8.8
     labels:
       - "autoheal=true"
     restart: unless-stopped
+    # Cold-boot SLO (same framing as vllm above). 300s covers TEI's
+    # worst case: weight read from /data + Candle CUDA init + tokenizer
+    # workers + first-batch JIT. Smaller than vllm because TEI has no
+    # bnb dequant or KV pool stage.
     healthcheck:
-      test:
-        - "CMD-SHELL"
-        - >
-          curl -fs --max-time 10 -X POST http://127.0.0.1/embed
-          -H 'Content-Type: application/json'
-          -d '{"inputs":"hc"}'
-          || exit 1
+      test: ["CMD-SHELL", "curl -fs --max-time 10 http://127.0.0.1:80/health || exit 1"]
       interval: 30s
       timeout: 15s
-      start_period: 60s
+      start_period: 300s
       retries: 3
     deploy:
       resources:
@@ -156,14 +136,13 @@ services:
     volumes:
       # Bind-mount the repo's settings.yml so the container picks up our
       # JSON-output + rate-limit config (the default image disables json).
-      - ./searxng:/etc/searxng:rw
+      - ./infra/searxng:/etc/searxng:rw
 
   # willfarrell/autoheal watches containers labeled `autoheal=true` and
   # restarts them when their Docker healthcheck reports `unhealthy`.
   # Necessary because Docker's `restart: unless-stopped` only reacts to
   # container exit, not to health transitions — without autoheal, a
-  # wedged TEI container stays "up but sick" until manually restarted.
-  # The TEI containers above are labeled so autoheal picks them up.
+  # wedged container stays "up but sick" until manually restarted.
   autoheal:
     image: willfarrell/autoheal:latest
     restart: unless-stopped
@@ -174,5 +153,5 @@ services:
       - //var/run/docker.sock:/var/run/docker.sock
 
 volumes:
-  tei-rerank-data:
-  tei-embed-data:
+  vllm-hf-cache:
+  tei-hf-cache:

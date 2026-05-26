@@ -1,0 +1,479 @@
+{
+  "p1_qwen3-emb-0.6b+qwen3-rerank-0.6b": {
+    "path": "P1",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        537.954568862915
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        2,
+        513.7045383453369
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        3,
+        502.91919708251953
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        4,
+        505.4306983947754
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        5,
+        503.06081771850586
+      ]
+    ],
+    "co_resident_peak_gb": 2.391655424,
+    "l1_load_s": 7.837718963623047,
+    "l2_load_s": 2.682659864425659,
+    "total_chunks": 12
+  },
+  "p1_qwen3-emb-0.6b+zerank-1-small": {
+    "path": "P1",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        758.0170631408691
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        551.9466400146484
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        558.6984157562256
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        548.7194061279297
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        550.7423877716064
+      ]
+    ],
+    "co_resident_peak_gb": 4.641252352,
+    "l1_load_s": 1.8822669982910156,
+    "l2_load_s": 3.974747896194458,
+    "total_chunks": 12
+  },
+  "p1_jina-v5-small+zerank-1-small": {
+    "path": "P1",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        690.0990009307861
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        640.8514976501465
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        630.3815841674805
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        630.3331851959229
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        629.3158531188965
+      ]
+    ],
+    "co_resident_peak_gb": 4.803279872,
+    "l1_load_s": 5.9100587368011475,
+    "l2_load_s": 1.3082492351531982,
+    "total_chunks": 12
+  },
+  "p2_answerai-colbert-small": {
+    "path": "P2",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        19.56963539123535
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        12.87698745727539
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        11.791706085205078
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        11.548995971679688
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        11.786460876464844
+      ]
+    ],
+    "co_resident_peak_gb": 0.142770688,
+    "load_s": 0.8565065860748291,
+    "total_chunks": 12
+  },
+  "p2_gte-moderncolbert-v1": {
+    "path": "P2",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        25.1617431640625
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        25.17247200012207
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        29.943466186523438
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        2343.4791564941406
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        26.242494583129883
+      ]
+    ],
+    "co_resident_peak_gb": 0.625494016,
+    "load_s": 3.598085641860962,
+    "total_chunks": 12
+  },
+  "p2_jina-colbert-v2": {
+    "path": "P2",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        2,
+        48.80547523498535
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        41.6715145111084
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        35.306692123413086
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        40.45677185058594
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        36.64040565490723
+      ]
+    ],
+    "co_resident_peak_gb": 1.128574976,
+    "load_s": 3.297417402267456,
+    "total_chunks": 12
+  },
+  "p3_qwen3-emb-0.6b+answerai-colbert": {
+    "path": "P3",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        80.72328567504883
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        84.77902412414551
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        81.64405822753906
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        85.13855934143066
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        83.88519287109375
+      ]
+    ],
+    "co_resident_peak_gb": 2.07101952,
+    "l1_load_s": 1.835386037826538,
+    "l2_load_s": 0.7011024951934814,
+    "total_chunks": 12
+  },
+  "p3_qwen3-emb-0.6b+jina-colbert-v2": {
+    "path": "P3",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        2,
+        192.79146194458008
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        149.4009494781494
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        146.9261646270752
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        149.41048622131348
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        147.36270904541016
+      ]
+    ],
+    "co_resident_peak_gb": 2.320142848,
+    "l1_load_s": 1.7911317348480225,
+    "l2_load_s": 2.0173428058624268,
+    "total_chunks": 12
+  },
+  "p1_zembed-1+zerank-2": {
+    "path": "P1",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        2548.422336578369
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        869.3428039550781
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        969.2680835723877
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        931.3263893127441
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        1275.2940654754639
+      ]
+    ],
+    "co_resident_peak_gb": 9.50415104,
+    "l1_peak_gb": 9.50415104,
+    "l2_peak_gb": 8.053605888,
+    "sequential": true,
+    "l1_load_s": 13.27449917793274,
+    "l2_load_s": 7.881014347076416,
+    "total_chunks": 12
+  },
+  "p1_zembed-1+zerank-1-small": {
+    "path": "P1",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        689.9769306182861
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        499.67098236083984
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        494.58837509155273
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        531.792163848877
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        518.9533233642578
+      ]
+    ],
+    "co_resident_peak_gb": 9.50415104,
+    "l1_peak_gb": 9.50415104,
+    "l2_peak_gb": 3.450208768,
+    "sequential": true,
+    "l1_load_s": 14.865221500396729,
+    "l2_load_s": 4.451971054077148,
+    "total_chunks": 12
+  },
+  "p1_zembed-1+qwen3-rerank-0.6b": {
+    "path": "P1",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        510.70713996887207
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        2,
+        444.34046745300293
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        3,
+        452.08263397216797
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        4,
+        453.8898468017578
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        5,
+        465.6639099121094
+      ]
+    ],
+    "co_resident_peak_gb": 9.50415104,
+    "l1_peak_gb": 9.50415104,
+    "l2_peak_gb": 1.200526336,
+    "sequential": true,
+    "l1_load_s": 16.359148263931274,
+    "l2_load_s": 2.2154836654663086,
+    "total_chunks": 12
+  },
+  "p1_qwen3-emb-0.6b+zerank-2": {
+    "path": "P1",
+    "per_pair": [
+      [
+        "G1_predicate_compile",
+        "substrate_plan_design",
+        1,
+        3362.7243041992188
+      ],
+      [
+        "G2_ncruces_pin",
+        "driver_arc_journal",
+        1,
+        900.9864330291748
+      ],
+      [
+        "G3_sandbox_filewrite",
+        "claude_md_principles",
+        1,
+        856.3892841339111
+      ],
+      [
+        "G4_invariance_observable",
+        "verification_section",
+        1,
+        851.1960506439209
+      ],
+      [
+        "G5_nf4_quantization",
+        "quantization_arc_journal",
+        1,
+        881.4573287963867
+      ]
+    ],
+    "co_resident_peak_gb": 8.053605888,
+    "l1_peak_gb": 2.070409728,
+    "l2_peak_gb": 8.053605888,
+    "sequential": true,
+    "l1_load_s": 3.290640115737915,
+    "l2_load_s": 18.784783840179443,
+    "total_chunks": 12
+  }
+}
