@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/emontenegr/spidey/service/storage"
 )
 
 // ContainerWorkspace is the path at which the host workspace directory
@@ -13,11 +14,6 @@ import (
 // so the system prompt, the Go path guard, and the docker invocation
 // all agree on the name the model should use.
 const ContainerWorkspace = "/workspace"
-
-// threadIDPattern mirrors the format CreateThread emits (thread-{unixnano}).
-// Any other shape is rejected — same defense-in-depth posture as
-// planDirForThread in graph/helpers.go.
-var threadIDPattern = regexp.MustCompile(`^thread-\d+$`)
 
 // WorkspaceDir returns the absolute sandbox workspace directory for a
 // thread and ensures it exists. Rejects malformed thread IDs so a
@@ -28,11 +24,8 @@ var threadIDPattern = regexp.MustCompile(`^thread-\d+$`)
 //	{DataDir}/sandboxes/sbx-{threadID}/
 //	{DataDir}/plans/plan-{threadID}/
 func WorkspaceDir(dataDir, threadID string) (string, error) {
-	if threadID == "" {
-		return "", fmt.Errorf("empty threadID")
-	}
-	if !threadIDPattern.MatchString(threadID) {
-		return "", fmt.Errorf("invalid threadID format: %q", threadID)
+	if err := storage.ValidateThreadID(threadID); err != nil {
+		return "", err
 	}
 	root, err := filepath.Abs(filepath.Join(dataDir, "sandboxes"))
 	if err != nil {
@@ -41,8 +34,7 @@ func WorkspaceDir(dataDir, threadID string) (string, error) {
 	dir := filepath.Clean(filepath.Join(root, "sbx-"+threadID))
 	// Belt-and-suspenders: filepath.Clean on a malformed ID could in
 	// principle land back inside root, so verify the final path is
-	// under root. (The regex above already rejects those cases, but
-	// future format changes shouldn't silently open a hole.)
+	// under root.
 	if dir != root && !strings.HasPrefix(dir, root+string(os.PathSeparator)) {
 		return "", fmt.Errorf("invalid threadID: path escapes sandboxes directory")
 	}
@@ -77,8 +69,6 @@ func ResolveWorkspacePath(workspace, path string) (string, error) {
 	if path == "" {
 		return absWs, nil
 	}
-	// /workspace/... → strip the prefix and treat the remainder as
-	// a relative path inside the host workspace.
 	if path == ContainerWorkspace {
 		return absWs, nil
 	}

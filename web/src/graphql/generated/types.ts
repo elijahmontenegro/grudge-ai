@@ -297,7 +297,6 @@ export type Query = {
   recentActivity: Array<ActivityItem>;
   search: Array<SearchResult>;
   selectionForMessage?: Maybe<SelectionResult>;
-  selectionResult?: Maybe<SelectionResult>;
   settings: Settings;
   skills: Array<SkillInfo>;
   thread?: Maybe<Thread>;
@@ -331,11 +330,6 @@ export type QuerySearchArgs = {
 
 export type QuerySelectionForMessageArgs = {
   messageId: Scalars['ID']['input'];
-};
-
-
-export type QuerySelectionResultArgs = {
-  eventId: Scalars['ID']['input'];
 };
 
 

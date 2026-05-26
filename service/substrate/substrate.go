@@ -89,7 +89,7 @@ type Substrate struct {
 	Config *config.Config
 
 	MainCompleter core.Completer
-	Classifier    core.Classifier
+	Classifier    core.Scorer
 	Embedder      core.Embedder
 
 	Searcher    *search.Searcher
@@ -113,7 +113,7 @@ type Substrate struct {
 type Option func(*options)
 
 type options struct {
-	classifier  core.Classifier
+	classifier  core.Scorer
 	chunkOracle rrc.ChunkOracle
 }
 
@@ -121,7 +121,7 @@ type options struct {
 // build from the "classifier" provider in cfg. Production callers
 // pass nothing; tests inject a fake Scorer to drive the engine
 // without standing up a TEI server.
-func WithClassifier(c core.Classifier) Option {
+func WithClassifier(c core.Scorer) Option {
 	return func(o *options) { o.classifier = c }
 }
 

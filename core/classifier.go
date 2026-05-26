@@ -15,9 +15,3 @@ import "context"
 type Scorer interface {
 	Score(ctx context.Context, query string, candidates []string) ([]float64, error)
 }
-
-// Classifier is a Scorer used for relevance scoring. Production
-// wires bge-reranker-v2-m3 via TEI's /rerank endpoint. Kept as a
-// named alias so callers and Provider methods can express the role
-// explicitly even though it shares Scorer's contract.
-type Classifier = Scorer

@@ -17,20 +17,17 @@ import (
 // included with the error response (truncated by the adapter to a
 // sane bound — 8 KiB is typical).
 //
-// StatusError preserves the legacy errors.Is contract through
-// Unwrap: 401/403 unwrap to core.ErrAuth, 429 to
-// core.ErrRateLimited, everything else to core.ErrProviderUnavailable.
-// Existing call sites that pattern on those sentinels keep working
-// unchanged after adapters migrate to typed status errors.
+// Unwrap maps the status code to the canonical core sentinel:
+// 401/403 → core.ErrAuth, 429 → core.ErrRateLimited, anything else
+// → core.ErrProviderUnavailable. Call sites use
+// errors.Is(err, core.ErrAuth) etc. to classify failures.
 type StatusError struct {
 	Provider   string
 	StatusCode int
 	Body       string
 }
 
-// Error implements the error interface. Format mirrors what the
-// adapters produced before this type existed, so log lines are
-// stable across the migration.
+// Error implements the error interface.
 func (e *StatusError) Error() string {
 	if e.Body != "" {
 		return fmt.Sprintf("%s returned %d: %s", e.Provider, e.StatusCode, e.Body)
@@ -39,8 +36,6 @@ func (e *StatusError) Error() string {
 }
 
 // Unwrap returns the canonical core sentinel for the status code.
-// errors.Is(err, core.ErrAuth) etc. continue to match against
-// status-typed errors without changes at the call site.
 func (e *StatusError) Unwrap() error {
 	switch e.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:

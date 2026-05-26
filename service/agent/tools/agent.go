@@ -20,7 +20,7 @@ func registerAgentTools(c *buildCtx) error {
 				return AgentToolResult{}, err
 			}
 			forkID := fmt.Sprintf("fork-%s-%d", c.deps.ThreadID, c.deps.Tasks.seq.Load())
-			result, err := c.deps.Agent.SpawnAgent(ctx, args.Task, forkID)
+			result, err := c.deps.SubAgent.SpawnAgent(ctx, args.Task, forkID)
 			if err != nil {
 				return AgentToolResult{}, err
 			}
@@ -37,7 +37,7 @@ func registerAgentTools(c *buildCtx) error {
 			if err := c.requireApproval(ctx, "SendMessage", marshalArgs(args)); err != nil {
 				return SendMessageResult{}, err
 			}
-			resp, err := c.deps.Agent.SendToAgent(ctx, args.To, args.Message)
+			resp, err := c.deps.SubAgent.SendToAgent(ctx, args.To, args.Message)
 			if err != nil {
 				return SendMessageResult{}, err
 			}
@@ -45,4 +45,20 @@ func registerAgentTools(c *buildCtx) error {
 		},
 	)
 	return c.addTool("SendMessage", sendMsg, err)
+}
+
+type AgentToolArgs struct {
+	Task        string `json:"task"`
+	Description string `json:"description,omitempty"`
+}
+type AgentToolResult struct {
+	Result string `json:"result"`
+}
+
+type SendMessageArgs struct {
+	To      string `json:"to"`
+	Message string `json:"message"`
+}
+type SendMessageResult struct {
+	Response string `json:"response"`
 }

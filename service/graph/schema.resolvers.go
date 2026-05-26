@@ -19,7 +19,6 @@ import (
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/adoc"
 	"github.com/emontenegr/spidey/service/config"
-	"github.com/emontenegr/spidey/service/runtime"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -395,17 +394,15 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 	}
 	// Two resume paths:
 	//   (a) Active autonomous loop, just paused → flip the pause gate.
-	//   (b) Dead autonomous loop (runner exited, e.g. ctx cancel or a
-	//       pre-fix exit-on-error) but DB still has Mode=Autonomous →
-	//       kick a fresh RunAutonomous goroutine so the UX doesn't lie.
-	//       Previously this case silently no-op'd, leaving the UI
-	//       showing "running" forever while no goroutine was alive.
+	//   (b) Dead autonomous loop (runner exited, e.g. ctx cancel) but DB
+	//       still has Mode=Autonomous → kick a fresh RunAutonomous
+	//       goroutine so the UX doesn't lie.
 	entry, haveEntry := r.Runners.Get(threadID)
 	restartedAutonomous := false
 	if haveEntry && entry.Runner.IsAutonomousActive() {
 		entry.Runner.ResumeAutonomous()
 	} else if st.Mode == storage.AgentModeAutonomous {
-		remaining, reason := runtime.ComputeRemainingBudget(st)
+		remaining, reason := st.RemainingBudget()
 		if reason == "" && remaining > 0 {
 			runner, rerr := r.getOrCreateRunner(threadID)
 			if rerr != nil {
@@ -764,7 +761,7 @@ func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feed
 // re-renders with the edited version. The model will see the new content on
 // its next FileRead of plan.adoc.
 func (r *mutationResolver) UpdatePlanSource(ctx context.Context, threadID string, content string) (bool, error) {
-	planDir, err := runtime.PlanDirForThread(r.Config.DataDir, threadID)
+	planDir, err := storage.PlanDirForThread(r.Config.DataDir, threadID)
 	if err != nil {
 		return false, err
 	}
@@ -904,35 +901,6 @@ func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *in
 	return msgs, nil
 }
 
-// SelectionResult is the resolver for the selectionResult field.
-// Memory first (hot path for the current turn's live view), DB
-// fallback so historical events survive restart. `eventID` may be a
-// thread ID (legacy convenience: returns the latest selection on that
-// thread) or a raw event ID.
-func (r *queryResolver) SelectionResult(ctx context.Context, eventID string) (*pb.SelectionResult, error) {
-	resolvedID := eventID
-	if latestID, ok := r.LatestSelectionID(eventID); ok {
-		resolvedID = latestID
-	}
-	if pbResult, ok := r.GetSelection(resolvedID); ok && pbResult != nil {
-		return pbResult, nil
-	}
-
-	// Memory miss — walk the DB. Try as a direct event_id first, then
-	// as a thread_id (latest selection on that thread).
-	if res, err := r.DB.GetSelection(resolvedID); err != nil {
-		return nil, err
-	} else if res != nil {
-		return res, nil
-	}
-	if res, err := r.DB.LatestSelectionForThread(eventID); err != nil {
-		return nil, err
-	} else if res != nil {
-		return res, nil
-	}
-	return nil, nil
-}
-
 // SelectionForMessage returns the SelectionResult that drove the turn
 // which produced the given target message. Pure DB lookup — this is
 // the primary path for auditing any historical turn, live or long past.
@@ -969,13 +937,13 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	// zero-value engine fields).
 	engineCfg := r.Engine().Config()
 	engine, err := json.Marshal(map[string]any{
-		"edge_threshold":          engineCfg.EdgeThreshold,
-		"score_floor":             engineCfg.ScoreFloor,
-		"z_score_threshold":       engineCfg.ZScoreThreshold,
-		"min_batch_stddev":        engineCfg.MinBatchStdDev,
-		"radius_size":             engineCfg.RadiusSize,
-		"rerank_top_k":            engineCfg.RerankTopK,
-		"context_budget_tokens":   engineCfg.ContextBudgetTokens,
+		"edge_threshold":        engineCfg.EdgeThreshold,
+		"score_floor":           engineCfg.ScoreFloor,
+		"z_score_threshold":     engineCfg.ZScoreThreshold,
+		"min_batch_stddev":      engineCfg.MinBatchStdDev,
+		"radius_size":           engineCfg.RadiusSize,
+		"rerank_top_k":          engineCfg.RerankTopK,
+		"context_budget_tokens": engineCfg.ContextBudgetTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal engine config: %w", err)
@@ -1036,12 +1004,6 @@ func (r *queryResolver) AgentState(ctx context.Context, threadID string) (*Agent
 	if st.DurationLimit != "" {
 		result.DurationLimit = &st.DurationLimit
 	}
-	// Plan content: in-memory only. Considered disk-fallback for restart
-	// survival (plan.adoc persists), but that resurrects any plan whose
-	// in-memory state was reset via stopAgent/rejectPlan — the file
-	// on disk stays. Until reject/approve explicitly delete or mark the
-	// artifact, in-memory is the source of UI truth. The model can still
-	// FileRead plan.adoc directly during implementation.
 	if pc := r.GetPlan(threadID); pc != "" {
 		result.PlanContent = &pc
 	}

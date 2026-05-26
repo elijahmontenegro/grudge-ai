@@ -74,7 +74,7 @@ type Kernel struct {
 	Config     *config.Config
 	DB         *storage.DB
 	Main       core.Completer
-	Classifier core.Classifier
+	Classifier core.Scorer
 	Searcher   *search.Searcher
 	Assembler  *prompt.Assembler
 	Hooks      *hooks.Dispatcher
@@ -451,15 +451,6 @@ func (k *Kernel) GetSelection(eventID string) (*pb.SelectionResult, bool) {
 	defer k.selectionMu.RUnlock()
 	res, ok := k.selectionResults[eventID]
 	return res, ok
-}
-
-// LatestSelectionID returns the most recent selection event id for
-// a thread, or empty if none recorded this session.
-func (k *Kernel) LatestSelectionID(threadID string) (string, bool) {
-	k.selectionMu.RLock()
-	defer k.selectionMu.RUnlock()
-	id, ok := k.latestSelection[threadID]
-	return id, ok
 }
 
 // CitationCount returns how many times this message has been

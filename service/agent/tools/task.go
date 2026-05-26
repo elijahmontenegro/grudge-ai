@@ -112,3 +112,53 @@ func registerTaskTools(c *buildCtx) error {
 	)
 	return c.addTool("TaskOutput", taskOutput, err)
 }
+
+type TodoWriteArgs struct {
+	Tasks []string `json:"tasks"`
+}
+type TodoWriteResult struct {
+	Success bool `json:"success"`
+}
+
+type TaskCreateArgs struct {
+	Subject     string `json:"subject"`
+	Description string `json:"description"`
+}
+type TaskCreateResult struct {
+	TaskID string `json:"task_id"`
+}
+
+type TaskGetArgs struct {
+	TaskID string `json:"task_id"`
+}
+type TaskGetResult struct {
+	Subject string `json:"subject"`
+	Status  string `json:"status"`
+}
+
+type TaskUpdateArgs struct {
+	TaskID string `json:"task_id"`
+	Status string `json:"status"`
+}
+type TaskUpdateResult struct {
+	Success bool `json:"success"`
+}
+
+type TaskListArgs struct{}
+type TaskListResult struct {
+	Tasks []string `json:"tasks"`
+}
+
+type TaskStopArgs struct {
+	TaskID string `json:"task_id"`
+}
+type TaskStopResult struct {
+	Success bool `json:"success"`
+}
+
+type TaskOutputArgs struct {
+	TaskID string `json:"task_id"`
+}
+type TaskOutputResult struct {
+	Output string `json:"output"`
+}

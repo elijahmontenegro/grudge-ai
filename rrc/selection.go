@@ -36,7 +36,7 @@ func edgeScoreUnderConfig(edge *pb.Edge, _ EngineConfig) float64 {
 // whose raw components still pass the current weights contribute
 // their new fused score. This is how config change takes effect
 // retroactively without a separate rebuild path.
-func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.SelectionScope, cfg EngineConfig) ([]selectionEntry, map[string]float64) {
+func extractSubgraph(d *dag, promptID string, promptThreadID string, scope pb.SelectionScope, cfg EngineConfig) ([]selectionEntry, map[string]float64) {
 	visited := make(map[string]bool)
 	visited[promptID] = true
 	belowFloor := make(map[string]float64) // messageID -> score (excluded by floor)
@@ -45,7 +45,7 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 	heap.Init(pq)
 
 	// Seed with direct prerequisites of the prompt
-	for _, edge := range dag.Prerequisites(promptID) {
+	for _, edge := range d.Prerequisites(promptID) {
 		if !scopeAllows(edge, promptThreadID, scope) {
 			continue
 		}
@@ -85,7 +85,7 @@ func extractSubgraph(dag *DAG, promptID string, promptThreadID string, scope pb.
 		selected = append(selected, entry)
 
 		// Push prerequisites with multiplicatively decayed scores
-		for _, edge := range dag.Prerequisites(entry.MessageID) {
+		for _, edge := range d.Prerequisites(entry.MessageID) {
 			if visited[edge.FromMessageId] {
 				continue
 			}

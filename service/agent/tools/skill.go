@@ -50,3 +50,11 @@ func registerSkillTools(c *buildCtx) error {
 	)
 	return c.addTool("TodoWrite", todoWrite, err)
 }
+
+type SkillArgs struct {
+	Name string `json:"name"`
+	Args string `json:"args,omitempty"`
+}
+type SkillResult struct {
+	Output string `json:"output"`
+}

@@ -83,3 +83,18 @@ func registerWebTools(c *buildCtx) error {
 	)
 	return c.addTool("WebFetch", webFetch, err)
 }
+
+type WebSearchArgs struct {
+	Query string `json:"query"`
+}
+type WebSearchResult struct {
+	Results []string `json:"results"`
+}
+
+type WebFetchArgs struct {
+	URL string `json:"url"`
+}
+type WebFetchResult struct {
+	Output     string `json:"output"`
+	StatusCode int    `json:"status_code"`
+}

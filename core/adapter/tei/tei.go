@@ -73,7 +73,7 @@ func (p *provider) Embedder(_ string) (core.Embedder, error) {
 	}, nil
 }
 
-func (p *provider) Classifier(_ string) (core.Classifier, error) {
+func (p *provider) Classifier(_ string) (core.Scorer, error) {
 	return &classifier{
 		baseURL: p.cfg.BaseURL,
 		client:  p.client,

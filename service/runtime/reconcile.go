@@ -81,7 +81,7 @@ func reconcileRow(ctx context.Context, st *storage.AgentState, deps Deps) string
 	}
 
 	// Autonomous + Running: try to auto-resume.
-	remaining, reason := ComputeRemainingBudget(st)
+	remaining, reason := st.RemainingBudget()
 	if reason != "" {
 		resetToIdle(st.ThreadID, deps)
 		return "reset to idle (" + reason + ")"

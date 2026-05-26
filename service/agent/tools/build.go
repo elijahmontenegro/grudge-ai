@@ -45,21 +45,25 @@ func DefaultPermission(toolName string) string {
 }
 
 // ToolDeps is the per-thread bundle every tool needs at
-// construction time. The Agent field is the runner-side contract
-// (operations: spawn subagent, ask user, approval gate, etc.); the
-// remaining fields are static per-thread data (workspace, paths,
-// permissions, skills) that tools read but don't call into.
+// construction time. The capability fields (SubAgent / Asker /
+// Mode / Approver / HookFirer) are runner-side operations the
+// runtime supplies; the remaining fields are static per-thread
+// data (workspace, paths, permissions, skills) that tools read but
+// don't call into.
 //
-// Splitting "operations" (Agent interface) from "data" (this
-// struct's remaining fields) gives compile-time satisfaction-
-// checking on the operations — a runner that doesn't implement
-// every method fails to compile here instead of crashing later on
-// a nil-closure deref.
+// Splitting "operations" (interfaces) from "data" (the remaining
+// fields) gives compile-time satisfaction-checking on the
+// operations — a runner that doesn't implement every method fails
+// to compile here instead of crashing later on a nil-closure deref.
 type ToolDeps struct {
-	// Agent is the runner-side capability contract. See contract.go.
-	// Must be non-nil; BuildTools doesn't validate at construction
-	// because the type system already does.
-	Agent Agent
+	// Per-capability handles into the runtime. Each is satisfied
+	// structurally by the runtime's *toolAgent value; tools depend
+	// only on the capabilities they use (see contract.go).
+	SubAgent  SubAgentOps
+	Asker     UserAsker
+	Mode      ModeOps
+	Approver  Approver
+	HookFirer HookFirer
 
 	// Sandboxed routes Bash through the Docker sandbox AND confines
 	// every file tool to Workspace. Prompt-injected paths cannot reach
@@ -166,7 +170,7 @@ func newBuildCtx(deps ToolDeps) *buildCtx {
 	// write tools. Writes to the plan directory are exempt — the agent
 	// needs to write plan artifacts.
 	planGuard := func(path string) error {
-		if !deps.Agent.IsPlanMode() {
+		if !deps.Mode.IsPlanMode() {
 			return nil
 		}
 		if deps.PlanDir != "" && path != "" && strings.HasPrefix(filepath.Clean(path), filepath.Clean(deps.PlanDir)) {
@@ -191,7 +195,7 @@ func newBuildCtx(deps ToolDeps) *buildCtx {
 			return nil
 		}
 		callID := fmt.Sprintf("call-%s-%d", toolName, callSeq.Add(1))
-		approved, err := deps.Agent.RequireApproval(ctx, callID, toolName, argsJSON)
+		approved, err := deps.Approver.RequireApproval(ctx, callID, toolName, argsJSON)
 		if err != nil {
 			return fmt.Errorf("approval: %w", err)
 		}
@@ -202,7 +206,7 @@ func newBuildCtx(deps ToolDeps) *buildCtx {
 	}
 
 	fireHook := func(ctx context.Context, event, toolName string) error {
-		return deps.Agent.FireHook(ctx, event, toolName)
+		return deps.HookFirer.FireHook(ctx, event, toolName)
 	}
 
 	execCmd := func(ctx context.Context, command, dir string) (string, int) {

@@ -35,14 +35,9 @@ CREATE INDEX IF NOT EXISTS idx_tick_traces_thread_id ON tick_traces(thread_id, c
 // content-only — vec0 forbids them in KNN WHERE clauses, so the
 // natural query `WHERE embedding MATCH ? AND k = ? AND model_id = ?`
 // was failing with "illegal WHERE constraint on auxiliary column".
-//
-// V5's workaround was wrong on principle: fetch all neighbors,
-// filter model_id in Go. That defeats vec0's partitioned index and
-// gives unbounded false-neighbor rates when multiple models'
-// vectors coexist (model swaps, A/B tests). The partition-key
-// declaration is what vec0 expects for "this column scopes the
-// index" — KNN runs only within the partition the WHERE selects,
-// sub-linear and exact.
+// The partition-key declaration is what vec0 expects for "this
+// column scopes the index" — KNN runs only within the partition the
+// WHERE selects, sub-linear and exact.
 //
 // Per directive: no vector migration. chunk_vectors and the rowid
 // mapping table are dropped and recreated; the corpus re-embeds as
@@ -123,9 +118,9 @@ END;
 // defaults to L2 — under L2 with unit-normalized embeddings the
 // *ordering* matches cosine but the returned distance value is L2²,
 // so `similarity = 1 - distance` is mathematically wrong. The engine's
-// Layer-1-score path (post-Phase-3) consumes `1 - distance` as a
-// similarity in [0, 1], so the conversion must be honest. Declaring
-// the metric makes vec0 return cosine distance directly.
+// Layer-1-score path consumes `1 - distance` as a similarity in
+// [0, 1], so the conversion must be honest. Declaring the metric
+// makes vec0 return cosine distance directly.
 //
 // Per directive: no vector migration. chunk_vectors and the rowid
 // mapping table are dropped and recreated; the corpus re-embeds as

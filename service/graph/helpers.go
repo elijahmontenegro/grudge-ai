@@ -6,10 +6,6 @@ import (
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 )
 
-// (planDirForThread + threadIDPattern moved to service/runtime/path.go.
-// Both the runtime factory and the UpdatePlanSource resolver import it from
-// there; graph no longer owns the pattern.)
-
 // protoRoleToDisplay maps proto roles to frontend-friendly names.
 // Decouples the frontend from proto enum string representations.
 func protoRoleToDisplay(r pb.Role) string {

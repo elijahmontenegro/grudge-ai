@@ -24,7 +24,7 @@ func registerPlanTools(c *buildCtx) error {
 			if err := c.requireApproval(ctx, "EnterPlanMode", marshalArgs(args)); err != nil {
 				return PlanModeResult{}, err
 			}
-			if err := c.deps.Agent.SetMode(ctx, "plan"); err != nil {
+			if err := c.deps.Mode.SetMode(ctx, "plan"); err != nil {
 				return PlanModeResult{}, err
 			}
 			if c.deps.PlanDir != "" {
@@ -54,10 +54,17 @@ func registerPlanTools(c *buildCtx) error {
 				}
 			}
 			if planContent != "" {
-				c.deps.Agent.OnPlanContent(planContent)
+				c.deps.Mode.OnPlanContent(planContent)
 			}
 			return PlanModeResult{Success: true}, nil
 		},
 	)
 	return c.addTool("ExitPlan", exitPlan, err)
+}
+
+type PlanModeArgs struct {
+	ThreadID string `json:"thread_id"`
+}
+type PlanModeResult struct {
+	Success bool `json:"success"`
 }

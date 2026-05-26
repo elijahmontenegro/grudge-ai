@@ -110,7 +110,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 		selectedPtrToID := make(map[*pb.LLMMessage]string)
 		for _, msg := range req.Corpus {
 			if selectedIDs[msg.Id] {
-				llm := MessageToLLM(msg)
+				llm := messageToLLM(msg)
 				selectedMsgs = append(selectedMsgs, llm)
 				selectedPtrToID[llm] = msg.Id
 				wireIDs = append(wireIDs, msg.Id)
@@ -301,7 +301,7 @@ func buildRadiusSlice(threadCorpus []*pb.Message, selectedIDs map[string]bool, r
 		if selectedIDs[m.Id] {
 			return
 		}
-		out = append(out, MessageToLLM(m))
+		out = append(out, messageToLLM(m))
 		*wireIDs = append(*wireIDs, m.Id)
 	}
 	for _, m := range prepended {
@@ -331,12 +331,10 @@ func hasTextBlock(blocks []*pb.ContentBlock) bool {
 	return false
 }
 
-// MessageToLLM lifts a stored Message into the wire-format
+// messageToLLM lifts a stored Message into the wire-format
 // LLMMessage. The role and content blocks pass through unchanged;
 // storage-only fields (id, position, threadId, timestamps) drop.
-// Pure pb→pb projection — kept in rrc so library consumers
-// don't need to vendor it.
-func MessageToLLM(msg *pb.Message) *pb.LLMMessage {
+func messageToLLM(msg *pb.Message) *pb.LLMMessage {
 	return &pb.LLMMessage{
 		Role:    msg.Role,
 		Content: msg.Content,
@@ -352,7 +350,7 @@ type AssembleRequest struct {
 	Scope        pb.SelectionScope
 	ThreadID     string
 	System       *pb.LLMMessage
-	Resolver     ExcludingResolver
+	Resolver     excludingResolver
 	Rules        []Rule
 	Budget       int
 	HeadroomPct  float64
@@ -396,16 +394,12 @@ type AssembleTelemetry struct {
 	ShedMs    int64              // budget shed loop + token estimation + radius build
 }
 
-// ExcludingResolver augments the rule-pipeline Resolver with an
+// excludingResolver augments the rule-pipeline Resolver with an
 // ExcludeIDs seed call invoked by Assemble before each shed
 // iteration's rule pass. The seed prevents rules from re-fetching
 // any message already contributing to the wire under its original
 // id.
-//
-// Exists as a separate interface (rather than an extra method on
-// Resolver) so a rule-pipeline-only consumer (no Assemble
-// integration) doesn't have to implement ExcludeIDs.
-type ExcludingResolver interface {
+type excludingResolver interface {
 	Resolver
 	ExcludeIDs(ids []string)
 }

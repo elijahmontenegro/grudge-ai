@@ -73,21 +73,3 @@ func (d *DB) GetSelectionForMessage(messageID string) (*pb.SelectionResult, erro
 	return result, nil
 }
 
-// LatestSelectionForThread returns the most recent SelectionResult for
-// a thread — backs the old "latest" convenience that the introspection
-// panel's live view consumes.
-func (d *DB) LatestSelectionForThread(threadID string) (*pb.SelectionResult, error) {
-	var blob []byte
-	err := d.QueryRow(
-		`SELECT result FROM selections WHERE thread_id = ? ORDER BY created_at DESC LIMIT 1`,
-		threadID,
-	).Scan(&blob)
-	if err != nil {
-		return nil, nil
-	}
-	result := &pb.SelectionResult{}
-	if err := proto.Unmarshal(blob, result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}

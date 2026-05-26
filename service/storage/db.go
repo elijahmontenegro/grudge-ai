@@ -23,13 +23,12 @@ type DB struct {
 // Open creates or opens the SQLite database at the given data directory.
 //
 // Concurrency notes:
-//   - modernc/sqlite ignores the `?_journal_mode=WAL` DSN form other
-//     drivers accept; it wants `?_pragma=journal_mode(WAL)` instead.
-//     Previously we used the other-driver form and it was silently
-//     dropped — result: journal_mode stayed at "delete" and
-//     busy_timeout stayed at 0, so any concurrent write failed
-//     instantly with SQLITE_BUSY. Fixed by passing pragmas in
-//     modernc's format so every pool connection gets them on open.
+//   - modernc/sqlite needs pragmas in `?_pragma=journal_mode(WAL)` form;
+//     the bare `?_journal_mode=WAL` DSN form other drivers accept is
+//     silently dropped, leaving journal_mode at "delete" and
+//     busy_timeout at 0 — any concurrent write then fails instantly
+//     with SQLITE_BUSY. Pragmas are passed in modernc's format so every
+//     pool connection gets them on open.
 //   - No MaxOpenConns cap. An earlier iteration set it to 1 to serialize
 //     writes, but that blocked long-running reads (subscriptions, large
 //     corpus fetches) against every incoming query — the UI hung.

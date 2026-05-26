@@ -71,7 +71,7 @@ func New(cfg Config) any {
 	}
 }
 
-func (p *provider) Classifier(_ string) (core.Classifier, error) {
+func (p *provider) Classifier(_ string) (core.Scorer, error) {
 	return &classifier{
 		baseURL: p.cfg.BaseURL,
 		model:   p.cfg.Model,
@@ -256,9 +256,8 @@ func (c *classifier) scoreOne(ctx context.Context, query, document string) (floa
 		if math.IsInf(floor, -1) {
 			// Degenerate: only -inf entries. Treat as no-info → 0.5
 			// would mislead; the only Yes signal we have is its own
-			// logprob, fall back to bare yes_logprob/5 (legacy form,
-			// known capped at 0.5 but at least monotonic in Yes
-			// confidence).
+			// logprob, so use a bare yes_logprob/5 sigmoid — capped
+			// at 0.5 but monotonic in Yes confidence.
 			return 1.0 / (1.0 + math.Exp(-yesLogprob/5.0)), nil
 		}
 		noLogprob = floor

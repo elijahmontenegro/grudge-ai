@@ -226,7 +226,6 @@ type Query {
   thread(id: ID!): Thread
   search(query: String!, limit: Int): [SearchResult!]!
   messages(threadId: ID!, limit: Int, offset: Int): [Message!]!
-  selectionResult(eventId: ID!): SelectionResult
   selectionForMessage(messageId: ID!): SelectionResult
   settings: Settings!
   viewState(threadId: ID!): ViewState

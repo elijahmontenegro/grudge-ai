@@ -33,11 +33,11 @@ import (
 // Messages are immutable → cached scores never become stale.
 type Engine struct {
 	mu         sync.Mutex
-	classifier Classifier
-	dag        *DAG
+	classifier Scorer
+	dag        *dag
 	scores     *scoreCache
 	cfg        EngineConfig
-	oracle     ChunkOracle // optional — nil falls back to full-text-as-single-chunk fallback
+	oracle     ChunkOracle
 }
 
 // ChunkRef is a chunk's content plus optional cached vector and
@@ -159,7 +159,7 @@ func WithLoadedScores(scores []PersistedScore) Option {
 // required external dependency; everything else (oracle, persister,
 // hydrated DAG / scores) flows in via Option. The engine is
 // immutable post-construction — any setting change rebuilds.
-func NewEngine(cfg EngineConfig, classifier Classifier, opts ...Option) *Engine {
+func NewEngine(cfg EngineConfig, classifier Scorer, opts ...Option) *Engine {
 	e := &Engine{
 		classifier: classifier,
 		dag:        newDAG(),
@@ -280,7 +280,6 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 	// implementation freedom (we chose max-merge for its fact-level
 	// retrieval semantics).
 	bestScore := make(map[string]float64, len(priors))
-	bestCE := make(map[string]float64, len(priors)) // same as bestScore; tracked separately in case weights evolve
 	var totalCached, totalReranked, totalRetrieved int
 
 	// scopePred is the predicate handed to NearestChunks. The corpus
@@ -398,7 +397,6 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 			priorMsgID := sc.ref.MessageID
 			if sc.score > bestScore[priorMsgID] {
 				bestScore[priorMsgID] = sc.score
-				bestCE[priorMsgID] = sc.score
 			}
 		}
 	}
@@ -425,7 +423,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 	}
 	candidates := make([]candidate, 0, len(priors))
 	for _, p := range priors {
-		if _, rescored := bestCE[p.Id]; !rescored {
+		if _, rescored := bestScore[p.Id]; !rescored {
 			continue
 		}
 		candidates = append(candidates, candidate{prior: p, ce: bestScore[p.Id]})

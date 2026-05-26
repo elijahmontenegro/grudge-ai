@@ -20,6 +20,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/emontenegr/spidey/service/storage"
+
 	"github.com/google/uuid"
 )
 
@@ -34,11 +36,6 @@ const MaxAttachmentBytes = 100 * 1024 * 1024
 // excerpt that RRC scores is capped, so a 50MB log file doesn't
 // produce hundreds of chunks nobody wants scored.
 const InlinedTextCap = 64 * 1024
-
-// threadIDRe mirrors the regex already enforced by planDirForThread.
-// Gates every filesystem operation keyed on incoming threadID so a
-// malicious request can't name its way out of the workspace.
-var threadIDRe = regexp.MustCompile(`^thread-\d+$`)
 
 // fileIDRe validates UUIDs we return from upload before using them
 // in paths on download. Defense in depth — clients construct the
@@ -72,7 +69,7 @@ func (m *Manager) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	threadID := strings.TrimPrefix(r.URL.Path, "/api/attachments/")
 	threadID = strings.Trim(threadID, "/")
-	if !threadIDRe.MatchString(threadID) {
+	if err := storage.ValidateThreadID(threadID); err != nil {
 		http.Error(w, "invalid thread id", http.StatusBadRequest)
 		return
 	}
@@ -200,7 +197,7 @@ func (m *Manager) HandleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	threadID, fileID, filename := parts[0], parts[1], parts[2]
-	if !threadIDRe.MatchString(threadID) {
+	if err := storage.ValidateThreadID(threadID); err != nil {
 		http.Error(w, "invalid thread id", http.StatusBadRequest)
 		return
 	}

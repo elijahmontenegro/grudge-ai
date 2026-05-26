@@ -95,9 +95,8 @@ func ProtoToGenaiContent(msg *pb.LLMMessage) *genai.Content {
 			// Re-hydrate the stored JSON back into a map so the model
 			// sees the original tool schema (e.g. `{answers: {...}}`
 			// for AskUserQuestion), not a synthetic `{result: ""}`.
-			// Falls back to `{result: <raw>}` when the content wasn't
-			// valid JSON (legacy rows or tools that returned a plain
-			// string), so old data keeps flowing.
+			// Falls back to `{result: <raw>}` when the content isn't
+			// valid JSON (tools that return a plain string).
 			var resp map[string]any
 			if v.ToolResult.Content != "" {
 				if err := json.Unmarshal([]byte(v.ToolResult.Content), &resp); err != nil || resp == nil {

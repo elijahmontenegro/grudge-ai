@@ -35,3 +35,11 @@ func registerBashTool(c *buildCtx) error {
 	)
 	return c.addTool("Bash", bash, err)
 }
+
+type BashArgs struct {
+	Command string `json:"command"`
+}
+type BashResult struct {
+	Output   string `json:"output"`
+	ExitCode int    `json:"exit_code"`
+}

@@ -1,18 +1,13 @@
-// Command smoke exercises the post-refactor substrate wiring against
-// the live tei-embed and vllm services. Validates four things in
-// one binary:
+// Command smoke exercises the substrate wiring against the live
+// tei-embed and vllm services. Validates:
 //
-//  1. Phase 12 (Provider segregation): NewProvider returns `any`;
-//     the adapter type-asserts cleanly to the per-role interface
-//     (ClassifierProvider for zerank, EmbedderProvider for tei).
-//  2. Phase 13 (Embedder single-method): tei.Embed(ctx, role, texts)
-//     returns vectors for both RoleQuery and RoleDocument.
-//  3. Phase 11 (core/httpc/retry): zerank uses the new retry package
-//     without import errors.
-//  4. The substrate as a whole produces meaningful values: zerank
-//     yields a non-trivial relevance score for a (query, document)
-//     pair where the document genuinely answers the query, and the
-//     embedder returns a 1024-dim normalized vector.
+//  1. NewProvider returns a value that type-asserts cleanly to the
+//     per-role interface (ClassifierProvider for zerank,
+//     EmbedderProvider for tei).
+//  2. tei.Embed returns vectors for both RoleQuery and RoleDocument.
+//  3. zerank yields a non-trivial relevance score for a (query,
+//     document) pair where the document genuinely answers the query.
+//  4. The embedder returns a 1024-dim normalized vector.
 //
 // Not a substitute for a full end-to-end service test (which would
 // require a configured main completer); is the strongest live-

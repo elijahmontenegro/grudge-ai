@@ -32,11 +32,10 @@ type EmbedderProvider interface {
 	Embedder(model string) (Embedder, error)
 }
 
-// ClassifierProvider produces Classifier instances for a specific
-// model. Classifier is the cross-encoder reranker role; the
-// provider may also be exporting an Embedder for the same backend
-// (e.g. TEI exposes both), which it expresses by implementing both
-// role interfaces.
+// ClassifierProvider produces Scorer instances for the
+// cross-encoder reranker role. A backend that exposes both
+// embedder and reranker (e.g. TEI) implements both role
+// interfaces.
 type ClassifierProvider interface {
-	Classifier(model string) (Classifier, error)
+	Classifier(model string) (Scorer, error)
 }

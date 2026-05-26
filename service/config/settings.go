@@ -20,7 +20,6 @@ type Settings struct {
 	Hooks       []HookConfig              `json:"hooks"`
 	Preferences map[string]string         `json:"preferences"`
 	Engine      EngineConfig              `json:"engine"`
-	UserName    string                    `json:"user_name,omitempty"`
 }
 
 // EngineConfig holds live-tunable RRC engine parameters. Mirrors
@@ -41,22 +40,14 @@ type EngineConfig struct {
 	PerMsgDelimiterTokens int     `json:"per_msg_delimiter_tokens"`
 }
 
-// GetUserName returns the configured display name, in priority:
-//  1. `preferences.name` — the field the Settings UI writes to.
-//  2. top-level `user_name` — a legacy slot some callers may still set.
-//  3. `$USER` / `$USERNAME` — OS login fallback (e.g. "alice" on Windows).
-//  4. literal "User" as a last resort.
-// Previously the UI-entered name never reached the agent because the
-// UI wrote to preferences.name but this function only checked
-// s.UserName, falling through to the Windows login on every turn.
+// GetUserName returns the configured display name. Priority:
+// `preferences.name` (Settings UI writes here) → `$USER` / `$USERNAME`
+// (OS login) → literal "User".
 func (s *Settings) GetUserName() string {
 	if s.Preferences != nil {
 		if name := strings.TrimSpace(s.Preferences["name"]); name != "" {
 			return name
 		}
-	}
-	if s.UserName != "" {
-		return s.UserName
 	}
 	if name := os.Getenv("USER"); name != "" {
 		return name
@@ -215,9 +206,9 @@ func probeProviders(s *Settings) {
 	}
 	// SearXNG-served meta-search at port 8888 — the production search
 	// provider for the WebSearch tool. Container source at
-	// containers/searxng/ (or infra/searxng/ post-Phase-14). Brought up
-	// alongside vllm + tei-embed by task substrate:up; the FirstRun
-	// probe defaults the config when the service answers.
+	// containers/searxng/. Brought up alongside vllm + tei-embed by
+	// task substrate:up; the FirstRun probe defaults the config when
+	// the service answers.
 	if probeHTTP("http://localhost:8888/") {
 		s.Providers["search"] = ProviderConfig{
 			Adapter: "searxng",

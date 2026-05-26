@@ -16,12 +16,6 @@ import (
 // facilities (DB, Pubsub, Approvals, Registry, PlanStore, Hooks)
 // plus the per-thread threadID. Each method translates a tool's
 // abstract request into the concrete kernel call.
-//
-// Pre-Phase-9b this same logic lived as eight anonymous closures
-// constructed in buildToolDeps. Promoting them to methods on a
-// typed struct shifts contract-satisfaction from "did the caller
-// remember to populate every closure field?" (runtime nil-deref)
-// to "does *toolAgent satisfy tools.Agent?" (compile-time error).
 type toolAgent struct {
 	threadID  string
 	db        *storage.DB

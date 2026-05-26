@@ -1,4 +1,4 @@
-package adk
+package search
 
 // StoreResolver — concrete Resolver backed by the persisted corpus
 // and the reranker score cache. Built fresh per query: the query

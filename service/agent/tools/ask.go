@@ -98,7 +98,7 @@ func registerAskUserTool(c *buildCtx) error {
 			if err := validateAskUserArgs(args); err != nil {
 				return AskUserResult{Answers: map[string]string{}}, err
 			}
-			answers, err := c.deps.Agent.AskUser(ctx, args)
+			answers, err := c.deps.Asker.AskUser(ctx, args)
 			if err != nil {
 				return AskUserResult{}, err
 			}
@@ -106,4 +106,36 @@ func registerAskUserTool(c *buildCtx) error {
 		},
 	)
 	return c.addTool("AskUser", askUser, err)
+}
+
+// AskUserOption is one choice offered for a single question. Label is
+// what's shown; Description is an optional clarifier beneath the label.
+type AskUserOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// AskUserQuestion carries one prompt. Structure mirrors Claude Code's
+// AskUserQuestion tool so the same prompting conventions carry over:
+// a short `header` (like a setting name), the question itself, optional
+// `options` (2–4 concise choices), and `multiSelect` when multiple
+// answers are allowed at once.
+type AskUserQuestion struct {
+	Question    string          `json:"question"`
+	Header      string          `json:"header,omitempty"`
+	Options     []AskUserOption `json:"options,omitempty"`
+	MultiSelect bool            `json:"multiSelect,omitempty"`
+}
+
+// AskUserArgs accepts 1–4 questions in a single tool call. The UI walks
+// through them sequentially and batches answers back as one map.
+type AskUserArgs struct {
+	Questions []AskUserQuestion `json:"questions"`
+}
+
+// AskUserResult returns the user's answers keyed by question text so the
+// model can correlate each answer with the question it corresponds to
+// without positional matching.
+type AskUserResult struct {
+	Answers map[string]string `json:"answers"`
 }

@@ -170,3 +170,55 @@ func registerWriteTools(c *buildCtx) error {
 	)
 	return c.addTool("NotebookEdit", notebookEdit, err)
 }
+
+type FileReadArgs struct {
+	Path   string `json:"path"`
+	Offset int    `json:"offset,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+}
+type FileReadResult struct {
+	Output string `json:"output"`
+}
+
+type FileEditArgs struct {
+	Path      string `json:"path"`
+	OldString string `json:"old_string"`
+	NewString string `json:"new_string"`
+}
+type FileEditResult struct {
+	Success bool `json:"success"`
+}
+
+type FileWriteArgs struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+type FileWriteResult struct {
+	Success bool   `json:"success"`
+	Path    string `json:"path,omitempty"`
+}
+
+type GlobArgs struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path,omitempty"`
+}
+type GlobResult struct {
+	Files []string `json:"files"`
+}
+
+type GrepArgs struct {
+	Pattern string `json:"pattern"`
+	Path    string `json:"path,omitempty"`
+}
+type GrepResult struct {
+	Matches []string `json:"matches"`
+}
+
+type NotebookEditArgs struct {
+	Path    string `json:"path"`
+	CellIdx int    `json:"cell_index"`
+	Content string `json:"content"`
+}
+type NotebookEditResult struct {
+	Success bool `json:"success"`
+}

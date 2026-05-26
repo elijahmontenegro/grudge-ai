@@ -12,6 +12,7 @@ import (
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/rrc/chunk"
+	"github.com/emontenegr/spidey/service/search"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
@@ -188,7 +189,7 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 		var excludeIDs []string
 
 		for {
-			resolver, rerr := NewStoreResolver(r.db, r.threadID, queryMsg.Id, r.rerankerModelID, r.Scope)
+			resolver, rerr := search.NewStoreResolver(r.db, r.threadID, queryMsg.Id, r.rerankerModelID, r.Scope)
 			if rerr != nil {
 				log.Printf("RRC: resolver build failed thread=%s: %v — assembling without rectification", r.threadID, rerr)
 			}

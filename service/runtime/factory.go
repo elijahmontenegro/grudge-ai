@@ -108,12 +108,18 @@ func Build(threadID string, deps Deps) (*Entry, error) {
 
 // buildToolDeps assembles tools.ToolDeps from runtime Deps + the
 // per-thread fixings. Operational dependencies live behind the
-// tools.Agent interface (constructed via newToolAgent); the
-// remaining fields are static per-thread data (workspace, paths,
-// skills, permissions).
+// per-capability tools interfaces (SubAgent / Asker / Mode /
+// Approver / HookFirer); a single *toolAgent satisfies all five
+// structurally and is shared across the fields. Remaining fields
+// are static per-thread data (workspace, paths, skills, permissions).
 func buildToolDeps(threadID string, thread *pb.Thread, workspace string, skillDefs []tools.SkillDef, searchURL string, deps Deps) tools.ToolDeps {
+	ta := newToolAgent(threadID, deps)
 	return tools.ToolDeps{
-		Agent:       newToolAgent(threadID, deps),
+		SubAgent:    ta,
+		Asker:       ta,
+		Mode:        ta,
+		Approver:    ta,
+		HookFirer:   ta,
 		Sandboxed:   thread.Sandboxed,
 		Workspace:   workspace,
 		WorkingDirs: thread.WorkingDirs,
@@ -144,7 +150,7 @@ func assembleInstruction(threadID string, thread *pb.Thread, deps Deps) (string,
 		}
 	}
 	spideyMD := prompt.LoadSpideyMD(thread.WorkingDirs)
-	planDir, err := PlanDirForThread(deps.Config.DataDir, threadID)
+	planDir, err := storage.PlanDirForThread(deps.Config.DataDir, threadID)
 	if err != nil {
 		return "", fmt.Errorf("plan dir: %w", err)
 	}

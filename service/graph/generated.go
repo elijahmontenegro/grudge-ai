@@ -131,7 +131,6 @@ type ComplexityRoot struct {
 		RecentActivity      func(childComplexity int, limit *int) int
 		Search              func(childComplexity int, query string, limit *int) int
 		SelectionForMessage func(childComplexity int, messageID string) int
-		SelectionResult     func(childComplexity int, eventID string) int
 		Settings            func(childComplexity int) int
 		Skills              func(childComplexity int) int
 		Thread              func(childComplexity int, id string) int
@@ -312,7 +311,6 @@ type QueryResolver interface {
 	Thread(ctx context.Context, id string) (*v1.Thread, error)
 	Search(ctx context.Context, query string, limit *int) ([]*SearchResult, error)
 	Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*v1.Message, error)
-	SelectionResult(ctx context.Context, eventID string) (*v1.SelectionResult, error)
 	SelectionForMessage(ctx context.Context, messageID string) (*v1.SelectionResult, error)
 	Settings(ctx context.Context) (*Settings, error)
 	ViewState(ctx context.Context, threadID string) (*ViewState, error)
@@ -887,17 +885,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.SelectionForMessage(childComplexity, args["messageId"].(string)), true
-	case "Query.selectionResult":
-		if e.ComplexityRoot.Query.SelectionResult == nil {
-			break
-		}
-
-		args, err := ec.field_Query_selectionResult_args(ctx, rawArgs)
-		if err != nil {
-			return 0, false
-		}
-
-		return e.ComplexityRoot.Query.SelectionResult(childComplexity, args["eventId"].(string)), true
 	case "Query.settings":
 		if e.ComplexityRoot.Query.Settings == nil {
 			break
@@ -1978,17 +1965,6 @@ func (ec *executionContext) field_Query_selectionForMessage_args(ctx context.Con
 		return nil, err
 	}
 	args["messageId"] = arg0
-	return args, nil
-}
-
-func (ec *executionContext) field_Query_selectionResult_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
-	var err error
-	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "eventId", ec.unmarshalNID2string)
-	if err != nil {
-		return nil, err
-	}
-	args["eventId"] = arg0
 	return args, nil
 }
 
@@ -4515,59 +4491,6 @@ func (ec *executionContext) fieldContext_Query_messages(ctx context.Context, fie
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_messages_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
-		ec.Error(ctx, err)
-		return fc, err
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _Query_selectionResult(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_Query_selectionResult,
-		func(ctx context.Context) (any, error) {
-			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().SelectionResult(ctx, fc.Args["eventId"].(string))
-		},
-		nil,
-		ec.marshalOSelectionResult2ᚖgithubᚗcomᚋemontenegrᚋspideyᚋgenᚋgoᚋspideyᚋv1ᚐSelectionResult,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_Query_selectionResult(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "Query",
-		Field:      field,
-		IsMethod:   true,
-		IsResolver: true,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			switch field.Name {
-			case "eventId":
-				return ec.fieldContext_SelectionResult_eventId(ctx, field)
-			case "scope":
-				return ec.fieldContext_SelectionResult_scope(ctx, field)
-			case "threadId":
-				return ec.fieldContext_SelectionResult_threadId(ctx, field)
-			case "selected":
-				return ec.fieldContext_SelectionResult_selected(ctx, field)
-			case "excluded":
-				return ec.fieldContext_SelectionResult_excluded(ctx, field)
-			}
-			return nil, fmt.Errorf("no field named %q was found under type SelectionResult", field.Name)
-		},
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			err = ec.Recover(ctx, r)
-			ec.Error(ctx, err)
-		}
-	}()
-	ctx = graphql.WithFieldContext(ctx, fc)
-	if fc.Args, err = ec.field_Query_selectionResult_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -10120,25 +10043,6 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
-				return res
-			}
-
-			rrm := func(ctx context.Context) graphql.Marshaler {
-				return ec.OperationContext.RootResolverMiddleware(ctx,
-					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
-		case "selectionResult":
-			field := field
-
-			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Query_selectionResult(ctx, field)
 				return res
 			}
 

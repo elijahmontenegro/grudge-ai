@@ -1,14 +1,7 @@
-// Command calibrate re-runs the Phase-9 labeled eval pairs through
-// the corrected zerank scorer and produces a precision/recall sweep
-// across candidate EdgeThreshold values.
-//
-// Phase 9's original calibration was done against the buggy
-// `sigmoid(yes_logprob/5)` formula whose scores were mathematically
-// capped at 0.5. The resulting "calibrated" threshold (0.5 in the
-// shipped config) sat at the formula's ceiling and never produced
-// edges. With the binary-logit fix in core/adapter/zerank, scores
-// now span (0,1) properly — but the threshold was never re-derived.
-// This command does that derivation from real-model scores.
+// Command calibrate scores the labeled eval pairs through the zerank
+// scorer and produces a precision/recall sweep across candidate
+// EdgeThreshold values, so the engine's threshold is derived from
+// real-model output rather than a fixed guess.
 package main
 
 import (
