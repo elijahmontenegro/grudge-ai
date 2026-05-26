@@ -11,7 +11,7 @@ prompt budget fixed.
 - Runs a tool-using agent (Google ADK orchestration) against any provider
   that implements the `core.Completer` / `core.Embedder` / `core.Classifier`
   interfaces. Ollama, OpenAI, Anthropic, GoogleAI, vLLM, TEI, zerank are
-  wired in `go/core/adapter/`.
+  wired in `core/adapter/`.
 - Uses **RRC** to pick prerequisite messages out of arbitrary corpus size
   per turn. Cost per step stays bounded by retrieval top-K, not by corpus
   length.
@@ -30,12 +30,12 @@ gen/go  <──  core  <──  service  ──>  web
   ├────── rrc   <─────────┘
 ```
 
-- **`go/core`** — provider-agnostic interfaces + adapters (Completer,
+- **`core/`** — provider-agnostic interfaces + adapters (Completer,
   Embedder, Classifier, Codec, retry policy).
-- **`go/rrc`** — the algorithm. Prerequisite detection, selection,
+- **`rrc/`** — the algorithm. Prerequisite detection, selection,
   assembly. Stateful when given persistent storage, stateless when called
   per request. No HTTP, no UI.
-- **`go/service`** — the application. Runs the RRC engine, orchestrates
+- **`service/`** — the application. Runs the RRC engine, orchestrates
   ADK agents, manages storage, exposes the GraphQL API, serves the web
   UI. One binary.
 - **`web/`** — React 19 + Apollo Client. Speaks GraphQL to the service.
@@ -88,22 +88,18 @@ Google AI, and a custom vLLM endpoint are wired adapters.
 ## Project layout
 
 ```
-go/                  Go workspace (modules)
-  core/              provider-agnostic interfaces + adapters
-  rrc/               the algorithm
-  service/           the application binary
-  gen/               proto-generated types
-  scripts/           verifydeps + utility scripts
-
+core/                provider-agnostic interfaces + adapters
+rrc/                 the algorithm (prerequisite detection + selection)
+service/             the application binary (kernel, agent, storage, GraphQL)
+gen/go/              proto-generated Go types
+scripts/             verifydeps + utility scripts
+templates/           runtime prompt templates (loaded by service)
 web/                 React 19 + Apollo Client UI
 spec/                AsciiDoc protocol specs (the source of truth)
 docs/eval-reports/   substrate eval methodology + results
 proto/               .proto sources
 containers/          Dockerfiles for the inference substrate
-design/              UI design source + prototype assets
 infra/               substrate-adjacent infra config (SearXNG)
-model/               Python research code for the prerequisite model
-                     (training data fetched on demand — see model/data/README.md)
 testdata/            shared test fixtures
 ```
 
@@ -112,6 +108,4 @@ testdata/            shared test fixtures
 Apache 2.0 — see [`LICENSE`](LICENSE).
 
 Dependencies and the default model substrate are also Apache-2.0
-(Google ADK, Qwen3-Embedding-0.6B, zerank-1-small). The Molweni
-discourse-parsing corpus used during model training has a separate
-upstream license (see `model/data/README.md`).
+(Google ADK, Qwen3-Embedding-0.6B, zerank-1-small).
