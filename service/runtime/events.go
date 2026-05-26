@@ -1,4 +1,4 @@
-package runner
+package runtime
 
 // Plain Go enums for status and mode. The runtime layer publishes
 // these on its event channel; consumers (graph resolver, future REST

@@ -12,7 +12,7 @@ import (
 	"github.com/emontenegr/spidey/service/agent"
 	"github.com/emontenegr/spidey/service/kernel"
 	"github.com/emontenegr/spidey/service/pubsub"
-	runtimerunner "github.com/emontenegr/spidey/service/runner"
+	"github.com/emontenegr/spidey/service/runtime"
 	"github.com/emontenegr/spidey/service/storage"
 )
 
@@ -67,8 +67,8 @@ func NewResolver(k *kernel.Kernel) *Resolver {
 // (two browser tabs, boot reconciler racing first user message)
 // don't both run the build closure and orphan the loser's runner.
 func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
-	entry, err := r.Runners.GetOrBuild(threadID, func() (*runtimerunner.Entry, error) {
-		return runtimerunner.Build(threadID, r.runtimeDeps())
+	entry, err := r.Runners.GetOrBuild(threadID, func() (*runtime.Entry, error) {
+		return runtime.Build(threadID, r.runtimeDeps())
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build runner %s: %w", threadID, err)
@@ -117,38 +117,13 @@ func chunksFor(msg *pb.Message, cfg chunk.Config) []storage.Chunk {
 	return out
 }
 
-// stopRunner stops and removes a thread's runner.
-// For subagent forks, merges edges and scores back into the parent before cleanup.
+// stopRunner stops and removes a thread's runner. The actual
+// teardown (subagent merge + publish, turn cancel, ctx cancel,
+// delete) lives on runtime.Registry; this shim wraps it with the
+// graph-typed Pubsub adapter so schema.resolvers callsites stay
+// terse.
 func (r *Resolver) stopRunner(threadID string) {
-	entry, ok := r.Runners.Get(threadID)
-	if !ok {
-		return
-	}
-	// Merge subagent fork back into parent
-	if entry.ParentThreadID != "" {
-		if parentEntry, pOk := r.Runners.Get(entry.ParentThreadID); pOk {
-			if err := parentEntry.Runner.MergeSubagent(entry.Runner); err != nil {
-				log.Printf("Subagent merge %s → %s: %v", threadID, entry.ParentThreadID, err)
-			}
-		}
-		r.publishSubagent(entry.ParentThreadID, &SubagentProgress{
-			ThreadID: entry.ParentThreadID, ForkThreadID: threadID,
-			Status: "completed",
-		})
-	}
-	// Cancel the in-flight turn (if any) before cancelling the
-	// autonomous-loop ctx. The turn's ctx is a child of whatever
-	// caller ctx ADK is running under; entry.Cancel is the
-	// autonomous outer loop's ctx. A non-autonomous streaming send
-	// has no entry.Cancel — the turn-cancel is the only lever that
-	// reaches it.
-	if entry.Runner != nil {
-		entry.Runner.CancelTurn()
-	}
-	if entry.Cancel != nil {
-		entry.Cancel()
-	}
-	r.Runners.Delete(threadID)
+	r.Runners.Stop(threadID, runtimePubsub{r})
 }
 
 // unsubscribeOnDone waits for ctx.Done, then calls cleanup under the lock.

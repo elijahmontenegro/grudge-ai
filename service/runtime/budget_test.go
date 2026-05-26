@@ -1,4 +1,4 @@
-package agentstate
+package runtime
 
 import (
 	"testing"

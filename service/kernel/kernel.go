@@ -46,11 +46,10 @@ import (
 	"github.com/emontenegr/spidey/rrc/chunk"
 	"github.com/emontenegr/spidey/rrc/tiktoken"
 	"github.com/emontenegr/spidey/service/agent"
-	"github.com/emontenegr/spidey/service/agentstate"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/hooks"
 	"github.com/emontenegr/spidey/service/prompt"
-	runtimerunner "github.com/emontenegr/spidey/service/runner"
+	"github.com/emontenegr/spidey/service/runtime"
 	"github.com/emontenegr/spidey/service/substrate"
 	"github.com/emontenegr/spidey/service/sandbox"
 	"github.com/emontenegr/spidey/service/search"
@@ -85,7 +84,7 @@ type Kernel struct {
 	// Runners is the per-thread runner registry. The runtime
 	// factory owns construction; lifecycle (cancel/close on stop,
 	// merge on subagent exit) is orchestrated by the consumer.
-	Runners *runtimerunner.Registry
+	Runners *runtime.Registry
 
 	// engine is rotated by ReloadProviders / UpdateEngineConfig.
 	// All callers read via Engine().
@@ -211,7 +210,7 @@ func Bootstrap(ctx context.Context, cfg *config.Config, opts ...substrate.Option
 		Skills:     loadedSkills,
 		MCPTools:   mcpTools,
 
-		Runners: runtimerunner.NewRegistry(),
+		Runners: runtime.NewRegistry(),
 
 		planContent:      make(map[string]string),
 		selectionResults: make(map[string]*pb.SelectionResult),
@@ -469,23 +468,6 @@ func (k *Kernel) CitationCount(messageID string) int {
 	k.selectionMu.RLock()
 	defer k.selectionMu.RUnlock()
 	return k.citationCount[messageID]
-}
-
-// RemainingBudget reports how much of the autonomous run's original
-// duration is still owed for a given persisted agent state. Returns
-// (remaining, "") on success; (0, reason) when the row is missing
-// fields, has unparseable values, or the budget has expired. The
-// reasons are deliberately distinct (not collapsed to a generic
-// "invalid") so a boot-time reconcile can log which row it gave up
-// on and why. A 5-minute floor applies — see agentstate.ResumeMin.
-//
-// Kernel exposes this so the graph layer (which has the agent-state
-// row in hand from its own DB read) doesn't import service/agentstate
-// directly. The function itself is a pure transform over the row
-// fields, so no Kernel state is consulted; the method exists for
-// import-boundary hygiene.
-func (k *Kernel) RemainingBudget(st *storage.AgentState) (time.Duration, string) {
-	return agentstate.ComputeRemainingBudget(st)
 }
 
 // --- runner.Approvals + graph reads ------------------------------------

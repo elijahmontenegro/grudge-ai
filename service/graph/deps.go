@@ -2,17 +2,17 @@ package graph
 
 import (
 	"github.com/emontenegr/spidey/core/httpc/retry"
-	runtimerunner "github.com/emontenegr/spidey/service/runner"
+	"github.com/emontenegr/spidey/service/runtime"
 )
 
-// runtimeDeps assembles the runtime/runner.Deps bundle for the
-// factory. Substrate fields and runner state come from the embedded
-// Kernel; Pubsub is the only graph-specific implementation because
+// runtimeDeps assembles the runtime.Deps bundle for the factory.
+// Substrate fields and runner state come from the embedded Kernel;
+// Pubsub is the only graph-specific implementation because
 // it translates plain runtime structs into gqlgen-generated event
 // types. Approvals / PlanStore / Selections / EmbedEnqueuer are
 // satisfied directly by the Kernel — no shim types needed.
-func (r *Resolver) runtimeDeps() runtimerunner.Deps {
-	return runtimerunner.Deps{
+func (r *Resolver) runtimeDeps() runtime.Deps {
+	return runtime.Deps{
 		Registry:      r.Runners,
 		DB:            r.DB,
 		Engine:        r.Engine(),
@@ -36,7 +36,7 @@ func (r *Resolver) runtimeDeps() runtimerunner.Deps {
 // stays free of GraphQL-specific symbols.
 type runtimePubsub struct{ r *Resolver }
 
-func (a runtimePubsub) PublishStream(ev runtimerunner.StreamDelta) {
+func (a runtimePubsub) PublishStream(ev runtime.StreamDelta) {
 	out := &StreamEvent{MessageID: ev.MessageID, Done: ev.Done}
 	if ev.Delta != "" {
 		d := ev.Delta
@@ -49,7 +49,7 @@ func (a runtimePubsub) PublishStream(ev runtimerunner.StreamDelta) {
 	a.r.streams.Publish(ev.ThreadID, out)
 }
 
-func (a runtimePubsub) PublishAgentState(ev runtimerunner.AgentStateUpdate) {
+func (a runtimePubsub) PublishAgentState(ev runtime.AgentStateUpdate) {
 	out := &AgentState{
 		ThreadID:   ev.ThreadID,
 		Status:     toGQLStatus(ev.Status),
@@ -84,7 +84,7 @@ func (a runtimePubsub) PublishAgentState(ev runtimerunner.AgentStateUpdate) {
 	a.r.agents.Publish(ev.ThreadID, out)
 }
 
-func (a runtimePubsub) PublishToolExec(ev runtimerunner.ToolExec) {
+func (a runtimePubsub) PublishToolExec(ev runtime.ToolExec) {
 	out := &ToolExecution{
 		ThreadID:  ev.ThreadID,
 		CallID:    ev.CallID,
@@ -103,7 +103,7 @@ func (a runtimePubsub) PublishToolExec(ev runtimerunner.ToolExec) {
 	a.r.tools.Publish(ev.ThreadID, out)
 }
 
-func (a runtimePubsub) PublishSubagent(ev runtimerunner.SubagentEvent) {
+func (a runtimePubsub) PublishSubagent(ev runtime.SubagentEvent) {
 	a.r.subagents.Publish(ev.ThreadID, &SubagentProgress{
 		ThreadID:     ev.ThreadID,
 		ForkThreadID: ev.ForkThreadID,
@@ -121,22 +121,22 @@ func (a runtimePubsub) PublishRetry(threadID string, ev retry.Event) {
 	a.r.publishRetryStatus(threadID, ev)
 }
 
-func toGQLStatus(s runtimerunner.AgentStatus) AgentStatus {
+func toGQLStatus(s runtime.AgentStatus) AgentStatus {
 	switch s {
-	case runtimerunner.AgentStatusRunning:
+	case runtime.AgentStatusRunning:
 		return AgentStatusRunning
-	case runtimerunner.AgentStatusPaused:
+	case runtime.AgentStatusPaused:
 		return AgentStatusPaused
 	default:
 		return AgentStatusIdle
 	}
 }
 
-func toGQLMode(m runtimerunner.AgentMode) AgentMode {
+func toGQLMode(m runtime.AgentMode) AgentMode {
 	switch m {
-	case runtimerunner.AgentModeAutonomous:
+	case runtime.AgentModeAutonomous:
 		return AgentModeAutonomous
-	case runtimerunner.AgentModePlan:
+	case runtime.AgentModePlan:
 		return AgentModePlan
 	default:
 		return AgentModeNormal

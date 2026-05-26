@@ -1,4 +1,4 @@
-package runner
+package runtime
 
 import (
 	"github.com/emontenegr/spidey/core/httpc/retry"

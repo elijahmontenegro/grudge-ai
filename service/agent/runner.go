@@ -16,7 +16,7 @@ import (
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/rrc/chunk"
-	adk "github.com/emontenegr/spidey/service/agent/adk"
+	adk "github.com/emontenegr/spidey/service/agent/internal/adk"
 	"github.com/emontenegr/spidey/service/storage"
 
 	adkagent "google.golang.org/adk/agent"

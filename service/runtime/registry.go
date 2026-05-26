@@ -1,21 +1,16 @@
-// Package runner provides the per-thread runner registry the
-// runtime kernel uses to manage active agent runners and their
-// lifecycle. The registry is the storage primitive — lookup,
-// insert, delete, atomic per-entry mutation, and snapshot
-// iteration. Higher-level concerns (subagent merge on stop,
-// cancel-and-close on shutdown) live with their callers because
-// they reach into other kernel surfaces (pubsub, agent runner
-// itself).
-//
-// The factory that constructs a Runner from a thread id + config
-// — formerly the 450-LOC getOrCreateRunner closure on
-// graph.Resolver — also lives in this package alongside the
-// per-family Deps option groups. Subsequent commits land that
-// piece; this commit is the registry primitive only.
-package runner
+// Package runtime owns the runtime-layer concerns: the per-thread
+// runner registry, the runner factory, the tools.Agent adapter that
+// wraps kernel facilities for tool calls, the consumer interfaces
+// (Pubsub / Approvals / PlanStore / Selections / EmbedEnqueuer)
+// that graph (and future non-graph consumers) implement, and the
+// boot reconciliation logic for agent_state rows surviving a
+// process restart. The actual *agent.Runner type lives in
+// service/agent — this package handles what surrounds it.
+package runtime
 
 import (
 	"context"
+	"log"
 	"sync"
 
 	"github.com/emontenegr/spidey/service/agent"
@@ -162,6 +157,46 @@ func (r *Registry) Range(fn func(threadID string, e *Entry)) {
 	for k, v := range snapshot {
 		fn(k, v)
 	}
+}
+
+// Stop tears down a thread's runner: subagent-fork merge back into
+// parent (with a SubagentEvent publish on completion), in-flight
+// turn cancel, autonomous-loop cancel, and registry delete.
+// Returns true if a runner was found and stopped, false otherwise.
+//
+// Pubsub is injected per-call rather than held by the registry so
+// the registry stays free of the consumer-specific event types — a
+// non-graph consumer (CLI, future REST gateway) supplies its own
+// Pubsub implementation when calling Stop.
+//
+// Merge and cancel run outside the registry mutex (Get and Delete
+// each acquire the lock individually). MergeSubagent in agent.Runner
+// has its own internal synchronization.
+func (r *Registry) Stop(threadID string, pubsub Pubsub) bool {
+	entry, ok := r.Get(threadID)
+	if !ok {
+		return false
+	}
+	if entry.ParentThreadID != "" {
+		if parentEntry, pOk := r.Get(entry.ParentThreadID); pOk && parentEntry.Runner != nil && entry.Runner != nil {
+			if err := parentEntry.Runner.MergeSubagent(entry.Runner); err != nil {
+				log.Printf("Subagent merge %s → %s: %v", threadID, entry.ParentThreadID, err)
+			}
+		}
+		pubsub.PublishSubagent(SubagentEvent{
+			ThreadID:     entry.ParentThreadID,
+			ForkThreadID: threadID,
+			Status:       "completed",
+		})
+	}
+	if entry.Runner != nil {
+		entry.Runner.CancelTurn()
+	}
+	if entry.Cancel != nil {
+		entry.Cancel()
+	}
+	r.Delete(threadID)
+	return true
 }
 
 // StopAll cancels and closes every entry, then empties the

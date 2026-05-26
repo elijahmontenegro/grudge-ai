@@ -1,24 +1,4 @@
-// Package agentstate carries pure-logic agent-state helpers used
-// by the runtime kernel during boot reconciliation and runner
-// lifecycle. The orchestration (ReconcileOnBoot, resetToIdle)
-// stays in service/graph until the runner registry extracts —
-// it depends on the runner factory, the per-thread runner map,
-// and the agent-state pubsub, all of which still live on
-// graph.Resolver. This package owns the parts that don't.
-//
-// What lives here:
-//
-//   - ComputeRemainingBudget: derive how much of an autonomous
-//     run's original duration is still owed at boot, with
-//     clearly-named failure reasons for diagnostics. Pure
-//     function over a storage.AgentState.
-//
-// Storage-side narrow setters (SetAgentStatus, SetAgentRoundCount,
-// SetAgentStatusAndMode, StartAutonomousRun, EnsureAgentStateRow)
-// already live in service/storage. They replaced the wide UPSERT
-// that used to clobber metadata; this package's reconciliation
-// helpers consume them directly.
-package agentstate
+package runtime
 
 import (
 	"time"

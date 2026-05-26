@@ -13,7 +13,7 @@ import "context"
 // "satisfaction" a compile-time property: a type either implements
 // every method or the BuildTools call fails to compile.
 //
-// The runtime wires a concrete agent (service/runner constructs
+// The runtime wires a concrete agent (service/runtime constructs
 // one per-thread, closing over kernel facilities: DB, Pubsub,
 // Registry, Hooks, PlanStore) and passes it through Deps. Methods
 // take ctx where the operation is async or cancellable; pure

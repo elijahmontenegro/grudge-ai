@@ -19,7 +19,7 @@ import (
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/adoc"
 	"github.com/emontenegr/spidey/service/config"
-	runtimerunner "github.com/emontenegr/spidey/service/runner"
+	"github.com/emontenegr/spidey/service/runtime"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -405,7 +405,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 	if haveEntry && entry.Runner.IsAutonomousActive() {
 		entry.Runner.ResumeAutonomous()
 	} else if st.Mode == storage.AgentModeAutonomous {
-		remaining, reason := r.RemainingBudget(st)
+		remaining, reason := runtime.ComputeRemainingBudget(st)
 		if reason == "" && remaining > 0 {
 			runner, rerr := r.getOrCreateRunner(threadID)
 			if rerr != nil {
@@ -764,7 +764,7 @@ func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feed
 // re-renders with the edited version. The model will see the new content on
 // its next FileRead of plan.adoc.
 func (r *mutationResolver) UpdatePlanSource(ctx context.Context, threadID string, content string) (bool, error) {
-	planDir, err := runtimerunner.PlanDirForThread(r.Config.DataDir, threadID)
+	planDir, err := runtime.PlanDirForThread(r.Config.DataDir, threadID)
 	if err != nil {
 		return false, err
 	}

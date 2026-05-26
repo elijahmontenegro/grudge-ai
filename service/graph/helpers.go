@@ -6,7 +6,7 @@ import (
 	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
 )
 
-// (planDirForThread + threadIDPattern moved to service/runner/path.go.
+// (planDirForThread + threadIDPattern moved to service/runtime/path.go.
 // Both the runtime factory and the UpdatePlanSource resolver import it from
 // there; graph no longer owns the pattern.)
 
