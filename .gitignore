@@ -44,6 +44,11 @@ docs/assessment-*.md
 # Taskfile build cache (regenerated on each run).
 .task/
 
+# Test fixtures for long-horizon experiments (creative seed content not
+# intended for public distribution; the autonomous-loop test references
+# can be reproduced locally as needed).
+testdata/novel/
+
 # Training datasets — fetched on demand by model/scripts/*; see
 # model/data/README.md for the reproducible setup. ~250 MB if pulled
 # locally; not bundled in the public repo.
