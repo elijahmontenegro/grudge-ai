@@ -34,6 +34,16 @@ __pycache__/
 .venv/
 venv/
 
+# Private session notes / internal planning — not for public consumption.
+# Kept on disk locally for project memory but excluded from the public repo.
+JOURNAL.md
+docs/plan-iterations/
+docs/experiments/
+docs/assessment-*.md
+
+# Taskfile build cache (regenerated on each run).
+.task/
+
 # Generated proto code (gen/go) is intentionally checked in for
 # external go-get consumption — see go.mod replace directives.
 # When the proto module publishes, this stays committed.
