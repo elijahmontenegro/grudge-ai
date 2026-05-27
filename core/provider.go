@@ -1,7 +1,7 @@
 package core
 
 // Provider role interfaces. The framework expresses what each role
-// (Completer, Embedder, Classifier) requires from an adapter; an
+// (Completer, Embedder, Scorer) requires from an adapter; an
 // adapter implements only the role interfaces matching the
 // capabilities it actually exposes. Callers type-assert on the
 // concrete provider returned by NewProvider:
@@ -32,10 +32,9 @@ type EmbedderProvider interface {
 	Embedder(model string) (Embedder, error)
 }
 
-// ClassifierProvider produces Scorer instances for the
-// cross-encoder reranker role. A backend that exposes both
-// embedder and reranker (e.g. TEI) implements both role
-// interfaces.
-type ClassifierProvider interface {
-	Classifier(model string) (Scorer, error)
+// ScorerProvider produces Scorer instances for the cross-encoder
+// reranker role. A backend that exposes both embedder and reranker
+// (e.g. TEI) implements both role interfaces.
+type ScorerProvider interface {
+	Scorer(model string) (Scorer, error)
 }

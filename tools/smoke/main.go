@@ -2,7 +2,7 @@
 // tei-embed and vllm services. Validates:
 //
 //  1. NewProvider returns a value that type-asserts cleanly to the
-//     per-role interface (ClassifierProvider for zerank,
+//     per-role interface (ScorerProvider for zerank,
 //     EmbedderProvider for tei).
 //  2. tei.Embed returns vectors for both RoleQuery and RoleDocument.
 //  3. zerank yields a non-trivial relevance score for a (query,
@@ -43,7 +43,7 @@ func main() {
 		pass++
 	}
 
-	// --- Classifier (zerank via vllm) ---
+	// --- Scorer (zerank via vllm) ---
 
 	clsProv, err := core.NewProvider(core.ProviderConfig{
 		Adapter: "zerank",
@@ -52,13 +52,13 @@ func main() {
 	})
 	check("NewProvider(zerank)", err)
 	if err == nil {
-		cp, ok := clsProv.(core.ClassifierProvider)
+		cp, ok := clsProv.(core.ScorerProvider)
 		if !ok {
-			check("zerank satisfies ClassifierProvider", fmt.Errorf("type assertion failed"))
+			check("zerank satisfies ScorerProvider", fmt.Errorf("type assertion failed"))
 		} else {
-			check("zerank satisfies ClassifierProvider", nil)
-			classifier, err := cp.Classifier("zeroentropy/zerank-1-small")
-			check("zerank.Classifier()", err)
+			check("zerank satisfies ScorerProvider", nil)
+			classifier, err := cp.Scorer("zeroentropy/zerank-1-small")
+			check("zerank.Scorer()", err)
 			if err == nil {
 				scores, err := classifier.Score(ctx,
 					"What is the capital of France?",

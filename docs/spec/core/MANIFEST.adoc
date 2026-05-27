@@ -13,7 +13,7 @@
 
 *Paradigm:* Provider-Agnostic Abstraction Library
 
-The core library is the foundational Go module. It defines the abstraction interfaces and provider/embedder/classifier adapters. Proto truth types are defined in `proto/spidey/v1/` and generate to `proto/gen/go/spidey/v1/` -- core imports them, it does not own them. Core has no opinion on RRC, orchestration, UI, or deployment.
+The core library is the foundational Go package. It defines the abstraction interfaces and provider/embedder/scorer adapters. Proto truth types are defined in `proto/spidey/v1/` and generate to `proto/gen/go/spidey/v1/` -- core imports them, it does not own them. Core has no opinion on RRC, orchestration, UI, or deployment.
 
 === Stack
 
@@ -31,14 +31,15 @@ The core library is the foundational Go module. It defines the abstraction inter
 
 ==== In Scope
 
-- Proto truth types: Message, LLMMessage, ContentBlock (Text, Thinking, ToolCall, ToolResult, Image), Thread, Role, SelectionScope, Edge, QUD, QUDGraph, SelectionResult, CarryForwardInput, ClassifyRequest/Response, CompletionRequest/Response, StreamChunk, Usage
-- LLM interface: completion, streaming completion
-- Embedder interface: single embed, batch embed
-- Classifier interface: pairwise text classification (cross-encoder pattern -- takes two texts, returns class probabilities)
-- Provider interface: lifecycle, capability discovery, configuration
+- Proto truth types: Message, LLMMessage, ContentBlock (Text, Thinking, ToolCall, ToolResult, Image), Thread, Role, SelectionScope, Edge, QUD, QUDGraph, SelectionResult, CarryForwardInput, CompletionRequest/Response, StreamChunk, Usage
+- Completer interface: completion, streaming completion
+- Embedder interface: dispatched embed (RoleQuery / RoleDocument)
+- Scorer interface: query-against-candidates relevance scoring (cross-encoder pattern -- one query, N candidates, returns aligned scores)
+- Codec interface: per-adapter proto ↔ wire-format conversion
+- Provider role interfaces: CompleterProvider, EmbedderProvider, ScorerProvider (interface-segregated; each adapter implements only the roles it supports)
 - Provider adapters: Ollama, Anthropic, OpenAI, Google AI, vLLM, any OpenAI-compatible endpoint
 - Embedder adapters: TEI, OpenAI embeddings
-- Classifier adapters: TEI `/predict` endpoint
+- Scorer adapters: TEI `/rerank`, zerank/vLLM `/v1/chat/completions`
 - Code generation pipeline: proto -> Go types via buf
 
 ==== Out of Scope
@@ -53,12 +54,13 @@ The core library is the foundational Go module. It defines the abstraction inter
 
 === Proto Truth Types
 
-Defined in `proto/spidey/v1/`. Generated Go types in `proto/gen/go/spidey/v1/`. Four files:
+Defined in `proto/spidey/v1/`. Generated Go types in `proto/gen/go/spidey/v1/`. Three files:
 
 - **thread.proto** -- Message, Role, ContentBlock (TextContent, ThinkingContent, ToolCallContent, ToolResultContent, ImageContent), Thread, SelectionScope
 - **rrc.proto** -- Edge, EdgeSource, QUD, QUDStatus, QUDGraph, SelectedMessage, ExcludedMessage, ExclusionReason, SelectionResult
-- **classifier.proto** -- ClassifyRequest, ClassifyResponse, ClassLabel, BatchClassifyRequest, BatchClassifyResponse
 - **llm.proto** -- LLMMessage, CompletionRequest, CompletionResponse, Usage, StreamChunk
+
+Scorer is a Go interface only -- (query, []candidates) -> []float64 -- and has no proto wire form. Per-adapter HTTP shapes (TEI's `/rerank`, vLLM's `/v1/chat/completions` with the zerank Yes-token logprob recipe) live in each adapter's package.
 
 Message is the corpus record (id, role, content blocks, position, thread_id, created_at). LLMMessage is the wire format (role, content blocks only). The service converts between them at the boundary. Thread is the organizational unit -- each thread is its own corpus with its own DAG, QUD graph, and carry-forward trajectory. SelectionScope controls per-prompt scoping (thread-scoped by default, all-threads as opt-in).
 
@@ -66,7 +68,7 @@ CompletionRequest includes `provider_options` (`google.protobuf.Struct`) as an e
 
 === Go Interfaces
 
-Provider-agnostic interfaces. The service consumes these without knowing the backend. The RRC engine defines its own consumer interfaces (Classifier, Completer) via Go structural typing -- any core adapter satisfies them.
+Provider-agnostic interfaces. The service consumes these without knowing the backend. The RRC engine defines its own consumer interface (Scorer) via Go structural typing -- any core adapter satisfies it.
 
 The service configures two LLM roles: the **main model** (user's model for reasoning, tool use, responses) and the **small fast model** (internal utility for QUD extraction, annotations, autocomplete, tool rationale). Both use the same Completer interface with different provider/model configurations. The small fast model requires sub-second inference latency for autocomplete; QUD extraction tolerates multi-second latency. User selects a model matching these constraints during onboarding. Recommended models for the small fast role: sub-1B extraction-focused (Osmosis-Structure-0.6B, NuExtract-tiny, Qwen3.5-0.8B).
 
@@ -84,38 +86,51 @@ type Completer interface {
 
 [source,go]
 ----
+type EmbedRole int
+
+const (
+    RoleQuery EmbedRole = iota
+    RoleDocument
+)
+
 type Embedder interface {
-    Embed(ctx context.Context, text string) ([]float32, error)
-    EmbedBatch(ctx context.Context, texts []string) ([][]float32, error)
+    Embed(ctx context.Context, role EmbedRole, texts []string) ([][]float32, error)
 }
 ----
 
-==== Classifier
+The role dispatch is for asymmetric instruction-tuned embedders (Qwen3-Embedding etc.) that need a query-side Instruct/Query prefix; symmetric models (bge-m3) ignore the role.
+
+==== Scorer
 
 [source,go]
 ----
-type Classifier interface {
-    Classify(ctx context.Context, req *pb.ClassifyRequest) (*pb.ClassifyResponse, error)
-    ClassifyBatch(ctx context.Context, req *pb.BatchClassifyRequest) (*pb.BatchClassifyResponse, error)
+type Scorer interface {
+    Score(ctx context.Context, query string, candidates []string) ([]float64, error)
 }
 ----
 
-=== Provider Interface
+Higher score = more relevant. Output is aligned with input candidate order. Empty candidates returns an empty slice with no backend call.
 
-Every adapter (LLM, embedder, classifier) is created through a provider. The provider handles lifecycle and configuration.
+=== Provider Role Interfaces
+
+Adapters implement only the role interfaces they support. Splitting the god-interface (one method per role) means each adapter's capability surface is observable from its method set, not from a runtime probe. Callers type-assert on the role interface they need.
 
 [source,go]
 ----
-type Provider interface {
-    ID() string
+type CompleterProvider interface {
     Completer(model string) (Completer, error)
+}
+
+type EmbedderProvider interface {
     Embedder(model string) (Embedder, error)
-    Classifier(model string) (Classifier, error)
-    Close() error
+}
+
+type ScorerProvider interface {
+    Scorer(model string) (Scorer, error)
 }
 ----
 
-Not every provider supports all three capabilities. `Completer()` on a TEI provider returns an error. `Classifier()` on a pure LLM provider returns an error. The caller checks.
+A backend that exposes multiple roles (TEI: embeddings + reranking) implements multiple role interfaces. A pure-LLM provider implements only `CompleterProvider`. `ErrUnsupported` is returned by the registry lookup boundary when a caller requests a role the registered adapter doesn't satisfy.
 
 === Provider Adapters
 
@@ -152,34 +167,37 @@ Each adapter implements `Provider` for a specific backend. Configuration is adap
 - Auth: API key is a string config field. Empty string: adapter sends no `Authorization` header.
 
 ==== TEI
-- Supports: Embedder, Classifier
-- Target API: TEI HTTP endpoints (as of TEI 1.7.x)
+- Supports: Embedder, Scorer
+- Target API: TEI HTTP endpoints (as of TEI 1.9.x)
 - Endpoint: configurable HTTP base URL
-- Embedder uses `/embed`, Classifier uses `/predict`
+- Embedder uses `/embed`, Scorer uses `/rerank`
+
+==== zerank
+- Supports: Scorer
+- Target API: vLLM-served OpenAI-compatible `/v1/chat/completions`
+- Endpoint: configurable HTTP base URL (default: `http://localhost:8000`)
+- Production reranker — zeroentropy/zerank-1-small (1.7B Qwen3-based causal LM). Cross-encoder scoring via Yes-token logprob recipe: `sigmoid(logit / 5)`
 
 === File Tree
 
 ----
 core/
-├── go.mod
 ├── completer.go          # Completer interface
-├── embedder.go           # Embedder interface
-├── classifier.go         # Classifier interface
-├── provider.go           # Provider interface
-├── errors.go             # Sentinel errors
+├── embedder.go           # Embedder interface + EmbedRole
+├── scorer.go             # Scorer interface
+├── codec.go              # Codec interface (proto ↔ wire format)
+├── provider.go           # CompleterProvider, EmbedderProvider, ScorerProvider
+├── registry.go           # NewProvider factory + per-adapter registration
+├── errors.go             # Sentinel errors (ErrUnsupported, ErrProviderUnavailable, ErrAuth)
 ├── adapter/
-│   ├── ollama/
-│   │   └── ollama.go     # Completer, Embedder
-│   ├── anthropic/
-│   │   └── anthropic.go  # Completer
-│   ├── openai/
-│   │   └── openai.go     # Completer, Embedder (configurable base URL)
-│   ├── googleai/
-│   │   └── googleai.go   # Completer, Embedder
-│   ├── vllm/
-│   │   └── vllm.go       # Completer
-│   └── tei/
-│       └── tei.go        # Embedder (/embed), Classifier (/predict)
+│   ├── ollama/           # Completer, Embedder
+│   ├── anthropic/        # Completer
+│   ├── openai/           # Completer, Embedder (configurable base URL)
+│   ├── googleai/         # Completer, Embedder
+│   ├── vllm/             # Completer
+│   ├── tei/              # Embedder (/embed), Scorer (/rerank)
+│   └── zerank/           # Scorer (vLLM /v1/chat/completions; Yes-token logprob)
+├── httpc/retry/          # Shared retry policy
 └── internal/
     └── httpc/
         └── client.go     # Shared HTTP client (see HTTP Client section)
@@ -239,7 +257,7 @@ var (
 )
 ----
 
-`Completer()` on a TEI provider returns `ErrUnsupported`. `Classifier()` on Anthropic returns `ErrUnsupported`. Network failures return `ErrProviderUnavailable`. Invalid or expired API keys return `ErrAuth`. HTTP 429 from any provider returns `ErrRateLimited`.
+A type-assert on the wrong role interface fails — calling `core.NewProvider(...)` and asserting `(core.CompleterProvider)` on an adapter that doesn't expose completions returns `ErrUnsupported` at the assertion. Network failures return `ErrProviderUnavailable`. Invalid or expired API keys return `ErrAuth`. HTTP 429 from any provider returns `ErrRateLimited`.
 
 Batch failure is all-or-nothing: any item fails → entire batch fails. `EmbedBatch` and `ClassifyBatch` do not return partial results.
 
@@ -261,7 +279,7 @@ Default timeouts: 30s for non-streaming requests, 120s for streaming. Auth is a 
 
 === Stream Contract
 
-The adapter closes the channel when the stream ends or the context is cancelled. Channel is unbuffered. All `Provider`, `Completer`, `Embedder`, and `Classifier` implementations must be safe for concurrent use by multiple goroutines.
+The adapter closes the channel when the stream ends or the context is cancelled. Channel is unbuffered. All `Completer`, `Embedder`, and `Scorer` implementations must be safe for concurrent use by multiple goroutines.
 
 **`Complete` vs `Stream` method contract:** `Stream()` sets `stream=true` on the wire regardless of the proto field value. `Complete()` sets `stream=false`. The proto `bool stream` field exists for proto-level consumers; Go callers use method selection.
 
@@ -272,7 +290,7 @@ The adapter closes the channel when the stream ends or the context is cancelled.
 Proto compilation via `buf v1.67.0`. Configuration in `buf.yaml` at the repository root.
 
 Input: `proto/spidey/v1/*.proto`
-Output: `gen/go/spidey/v1/*.go`
+Output: `proto/gen/go/spidey/v1/*.go`
 
 Generated Go types live in the `gen/go` module (its own `go.mod`, depends on `google.golang.org/protobuf v1.36.3` only). All other Go modules import from `gen/go`.
 
@@ -280,7 +298,7 @@ Downstream: GraphQL schema (in service spec) and TypeScript types (in web spec) 
 
 === Proto Truth Type Definitions
 
-Proto source files live in `proto/spidey/v1/` at the repository root. Generated Go types live in `proto/gen/go/spidey/v1/` (its own Go module). These paths are outside the `core/` module — core imports from `gen/go`, it does not own the proto files. The proto files are reproduced here as the canonical reference for all specs.
+Proto source files live in `proto/spidey/v1/` at the repository root. Generated Go types live in `proto/gen/go/spidey/v1/` (its own Go module). These paths are outside the `core/` module — core imports from `proto/gen/go`, it does not own the proto files. The proto files are reproduced here as the canonical reference for all specs.
 
 Syntax: {proto-syntax}.
 
@@ -290,7 +308,7 @@ Syntax: {proto-syntax}.
 ----
 syntax = "proto3";
 package spidey.v1;
-option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+option go_package = "github.com/emontenegr/spidey/proto/gen/go/spidey/v1";
 import "google/protobuf/timestamp.proto";
 
 enum Role {
@@ -349,7 +367,7 @@ enum SelectionScope {
 ----
 syntax = "proto3";
 package spidey.v1;
-option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+option go_package = "github.com/emontenegr/spidey/proto/gen/go/spidey/v1";
 import "google/protobuf/timestamp.proto";
 import "spidey/v1/thread.proto";
 
@@ -431,28 +449,13 @@ message CarryForwardInput {
 }
 ----
 
-==== classifier.proto
-
-[source,protobuf]
-----
-syntax = "proto3";
-package spidey.v1;
-option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
-
-message ClassifyRequest { string text_a = 1; string text_b = 2; }
-message ClassifyResponse { repeated ClassLabel labels = 1; }
-message ClassLabel { string name = 1; float probability = 2; }
-message BatchClassifyRequest { repeated ClassifyRequest pairs = 1; }
-message BatchClassifyResponse { repeated ClassifyResponse results = 1; }
-----
-
 ==== llm.proto
 
 [source,protobuf]
 ----
 syntax = "proto3";
 package spidey.v1;
-option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+option go_package = "github.com/emontenegr/spidey/proto/gen/go/spidey/v1";
 import "google/protobuf/struct.proto";
 import "spidey/v1/thread.proto";
 
@@ -511,24 +514,21 @@ message StreamChunk {
 }
 ----
 
-==== ClassifyRequest / ClassifyResponse
+==== Scorer Request / Response
 
-[source,json]
+The Scorer interface is Go-only — there is no proto wire format. Backend-specific HTTP shapes (TEI `/rerank`, vLLM `/v1/chat/completions` with the zerank Yes-token logprob recipe) are encapsulated in their adapter packages and never surface above the adapter boundary.
+
+[source,go]
 ----
-// Request: does message B depend on message A?
-{
-  "text_a": "The auth module retries failed token refreshes up to 3 times with exponential backoff.",
-  "text_b": "Does that apply to the OAuth flow too?"
-}
-
-// Response: entailment (dependency) probability 0.87
-{
-  "labels": [
-    {"name": "entailment", "probability": 0.87},
-    {"name": "neutral", "probability": 0.11},
-    {"name": "contradiction", "probability": 0.02}
-  ]
-}
+// Caller's view — one query, N candidates, N aligned scores.
+scores, err := scorer.Score(ctx,
+    "Does that apply to the OAuth flow too?",
+    []string{
+        "The auth module retries failed token refreshes up to 3 times with exponential backoff.",
+        "Unrelated discussion of the build pipeline.",
+    },
+)
+// scores: [0.87, 0.04]  — higher = more relevant
 ----
 
 ==== Embed Response

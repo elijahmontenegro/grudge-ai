@@ -25,7 +25,7 @@ The engine does not know which mode it's running in. It operates on whatever str
 
 *Language:* {lang}
 
-*Dependencies:* `proto/gen/go/spidey/v1` (proto types), standard library. No dependency on `spec/core`. The engine defines its own consumer interfaces (Classifier, Completer) -- any core adapter satisfies them via Go structural typing.
+*Dependencies:* `proto/gen/go/spidey/v1` (proto types), standard library. No dependency on `spec/core`. The engine defines its own consumer interfaces (Scorer, Completer) -- any core adapter satisfies them via Go structural typing.
 
 === RRC Reference
 
@@ -52,7 +52,7 @@ include::../MANIFEST.adoc[tag=rrc]
 - HTTP proxy or network concerns (belongs to `spec/service`)
 - Agent orchestration (belongs to `spec/service`)
 - Conversation storage (belongs to `spec/service`)
-- Interface definitions for LLM, embedder, or classifier (core interfaces belong to `spec/core`; the engine defines its own consumer interfaces)
+- Interface definitions for LLM, embedder, or scorer (core interfaces belong to `spec/core`; the engine defines its own consumer interfaces)
 - UI or introspection presentation (belongs to `spec/web`)
 - Model selection, sizing, deployment topology, or fine-tuning
 
@@ -66,7 +66,7 @@ Proto types referenced throughout this spec (`pb.Message`, `pb.Edge`, `pb.Select
 rrc/
 ├── go.mod            # depends on gen/go/spidey/v1 only
 ├── engine.go         # Public API: Engine struct, NewEngine, OnMessage, Select, CarryForward, Fork, Merge
-├── interfaces.go     # Consumer-defined interfaces: Classifier, Completer
+├── interfaces.go     # Consumer-defined interfaces: Scorer, Completer
 ├── dag.go            # DAG type, dual adjacency list, edge operations, subgraph extraction
 ├── qud.go            # QUDGraph type, QUD operations, carry-forward ingestion
 ├── scorer.go         # ScoreCache type, score fusion, score floor
@@ -83,7 +83,7 @@ The engine defines the interfaces it needs. Go convention: the consumer defines 
 ----
 // In package rrc
 
-type Classifier interface {
+type Scorer interface {
     Classify(ctx context.Context, req *pb.ClassifyRequest) (*pb.ClassifyResponse, error)
     ClassifyBatch(ctx context.Context, req *pb.BatchClassifyRequest) (*pb.BatchClassifyResponse, error)
 }
@@ -100,7 +100,7 @@ type Completer interface {
 [source,go]
 ----
 type Engine struct {
-    classifier Classifier
+    scorer Scorer
     completer  Completer
     dag        *DAG
     scores     *ScoreCache
@@ -109,7 +109,7 @@ type Engine struct {
 }
 ----
 
-The classifier and completer are injected at construction, not per-call. Standard Go pattern (`http.Client` takes its `Transport` at construction). The engine holds references. For the proxy path (new engine per request), the service creates an engine with the same classifier/completer each time -- a reference copy, not a construction cost. Fork inherits the parent's classifier and completer.
+The classifier and completer are injected at construction, not per-call. Standard Go pattern (`http.Client` takes its `Transport` at construction). The engine holds references. For the proxy path (new engine per request), the service creates an engine with the same scorer/completer each time -- a reference copy, not a construction cost. Fork inherits the parent's scorer and completer.
 
 ==== DAG
 
@@ -173,11 +173,11 @@ type SelectionEntry struct {
 
 === Public API
 
-Classifier and completer are injected at construction. Methods operate on the engine's internal data structures.
+Scorer and completer are injected at construction. Methods operate on the engine's internal data structures.
 
 [source,go]
 ----
-func NewEngine(cfg EngineConfig, classifier Classifier, completer Completer) *Engine
+func NewEngine(cfg EngineConfig, scorer Scorer, completer Completer) *Engine
 
 // Score a new message against all predecessors. Returns created edges.
 func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Message) ([]*pb.Edge, error)
@@ -207,7 +207,7 @@ Sentinel errors. Fail fast -- the engine does not retry.
 [source,go]
 ----
 var (
-    ErrClassifierFailed = errors.New("classifier returned error during scoring")
+    ErrScorerFailed = errors.New("scorer returned error during scoring")
     ErrCompleterFailed  = errors.New("small model failed during QUD extraction")
     ErrMessageNotFound  = errors.New("message ID not found in data structures")
     ErrThreadNotFound   = errors.New("thread ID not found in data structures")
@@ -232,7 +232,7 @@ The service uses RWMutex on the global DAG and score cache for concurrent select
 
 === Complexity Bounds
 
-- **OnMessage:** O(N) classifier calls where N is corpus size. Paid once per message arrival; results cached forever.
+- **OnMessage:** O(N) scorer calls where N is corpus size. Paid once per message arrival; results cached forever.
 - **Select:** O(V+E) traversal where V is selected messages and E is their edges. Bounded by score floor.
 - **CarryForward:** O(1) classifier call + O(1) completer call per thinking block (cross-encoder on thinking text + small model QUD extraction).
 - **Transitive reduction:** O(V·E) on the selected subgraph (V typically ≤30, E typically <100).

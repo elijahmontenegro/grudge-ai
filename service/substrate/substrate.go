@@ -81,15 +81,15 @@ func backfillChunks(db *storage.DB, chunkCfg chunk.Config) error {
 
 // Substrate is the wired-up runtime substrate consumers receive
 // from Build. Every field is non-nil unless the corresponding
-// config block is absent (e.g. classifier == nil when no
-// classifier provider is configured).
+// config block is absent (e.g. Scorer == nil when no
+// scorer provider is configured).
 type Substrate struct {
 	DB     *storage.DB
 	Engine *rrc.Engine
 	Config *config.Config
 
 	MainCompleter core.Completer
-	Classifier    core.Scorer
+	Scorer        core.Scorer
 	Embedder      core.Embedder
 
 	Searcher    *search.Searcher
@@ -107,27 +107,27 @@ type Substrate struct {
 // Option configures Build at the seams that aren't expressible
 // through the config alone. Production callers pass nothing — every
 // substrate component constructs from cfg.Settings.Providers via
-// the registered adapters. Tests inject fakes (gated classifier,
+// the registered adapters. Tests inject fakes (gated scorer,
 // stub oracle) to drive Engine.Assemble through real code paths
 // without standing up a TEI server.
 type Option func(*options)
 
 type options struct {
-	classifier  core.Scorer
+	scorer      core.Scorer
 	chunkOracle rrc.ChunkOracle
 }
 
-// WithClassifier overrides the classifier substrate would otherwise
-// build from the "classifier" provider in cfg. Production callers
+// WithScorer overrides the scorer substrate would otherwise
+// build from the "scorer" provider in cfg. Production callers
 // pass nothing; tests inject a fake Scorer to drive the engine
 // without standing up a TEI server.
-func WithClassifier(c core.Scorer) Option {
-	return func(o *options) { o.classifier = c }
+func WithScorer(s core.Scorer) Option {
+	return func(o *options) { o.scorer = s }
 }
 
 // WithChunkOracle overrides the chunk oracle substrate would
 // otherwise build from the embedder provider. Same semantics as
-// WithClassifier — production callers pass nothing; tests inject a
+// WithScorer — production callers pass nothing; tests inject a
 // stub that returns canned chunks/vectors.
 func WithChunkOracle(co rrc.ChunkOracle) Option {
 	return func(o *options) { o.chunkOracle = co }
@@ -139,12 +139,12 @@ func WithChunkOracle(co rrc.ChunkOracle) Option {
 // Build is intentionally tolerant of an unconfigured config block
 // (first run): the corresponding Substrate fields stay nil, and
 // the consumer (resolver, kernel) is expected to render a
-// not-yet-configured UX rather than crash. classifier == nil ||
+// not-yet-configured UX rather than crash. Scorer == nil ||
 // MainCompleter == nil produces a warning here so boot logs
 // surface the situation early.
 //
 // Options override fields that would otherwise come from cfg —
-// see WithClassifier / WithChunkOracle.
+// see WithScorer / WithChunkOracle.
 func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Option) (*Substrate, error) {
 	o := &options{}
 	for _, opt := range opts {
@@ -168,29 +168,29 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		s.MainCompleter = c
 	}
 
-	// Classifier (relevance scoring substrate). bge-reranker via TEI
-	// /rerank in production; the override path lets tests inject a
-	// fake. Constructed via the same core.NewProvider factory the
+	// Scorer (relevance scoring substrate). Cross-encoder reranker
+	// via zerank/TEI in production; the override path lets tests inject
+	// a fake. Constructed via the same core.NewProvider factory the
 	// embedder uses below — uniform shape per provider role.
-	if o.classifier != nil {
-		s.Classifier = o.classifier
-		log.Printf("Classifier: injected (test/override)")
-	} else if clsCfg, ok := cfg.Settings.Providers["classifier"]; ok && clsCfg.Adapter != "" {
-		p, err := core.NewProvider(clsCfg.ToCore())
+	if o.scorer != nil {
+		s.Scorer = o.scorer
+		log.Printf("Scorer: injected (test/override)")
+	} else if scrCfg, ok := cfg.Settings.Providers["scorer"]; ok && scrCfg.Adapter != "" {
+		p, err := core.NewProvider(scrCfg.ToCore())
 		if err != nil {
-			return nil, fmt.Errorf("classifier provider: %w", err)
+			return nil, fmt.Errorf("scorer provider: %w", err)
 		}
-		cp, ok := p.(core.ClassifierProvider)
+		sp, ok := p.(core.ScorerProvider)
 		if !ok {
-			return nil, fmt.Errorf("%w: adapter %q is not a ClassifierProvider", core.ErrUnsupported, clsCfg.Adapter)
+			return nil, fmt.Errorf("%w: adapter %q is not a ScorerProvider", core.ErrUnsupported, scrCfg.Adapter)
 		}
-		c, err := cp.Classifier(clsCfg.Model)
+		sc, err := sp.Scorer(scrCfg.Model)
 		if err != nil {
-			return nil, fmt.Errorf("classifier (%s/%s): %w", clsCfg.Adapter, clsCfg.Model, err)
+			return nil, fmt.Errorf("scorer (%s/%s): %w", scrCfg.Adapter, scrCfg.Model, err)
 		}
-		s.Classifier = c
-		s.RerankerModelID = clsCfg.Model
-		log.Printf("Classifier: %s/%s @ %s", clsCfg.Adapter, clsCfg.Model, clsCfg.BaseURL)
+		s.Scorer = sc
+		s.RerankerModelID = scrCfg.Model
+		log.Printf("Scorer: %s/%s @ %s", scrCfg.Adapter, scrCfg.Model, scrCfg.BaseURL)
 	}
 
 	// Embedder (cosine prefilter + semantic search).
@@ -211,7 +211,7 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		s.EmbedModelID = embCfg.Model
 	}
 
-	if s.Classifier == nil || s.MainCompleter == nil {
+	if s.Scorer == nil || s.MainCompleter == nil {
 		log.Printf("WARNING: providers not fully configured — configure at http://spidey.localhost:8420/settings")
 	}
 
@@ -297,7 +297,7 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	if s.ChunkOracle != nil {
 		engineOpts = append(engineOpts, rrc.WithChunkOracle(s.ChunkOracle))
 	}
-	s.Engine = rrc.NewEngine(rrcCfg, s.Classifier, engineOpts...)
+	s.Engine = rrc.NewEngine(rrcCfg, s.Scorer, engineOpts...)
 
 	// Backfill chunk embeddings in the background. Non-blocking —
 	// service accepts requests immediately; OnMessage misses on

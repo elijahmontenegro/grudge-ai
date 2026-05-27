@@ -22,6 +22,7 @@ func (r *Resolver) runtimeDeps() runtime.Deps {
 		Hooks:         r.Hooks,
 		Skills:        r.Skills,
 		MCPTools:      r.MCPTools,
+		Inserter:      r.Inserter,
 		Pubsub:        runtimePubsub{r},
 		Approvals:     r.Kernel,
 		PlanStore:     r.Kernel,

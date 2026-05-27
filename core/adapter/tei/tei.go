@@ -53,9 +53,9 @@ type provider struct {
 	client *httpc.Client
 }
 
-// New creates a TEI provider. Supports Embedder (/embed) and Classifier
+// New creates a TEI provider. Supports Embedder (/embed) and Scorer
 // (/rerank). Embedder serves dense embeddings from a bi-encoder model
-// like bge-m3; Classifier serves query-vs-candidates relevance scores
+// like bge-m3; Scorer serves query-vs-candidates relevance scores
 // from a reranker model like bge-reranker-v2-m3.
 func New(cfg Config) any {
 	return &provider{
@@ -73,8 +73,8 @@ func (p *provider) Embedder(_ string) (core.Embedder, error) {
 	}, nil
 }
 
-func (p *provider) Classifier(_ string) (core.Scorer, error) {
-	return &classifier{
+func (p *provider) Scorer(_ string) (core.Scorer, error) {
+	return &scorer{
 		baseURL: p.cfg.BaseURL,
 		client:  p.client,
 	}, nil
@@ -173,9 +173,9 @@ func logRetryEvent(op string) func(retry.Event) {
 	}
 }
 
-// --- Classifier (reranker) ---
+// --- Scorer (reranker) ---
 
-type classifier struct {
+type scorer struct {
 	baseURL string
 	client  *httpc.Client
 }
@@ -208,7 +208,7 @@ const rerankBatchSize = 32
 // even when the request was split across multiple HTTP calls
 // internally. Empty candidates returns an empty slice without a
 // network call.
-func (c *classifier) Score(ctx context.Context, query string, candidates []string) ([]float64, error) {
+func (s *scorer) Score(ctx context.Context, query string, candidates []string) ([]float64, error) {
 	if len(candidates) == 0 {
 		return nil, nil
 	}
@@ -226,7 +226,7 @@ func (c *classifier) Score(ctx context.Context, query string, candidates []strin
 			end = len(candidates)
 		}
 		slice := candidates[offset:end]
-		if err := c.scoreOnce(ctx, query, slice, scores[offset:end]); err != nil {
+		if err := s.scoreOnce(ctx, query, slice, scores[offset:end]); err != nil {
 			return nil, err
 		}
 	}
@@ -238,8 +238,8 @@ func (c *classifier) Score(ctx context.Context, query string, candidates []strin
 // Wrapped in retry.Do so a transient TEI slowness or a
 // restart-in-progress container (triggered by the docker-compose
 // healthcheck's canary /rerank probe) is retried rather than propagated
-// as a classifier error that would pause the whole round.
-func (c *classifier) scoreOnce(ctx context.Context, query string, slice []string, out []float64) error {
+// as a scorer error that would pause the whole round.
+func (s *scorer) scoreOnce(ctx context.Context, query string, slice []string, out []float64) error {
 	body, err := json.Marshal(rerankRequest{
 		Query:     query,
 		Texts:     slice,
@@ -250,13 +250,13 @@ func (c *classifier) scoreOnce(ctx context.Context, query string, slice []string
 		return err
 	}
 	return retry.Do(ctx, teiRetryPolicy(), logRetryEvent("tei rerank"), func(ctx context.Context) error {
-		httpReq, err := http.NewRequest("POST", c.baseURL+"/rerank", bytes.NewReader(body))
+		httpReq, err := http.NewRequest("POST", s.baseURL+"/rerank", bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 
-		respBody, status, err := c.client.DoJSON(ctx, httpReq)
+		respBody, status, err := s.client.DoJSON(ctx, httpReq)
 		if err != nil {
 			return err
 		}

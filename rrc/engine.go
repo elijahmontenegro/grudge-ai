@@ -33,7 +33,7 @@ import (
 // Messages are immutable → cached scores never become stale.
 type Engine struct {
 	mu         sync.Mutex
-	classifier Scorer
+	scorer Scorer
 	dag        *dag
 	scores     *scoreCache
 	cfg        EngineConfig
@@ -54,7 +54,7 @@ type ChunkRef struct {
 	// meaningless) on refs returned by ChunksForMessages or EnsureVector.
 	// Range [0, 1] for normalized similarity; the storage backend
 	// converts its native distance metric to similarity at the seam.
-	// The engine uses this when no classifier is configured — the
+	// The engine uses this when no scorer is configured — the
 	// retrieval score then feeds edge formation directly instead of
 	// being a precursor to the rerank pass.
 	RetrievalScore float64
@@ -159,12 +159,12 @@ func WithLoadedScores(scores []PersistedScore) Option {
 // required external dependency; everything else (oracle, persister,
 // hydrated DAG / scores) flows in via Option. The engine is
 // immutable post-construction — any setting change rebuilds.
-func NewEngine(cfg EngineConfig, classifier Scorer, opts ...Option) *Engine {
+func NewEngine(cfg EngineConfig, scorer Scorer, opts ...Option) *Engine {
 	e := &Engine{
-		classifier: classifier,
-		dag:        newDAG(),
-		scores:     newScoreCache(),
-		cfg:        cfg,
+		scorer: scorer,
+		dag:    newDAG(),
+		scores: newScoreCache(),
+		cfg:    cfg,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -190,7 +190,7 @@ func (e *Engine) Config() EngineConfig { return e.cfg }
 //  4. Aggregate chunk-pair scores to a single message-pair score via
 //     max. Emit edges where max-score ≥ EdgeThreshold.
 //
-// If the classifier is unavailable, returns a wrapped error — the
+// If the scorer is unavailable, returns a wrapped error — the
 // service MUST log this; a silent no-op leaves RRC dark.
 //
 // Caller must not call OnMessage concurrently with itself, Select,
@@ -208,7 +208,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 		// than pretending to work — the service wires this at startup.
 		return nil, OnMessageTelemetry{}, fmt.Errorf("%w: no chunk oracle configured", ErrClassifierUnavailable)
 	}
-	// A nil classifier is allowed: the oracle's Layer-1 retrieval score
+	// A nil scorer is allowed: the oracle's Layer-1 retrieval score
 	// (ChunkRef.RetrievalScore) feeds edge formation directly. The
 	// engine doesn't take a position on whether RRC is one-layer or
 	// two-layer; that's the substrate's choice. The adaptive gates
@@ -340,17 +340,17 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 		}
 		totalCached += len(filtered) - len(uncachedIdx)
 
-		// Score the uncached candidates. With a classifier configured,
+		// Score the uncached candidates. With a scorer configured,
 		// one rerank call per new chunk produces refined scores; without
 		// one, the retrieval score from Layer 1 (ChunkRef.RetrievalScore)
 		// is the candidate's score directly.
 		if len(uncachedIdx) > 0 {
-			if e.classifier != nil {
+			if e.scorer != nil {
 				candTexts := make([]string, len(uncachedIdx))
 				for i, idx := range uncachedIdx {
 					candTexts[i] = cands[idx].ref.Text
 				}
-				scores, rerr := e.classifier.Score(ctx, nc.Text, candTexts)
+				scores, rerr := e.scorer.Score(ctx, nc.Text, candTexts)
 				if rerr != nil {
 					return nil, OnMessageTelemetry{}, fmt.Errorf("%w: %v", ErrClassifierFailed, rerr)
 				}
@@ -454,7 +454,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 	// Reranker-only gate — Layer-1 cosine distributions cluster
 	// tighter; the stddev threshold here is calibrated for reranker
 	// score shapes and doesn't transfer.
-	if e.classifier != nil && e.cfg.MinBatchStdDev > 0 && batchStddev < e.cfg.MinBatchStdDev && len(candidates) > 0 {
+	if e.scorer != nil && e.cfg.MinBatchStdDev > 0 && batchStddev < e.cfg.MinBatchStdDev && len(candidates) > 0 {
 		log.Printf("RRC: OnMessage batch indiscriminate target=%s thread=%s candidates=%d mean=%.3f stddev=%.3f (< MinBatchStdDev=%.3f) — no edges this round",
 			msg.Id, msg.ThreadId, len(candidates), batchMean, batchStddev, e.cfg.MinBatchStdDev)
 		return nil, OnMessageTelemetry{
@@ -480,7 +480,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 		// candidates (cluster of similar scores where nothing truly
 		// stands out). Zero ZScoreThreshold or zero stddev disables.
 		// Reranker-only gate — same reason as Gate 3 above.
-		if e.classifier != nil && e.cfg.ZScoreThreshold > 0 && batchStddev > 0 {
+		if e.scorer != nil && e.cfg.ZScoreThreshold > 0 && batchStddev > 0 {
 			z := (c.ce - batchMean) / batchStddev
 			if z < e.cfg.ZScoreThreshold {
 				skippedZScore++
@@ -538,7 +538,7 @@ type OnMessageTelemetry struct {
 	DurationMs       int64 // wall clock from OnMessage entry to return
 	PriorsConsidered int   // prior messages after self/empty filter
 	CandidatesScored int   // priors that had at least one chunk-pair scored
-	Reranked         int   // chunk-pair scores produced by the classifier (excludes cache hits)
+	Reranked         int   // chunk-pair scores produced by the scorer (excludes cache hits)
 	EdgesFormed      int   // edges emitted after gates
 }
 
@@ -651,7 +651,7 @@ func (e *Engine) ApplyMMR(ctx context.Context, selected []*pb.SelectedMessage, l
 }
 
 // Fork creates an ephemeral engine for a subagent thread. Inherits a
-// snapshot of the parent's DAG and score cache; same classifier,
+// snapshot of the parent's DAG and score cache; same scorer,
 // oracle, and config. The parent's persister is reused so any new
 // edges the fork emits write through to the same storage.
 //
@@ -662,11 +662,11 @@ func (e *Engine) Fork() *Engine {
 	defer e.mu.Unlock()
 
 	fork := &Engine{
-		classifier: e.classifier,
-		dag:        newDAG(),
-		scores:     newScoreCache(),
-		cfg:        e.cfg,
-		oracle:     e.oracle,
+		scorer: e.scorer,
+		dag:    newDAG(),
+		scores: newScoreCache(),
+		cfg:    e.cfg,
+		oracle: e.oracle,
 	}
 	fork.scores.setPersister(e.scores.persist)
 	for _, edge := range e.dag.AllEdges() {

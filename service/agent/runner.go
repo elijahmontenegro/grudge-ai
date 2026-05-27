@@ -15,8 +15,8 @@ import (
 	"github.com/emontenegr/spidey/core"
 	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/rrc/chunk"
 	adk "github.com/emontenegr/spidey/service/agent/internal/adk"
+	"github.com/emontenegr/spidey/service/messages"
 	"github.com/emontenegr/spidey/service/storage"
 
 	adkagent "google.golang.org/adk/agent"
@@ -59,12 +59,11 @@ type Runner struct {
 	// Event handlers — service wires these to publish to GraphQL subscriptions
 	OnToolCall   func(callID, toolName, args string)
 	OnToolResult func(callID, toolName, result string, isError bool)
-	// Embed-on-arrival — called after a chunked message is stored so
-	// search indexes it. The queue worker reads chunk text from the
-	// DB by message ID; no text argument is needed and previously a
-	// vestigial one invited bugs (callsites picking different
-	// per-message text reps).
-	OnMessageStored func(msgID string)
+	// inserter centralizes message-store + chunk derivation + embed
+	// enqueue. Both the graph layer's storeMessage paths and the
+	// runner's indexMessage go through this single inserter so chunk
+	// derivation lives in one place.
+	inserter *messages.Inserter
 	// OnAutonomousError fires when a mid-run SendMessage fails during an
 	// autonomous loop. Per spec the loop pauses rather than exits — the
 	// handler is expected to pause autoState, publish Paused agent state
@@ -130,46 +129,18 @@ func (r *Runner) SetRoundCallback(cb func(round int, elapsed time.Duration)) {
 	r.onRound = cb
 }
 
-// chunksFor pre-splits a message's text into storage.Chunk rows using
-// the engine's configured chunk policy. Returns nil for chunkless
-// messages (system messages, empty-content turns) and when the runner
-// has no engine wired (tests that exercise processEvents without a
-// full runtime). Every Runner InsertMessage site goes through here so
-// chunk derivation happens at the runtime layer instead of inside
-// storage.
-func (r *Runner) chunksFor(msg *pb.Message) []storage.Chunk {
-	if r.engine == nil {
-		return nil
-	}
-	text := rrc.TextFromBlocks(msg.Content)
-	if text == "" {
-		return nil
-	}
-	rcs := chunk.Split(text, r.engine.Config().Chunk)
-	if len(rcs) == 0 {
-		return nil
-	}
-	out := make([]storage.Chunk, len(rcs))
-	for i, c := range rcs {
-		out[i] = storage.Chunk{
-			MessageID:  msg.Id,
-			ChunkIndex: c.Index,
-			Text:       c.Text,
-			ByteStart:  c.ByteStart,
-			ByteEnd:    c.ByteEnd,
-			TokenEst:   c.TokenEst,
-		}
-	}
-	return out
-}
-
 // NewRunner creates an agent runner for a thread.
+//
+// inserter centralizes message-store + chunk derivation + embed
+// enqueue. The graph layer's storeMessage path uses the same
+// inserter, so chunk derivation is identical across both insert
+// pathways (no per-layer chunksFor duplicate).
 //
 // rerankerModelID is the id under which reranker chunk-pair scores
 // are persisted in the scores table. Passed through to RRCLLM so
 // its protocol-rectification resolver can score Store-resident
 // candidates against the current query.
-func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName, instruction, rerankerModelID string) (*Runner, error) {
+func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName, instruction, rerankerModelID string, inserter *messages.Inserter) (*Runner, error) {
 	r := &Runner{
 		engine:          engine,
 		completer:       completer,
@@ -179,6 +150,7 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 		modelName:       modelName,
 		instruction:     instruction,
 		rerankerModelID: rerankerModelID,
+		inserter:        inserter,
 	}
 
 	// RRC-as-LLM: ADK calls this thinking it's an LLM. Engine owns its
@@ -287,21 +259,20 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 // worker pool; its cost is steady-state background load, not a tick
 // stage.
 func (r *Runner) indexMessage(msg *pb.Message) error {
-	chunks := r.chunksFor(msg)
-	pStart := time.Now()
-	err := r.db.InsertMessage(msg, chunks)
-	r.tickPersistMs += time.Since(pStart).Milliseconds()
-	if err != nil {
+	if r.inserter == nil {
+		// Tests construct a Runner with no inserter wired so they can
+		// exercise processEvents without a full runtime. Insert the
+		// message without chunks (matches the pre-Inserter behavior
+		// when the runner's engine was nil) and skip the embed enqueue.
+		pStart := time.Now()
+		err := r.db.InsertMessage(msg, nil)
+		r.tickPersistMs += time.Since(pStart).Milliseconds()
 		return err
 	}
-	if len(chunks) > 0 && r.OnMessageStored != nil {
-		// Goroutine-spawn matches the prior fire-and-forget shape: the
-		// queue's Enqueue() blocks if the buffer is full, which is the
-		// designed backpressure but shouldn't pause the runner's
-		// processEvents loop on the insert path.
-		go r.OnMessageStored(msg.Id)
-	}
-	return nil
+	pStart := time.Now()
+	err := r.inserter.Insert(msg)
+	r.tickPersistMs += time.Since(pStart).Milliseconds()
+	return err
 }
 
 // nextMsgID returns a unique monotonic message ID for this runner's thread.
@@ -704,7 +675,7 @@ func (r *Runner) afterModelCallback(
 
 	// QUD carry-forward removed along with the small-fast-model extractor.
 	// Thinking blocks are still stored by the runner's message loop; edge
-	// discovery on thinking text is done by the classifier when the
+	// discovery on thinking text is done by the scorer when the
 	// synthetic message is seen by OnMessage. No separate carry-forward
 	// pass is needed.
 	_ = llmResponse.Content

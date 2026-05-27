@@ -7,7 +7,7 @@ import (
 	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
-// --- Helpers (local; cross-module boundary prevents using service/testutil) ---
+// --- Helpers ---
 
 func textBlock(text string) *pb.ContentBlock {
 	return &pb.ContentBlock{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: text}}}

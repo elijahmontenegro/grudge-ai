@@ -7,8 +7,6 @@ import (
 
 	"github.com/emontenegr/spidey/core/httpc/retry"
 	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/rrc/chunk"
 	"github.com/emontenegr/spidey/service/agent"
 	"github.com/emontenegr/spidey/service/kernel"
 	"github.com/emontenegr/spidey/service/pubsub"
@@ -76,45 +74,12 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 	return entry.Runner, nil
 }
 
-// storeMessage pre-chunks the message text per the engine's chunk
-// config, persists message+chunks in a single InsertMessage call,
-// and fires eager embedding of those chunks into the search/RRC
-// cache. The embed is async — failure falls back to the startup
-// backfill goroutine and the live-embed path in ChunkOracle.EnsureVector,
-// so a slow or down embedder doesn't block a user mutation.
+// storeMessage routes through the kernel's Inserter — chunk
+// derivation, InsertMessage, and embed enqueue all happen in one
+// place (service/messages). Graph-side and runtime-side inserts
+// converge on the same code path.
 func (r *Resolver) storeMessage(msg *pb.Message, _text string) error {
-	chunks := chunksFor(msg, r.Engine().Config().Chunk)
-	if err := r.DB.InsertMessage(msg, chunks); err != nil {
-		return err
-	}
-	r.Enqueue(msg.Id)
-	return nil
-}
-
-// chunksFor pre-splits a message's text into storage.Chunk rows using
-// the given chunk policy. Used by storeMessage (and the editMessage
-// thread-branch path in schema.resolvers.go).
-func chunksFor(msg *pb.Message, cfg chunk.Config) []storage.Chunk {
-	text := rrc.TextFromBlocks(msg.Content)
-	if text == "" {
-		return nil
-	}
-	rcs := chunk.Split(text, cfg)
-	if len(rcs) == 0 {
-		return nil
-	}
-	out := make([]storage.Chunk, len(rcs))
-	for i, c := range rcs {
-		out[i] = storage.Chunk{
-			MessageID:  msg.Id,
-			ChunkIndex: c.Index,
-			Text:       c.Text,
-			ByteStart:  c.ByteStart,
-			ByteEnd:    c.ByteEnd,
-			TokenEst:   c.TokenEst,
-		}
-	}
-	return out
+	return r.Inserter.Insert(msg)
 }
 
 // stopRunner stops and removes a thread's runner. The actual

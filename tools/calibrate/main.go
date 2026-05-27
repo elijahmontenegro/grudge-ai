@@ -60,10 +60,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "provider: %v\n", err)
 		os.Exit(1)
 	}
-	cp := prov.(core.ClassifierProvider)
-	cls, err := cp.Classifier("zeroentropy/zerank-1-small")
+	sp := prov.(core.ScorerProvider)
+	scr, err := sp.Scorer("zeroentropy/zerank-1-small")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "classifier: %v\n", err)
+		fmt.Fprintf(os.Stderr, "scorer: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -75,7 +75,7 @@ func main() {
 			nQ++
 			candidates := append([]string{t.Correct}, t.Distractors...)
 			start := time.Now()
-			scores, err := cls.Score(ctx, t.Query, candidates)
+			scores, err := scr.Score(ctx, t.Query, candidates)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "score %s: %v\n", t.ID, err)
 				continue

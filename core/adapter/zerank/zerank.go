@@ -53,7 +53,7 @@ type provider struct {
 	client *httpc.Client
 }
 
-// New creates a zerank provider. Implements ClassifierProvider only
+// New creates a zerank provider. Implements ScorerProvider only
 // — the model is a cross-encoder reranker. vLLM can technically
 // serve completions for the same weights, but this adapter is
 // purpose-built for reranking; callers wanting completion against
@@ -71,17 +71,17 @@ func New(cfg Config) any {
 	}
 }
 
-func (p *provider) Classifier(_ string) (core.Scorer, error) {
-	return &classifier{
+func (p *provider) Scorer(_ string) (core.Scorer, error) {
+	return &scorer{
 		baseURL: p.cfg.BaseURL,
 		model:   p.cfg.Model,
 		client:  p.client,
 	}, nil
 }
 
-// --- Classifier ---
+// --- Scorer ---
 
-type classifier struct {
+type scorer struct {
 	baseURL string
 	model   string
 	client  *httpc.Client
@@ -143,21 +143,21 @@ type completionResponse struct {
 // Score returns the zerank relevance score for each (query, candidate) pair.
 // One vLLM call per candidate — prefix caching makes the per-call cost
 // dominated by candidate-side tokens, not the duplicated query prefix.
-func (c *classifier) Score(ctx context.Context, query string, candidates []string) ([]float64, error) {
+func (s *scorer) Score(ctx context.Context, query string, candidates []string) ([]float64, error) {
 	out := make([]float64, len(candidates))
 	for i, doc := range candidates {
-		s, err := c.scoreOne(ctx, query, doc)
+		score, err := s.scoreOne(ctx, query, doc)
 		if err != nil {
 			return nil, err
 		}
-		out[i] = s
+		out[i] = score
 	}
 	return out, nil
 }
 
-func (c *classifier) scoreOne(ctx context.Context, query, document string) (float64, error) {
+func (s *scorer) scoreOne(ctx context.Context, query, document string) (float64, error) {
 	req := completionRequest{
-		Model: c.model,
+		Model: s.model,
 		Messages: []chatMessage{
 			{Role: "system", Content: query},
 			{Role: "user", Content: document},
@@ -179,13 +179,13 @@ func (c *classifier) scoreOne(ctx context.Context, query, document string) (floa
 
 	var resp completionResponse
 	err = retry.Do(ctx, zerankRetryPolicy(), nil, func(ctx context.Context) error {
-		httpReq, err := http.NewRequest("POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+		httpReq, err := http.NewRequest("POST", s.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 
-		respBody, status, err := c.client.DoJSON(ctx, httpReq)
+		respBody, status, err := s.client.DoJSON(ctx, httpReq)
 		if err != nil {
 			return err
 		}

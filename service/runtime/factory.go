@@ -14,6 +14,7 @@ import (
 	"github.com/emontenegr/spidey/service/agent/tools"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/hooks"
+	"github.com/emontenegr/spidey/service/messages"
 	"github.com/emontenegr/spidey/service/prompt"
 	"github.com/emontenegr/spidey/service/sandbox"
 	"github.com/emontenegr/spidey/service/skills"
@@ -35,6 +36,7 @@ type Deps struct {
 	Hooks     *hooks.Dispatcher
 	Skills    []skills.Skill
 	MCPTools  []tool.Tool
+	Inserter  *messages.Inserter
 
 	Pubsub        Pubsub
 	Approvals     Approvals
@@ -93,10 +95,10 @@ func Build(threadID string, deps Deps) (*Entry, error) {
 		deps.Pubsub.PublishRetry(threadID, ev)
 	})
 	rerankerModelID := ""
-	if c, ok := deps.Config.Settings.Providers["classifier"]; ok {
+	if c, ok := deps.Config.Settings.Providers["scorer"]; ok {
 		rerankerModelID = c.Model
 	}
-	runner, err := agent.NewRunner(deps.Engine, mainWithRetry, deps.DB, threadID, toolList, modelName, instruction, rerankerModelID)
+	runner, err := agent.NewRunner(deps.Engine, mainWithRetry, deps.DB, threadID, toolList, modelName, instruction, rerankerModelID, deps.Inserter)
 	if err != nil {
 		return nil, err
 	}
@@ -215,14 +217,10 @@ func wireRunnerCallbacks(runner *agent.Runner, threadID string, deps Deps) {
 		})
 	}
 
-	// Embed-on-arrival for search indexing. Each message's chunks
-	// get embedded as soon as it's stored so RRC's cosine prefilter
-	// has vectors ready by the time the next OnMessage call fires.
-	runner.OnMessageStored = func(msgID string) {
-		if deps.EmbedEnqueuer != nil {
-			deps.EmbedEnqueuer.Enqueue(msgID)
-		}
-	}
+	// Embed-on-arrival is owned by deps.Inserter — Bootstrap wires the
+	// inserter with the EmbedEnqueuer closure so chunk derivation +
+	// InsertMessage + Enqueue happen in one place. No per-runner hook
+	// here; Runner.indexMessage routes through the inserter directly.
 
 	// Per spec (docs/spec/web/MANIFEST.adoc:187): autonomous errors pause
 	// the run rather than exit it. Handler pauses the autoState so

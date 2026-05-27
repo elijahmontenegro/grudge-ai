@@ -42,10 +42,11 @@ tasks:
       - go run ./internal/verifydeps
 
   verify:
-    desc: Run every CI invariant — lint, dep-graph checks, Go tests, web tests
+    desc: Run every CI invariant — lint, dep-graph checks, gqlgen freshness, Go tests, web tests
     cmds:
       - task: lint
       - task: verify:deps
+      - task: gqlgen:check
       - task: test
       - task: web:test
 
@@ -64,6 +65,19 @@ tasks:
     cmds:
       - buf generate
       - git diff --exit-code proto/gen/
+
+  gqlgen:
+    desc: Regenerate gqlgen output (generated.go + models_gen.go) from schema
+    dir: service/graph
+    cmds:
+      - go run github.com/99designs/gqlgen generate
+
+  gqlgen:check:
+    desc: Verify gqlgen output is up to date with schema + gqlgen.yml (CI)
+    dir: service/graph
+    cmds:
+      - go run github.com/99designs/gqlgen generate
+      - git diff --exit-code generated.go models_gen.go
 
   web:install:
     desc: Install frontend dependencies

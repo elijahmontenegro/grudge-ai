@@ -36,7 +36,7 @@ function parse<T>(raw: string | undefined | null, fallback: T): T {
 }
 
 // First-run focuses on the minimum to get the app usable: main model.
-// Other providers (classifier, embedder, search) can be configured
+// Other providers (scorer, embedder, search) can be configured
 // later in Settings. They are NOT auto-probed — the backend only
 // initializes providers that appear in config.Settings.Providers.
 export function FirstRun({ onComplete }: { onComplete: () => void }) {
@@ -93,7 +93,7 @@ export function FirstRun({ onComplete }: { onComplete: () => void }) {
       </div>
       <h1>Welcome to Spidey.</h1>
       <div className="lede">
-        Spidey runs locally. Point it at a model provider to get started. RRC classifier,
+        Spidey runs locally. Point it at a model provider to get started. RRC scorer,
         embedder, and web search are optional — configure them later in Settings if you want
         prerequisite selection, semantic search, or the WebSearch tool.
       </div>

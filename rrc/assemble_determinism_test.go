@@ -77,7 +77,7 @@ func TestAssemble_Deterministic(t *testing.T) {
 // the assemble output. Each call constructs a new engine — the
 // determinism test compares cross-engine outputs, which is the
 // stricter contract (state from one call mustn't leak into another).
-func runAssemble(t *testing.T, cfg EngineConfig, mc *mockClassifier, o *mockChunkOracle, corpus []*pb.Message, query *pb.Message) AssembleResult {
+func runAssemble(t *testing.T, cfg EngineConfig, mc *mockScorer, o *mockChunkOracle, corpus []*pb.Message, query *pb.Message) AssembleResult {
 	t.Helper()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	res, err := e.Assemble(context.Background(), AssembleRequest{

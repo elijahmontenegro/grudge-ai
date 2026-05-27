@@ -58,7 +58,7 @@ func (s *Settings) GetUserName() string {
 	return "User"
 }
 
-// ProviderConfig configures a model role (main, classifier, small_fast).
+// ProviderConfig configures a model role (main, scorer, small_fast).
 type ProviderConfig struct {
 	Adapter string `json:"adapter"`
 	Model   string `json:"model"`
@@ -185,7 +185,7 @@ func probeProviders(s *Settings) {
 	// didn't fit alongside a 4B embedder on 12GB). vLLM exposes an
 	// OpenAI-compatible /v1/models endpoint.
 	if probeHTTP("http://localhost:8000/v1/models") {
-		s.Providers["classifier"] = ProviderConfig{
+		s.Providers["scorer"] = ProviderConfig{
 			Adapter: "zerank",
 			Model:   "zeroentropy/zerank-1-small",
 			BaseURL: "http://localhost:8000",

@@ -13,7 +13,7 @@ import (
 // Error type constants for GraphQL error extensions.
 const (
 	ErrTypeProviderUnavailable  = "PROVIDER_UNAVAILABLE"
-	ErrTypeClassifierUnavailable = "CLASSIFIER_UNAVAILABLE"
+	ErrTypeScorerUnavailable = "SCORER_UNAVAILABLE"
 	ErrTypeContextLength        = "CONTEXT_LENGTH"
 	ErrTypeToolDenied           = "TOOL_DENIED"
 	ErrTypeAgentError           = "AGENT_ERROR"
@@ -32,9 +32,9 @@ func ErrorPresenter(ctx context.Context, err error) *gqlerror.Error {
 	case errors.Is(err, core.ErrRateLimited):
 		errType = ErrTypeProviderUnavailable
 	case errors.Is(err, rrc.ErrClassifierFailed):
-		errType = ErrTypeClassifierUnavailable
+		errType = ErrTypeScorerUnavailable
 	case errors.Is(err, rrc.ErrClassifierUnavailable):
-		errType = ErrTypeClassifierUnavailable
+		errType = ErrTypeScorerUnavailable
 	case errors.Is(err, rrc.ErrMessageNotFound), errors.Is(err, rrc.ErrThreadNotFound):
 		errType = ErrTypeAgentError
 	case isContextLengthError(err):

@@ -14,29 +14,29 @@ import (
 
 // --- Mock implementations ---
 
-// mockClassifier returns configurable reranker scores keyed by
+// mockScorer returns configurable reranker scores keyed by
 // (prior candidate text, query text). The engine's Rerank call passes
 // the new-chunk text as query and prior-chunk texts as candidates —
 // keying the map as "candidate|query" matches the SetScore(prior, new)
 // call convention used below.
-type mockClassifier struct {
+type mockScorer struct {
 	pairScores map[string]float64
 	callCount  int
 }
 
-func newMockClassifier() *mockClassifier {
-	return &mockClassifier{pairScores: make(map[string]float64)}
+func newMockClassifier() *mockScorer {
+	return &mockScorer{pairScores: make(map[string]float64)}
 }
 
 // SetScore registers the reranker score the mock will return for a
 // (prior, new) text pair. `prior` is the candidate text the reranker
 // is scoring; `new` is the query text (the new-chunk being scored
 // against its priors in OnMessage).
-func (m *mockClassifier) SetScore(prior, new string, score float64) {
+func (m *mockScorer) SetScore(prior, new string, score float64) {
 	m.pairScores[prior+"|"+new] = score
 }
 
-func (m *mockClassifier) Score(_ context.Context, query string, candidates []string) ([]float64, error) {
+func (m *mockScorer) Score(_ context.Context, query string, candidates []string) ([]float64, error) {
 	m.callCount++
 	scores := make([]float64, len(candidates))
 	for i, c := range candidates {
@@ -51,7 +51,7 @@ func (m *mockClassifier) Score(_ context.Context, query string, candidates []str
 // (all pairs score the same, stable-sort preserves input order).
 type mockChunkOracle struct {
 	texts     map[string]string
-	retrieval map[string]float64 // text → RetrievalScore for nil-classifier path
+	retrieval map[string]float64 // text → RetrievalScore for nil-scorer path
 }
 
 func newMockChunkOracle() *mockChunkOracle {
@@ -66,7 +66,7 @@ func (o *mockChunkOracle) Register(messageID, text string) {
 }
 
 // SetRetrievalScore stamps a RetrievalScore onto chunks whose text
-// matches. Used by tests that exercise the nil-classifier engine
+// matches. Used by tests that exercise the nil-scorer engine
 // path where RetrievalScore feeds edge formation directly.
 func (o *mockChunkOracle) SetRetrievalScore(text string, score float64) {
 	o.retrieval[text] = score
@@ -140,14 +140,14 @@ func addMsg(o *mockChunkOracle, id string, position int64, threadID string, text
 	return m
 }
 
-// testEngine wires a fresh engine with the mock classifier and oracle.
+// testEngine wires a fresh engine with the mock scorer and oracle.
 // cfg pins EdgeThreshold=0.5 (legacy test fixtures use 0.3/0.5/0.8
 // score values calibrated to that boundary; the production default
 // is higher, calibrated against the real reranker's distribution),
 // and disables the adaptive gates (ZScoreThreshold=0, MinBatchStdDev=0)
 // so the legacy tests exercise basic threshold gating only. The
 // adaptive gates have their own dedicated test suite further down.
-func testEngine(mc *mockClassifier, o *mockChunkOracle) *Engine {
+func testEngine(mc *mockScorer, o *mockChunkOracle) *Engine {
 	cfg := DefaultConfig()
 	cfg.EdgeThreshold = 0.5
 	cfg.ZScoreThreshold = 0
@@ -161,7 +161,7 @@ func TestNewEngine(t *testing.T) {
 	cfg := DefaultConfig()
 	e := NewEngine(cfg, newMockClassifier())
 
-	if e.classifier == nil {
+	if e.scorer == nil {
 		t.Fatal("classifier should not be nil")
 	}
 	// Assert the calibrated default (0.60 — see DefaultConfig comment
@@ -188,7 +188,7 @@ func TestOnMessage_EmptyCorpus(t *testing.T) {
 }
 
 func TestOnMessage_NilClassifier(t *testing.T) {
-	// A nil classifier is allowed: the engine takes the Layer-1
+	// A nil scorer is allowed: the engine takes the Layer-1
 	// retrieval score from ChunkRef.RetrievalScore as the candidate's
 	// score directly. Edges form whenever that score clears
 	// EdgeThreshold. The adaptive gates (MinBatchStdDev, ZScoreThreshold)
@@ -206,7 +206,7 @@ func TestOnMessage_NilClassifier(t *testing.T) {
 
 	edges, _, err := e.OnMessage(context.Background(), msg, []*pb.Message{prior})
 	if err != nil {
-		t.Fatalf("nil classifier should not error, got %v", err)
+		t.Fatalf("nil scorer should not error, got %v", err)
 	}
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge from RetrievalScore, got %d", len(edges))
@@ -217,7 +217,7 @@ func TestOnMessage_NilClassifier(t *testing.T) {
 }
 
 func TestOnMessage_NilOracle(t *testing.T) {
-	// Symmetric to nil classifier: no oracle means OnMessage cannot
+	// Symmetric to nil scorer: no oracle means OnMessage cannot
 	// resolve chunks. Same failure class — surface, don't silently
 	// produce zero edges.
 	e := NewEngine(DefaultConfig(), newMockClassifier())
@@ -469,7 +469,7 @@ func TestFork(t *testing.T) {
 		t.Fatalf("fork should have %d edges, got %d", len(parentEdges), len(forkEdges))
 	}
 
-	if fork.classifier != e.classifier {
+	if fork.scorer != e.scorer {
 		t.Fatal("fork should share classifier reference")
 	}
 }
@@ -639,7 +639,7 @@ func TestOnMessage_SkipsSelf(t *testing.T) {
 
 	m0 := addMsg(o, "m0", 0, "t1", "hello")
 	// Corpus includes the message itself — should be filtered out and
-	// no classifier call should happen.
+	// no scorer call should happen.
 	edges, _, err := e.OnMessage(context.Background(), m0, []*pb.Message{m0})
 	if err != nil {
 		t.Fatal(err)
@@ -682,7 +682,7 @@ func threeGateConfig() EngineConfig {
 	return cfg
 }
 
-func threeGateEngine(mc *mockClassifier, o *mockChunkOracle) *Engine {
+func threeGateEngine(mc *mockScorer, o *mockChunkOracle) *Engine {
 	return NewEngine(threeGateConfig(), mc, WithChunkOracle(o))
 }
 

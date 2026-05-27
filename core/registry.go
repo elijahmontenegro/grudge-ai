@@ -18,7 +18,7 @@ type ProviderConfig struct {
 
 // ProviderFactory constructs a provider from the config. The
 // returned value is `any` — callers type-assert against the role
-// interfaces (CompleterProvider, EmbedderProvider, ClassifierProvider)
+// interfaces (CompleterProvider, EmbedderProvider, ScorerProvider)
 // declared in provider.go. Adapters register themselves via
 // RegisterProvider(name, factory) in init(); callers invoke
 // NewProvider(cfg) to dispatch by adapter name.

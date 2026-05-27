@@ -214,8 +214,8 @@ func TestKernel_EngineSwap_AtomicUnderConcurrentReads(t *testing.T) {
 // the engine it captured, B sees the new engine. No panic, no torn
 // write to the old engine's DAG.
 //
-// Goes through the production path: Bootstrap with substrate.WithClassifier
-// at boot, UpdateEngineConfig with substrate.WithClassifier on swap.
+// Goes through the production path: Bootstrap with substrate.WithScorer
+// at boot, UpdateEngineConfig with substrate.WithScorer on swap.
 // substrate.Build constructs the engine in both cases via the same
 // code path; the test exercises the actual production swap, not a
 // shortcut. Validates atomic.Pointer correctness AND substrate's
@@ -240,7 +240,7 @@ func TestKernel_MidAssembleEngineSwap(t *testing.T) {
 
 	k, err := Bootstrap(
 		context.Background(), cfg,
-		substrate.WithClassifier(scorerA),
+		substrate.WithScorer(scorerA),
 		substrate.WithChunkOracle(oracleA),
 	)
 	if err != nil {
@@ -295,7 +295,7 @@ func TestKernel_MidAssembleEngineSwap(t *testing.T) {
 	newCfg.EdgeThreshold = 0.42 // distinct so we can verify the swap
 	if err := k.UpdateEngineConfig(
 		context.Background(), newCfg,
-		substrate.WithClassifier(scorerB),
+		substrate.WithScorer(scorerB),
 		substrate.WithChunkOracle(oracleB),
 	); err != nil {
 		close(scorerA.release)

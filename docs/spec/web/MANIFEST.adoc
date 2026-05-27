@@ -272,7 +272,7 @@ Minimal. The system works without configuration when providers are detected at d
 - Provider endpoint (supported: Ollama, Anthropic, OpenAI/compatible, Google AI, vLLM, TEI)
 - Model selection
 - API key (for cloud providers)
-- Classifier endpoint (where is the cross-encoder? TEI at localhost, etc.)
+- Scorer endpoint (where is the cross-encoder? TEI at localhost, etc.)
 
 Smart detection: if Ollama and TEI are running at default localhost ports, detect and offer them. Reduce first-run friction to confirmation, not configuration.
 

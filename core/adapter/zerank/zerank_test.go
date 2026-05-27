@@ -74,10 +74,10 @@ func TestScoreExtractsBinaryLogitAndAppliesSigmoid(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := New(Config{BaseURL: srv.URL, Model: "zeroentropy/zerank-1-small"}).(core.ClassifierProvider)
-	cls, err := p.Classifier("zeroentropy/zerank-1-small")
+	p := New(Config{BaseURL: srv.URL, Model: "zeroentropy/zerank-1-small"}).(core.ScorerProvider)
+	cls, err := p.Scorer("zeroentropy/zerank-1-small")
 	if err != nil {
-		t.Fatalf("Classifier: %v", err)
+		t.Fatalf("Scorer: %v", err)
 	}
 
 	scores, err := cls.Score(context.Background(), "query", []string{"doc"})
@@ -117,7 +117,7 @@ func TestScoreMatchesYesTokenWithLeadingSpace(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cls, _ := New(Config{BaseURL: srv.URL}).(core.ClassifierProvider).Classifier("zerank-1-small")
+	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
 	scores, err := cls.Score(context.Background(), "q", []string{"d"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
@@ -153,7 +153,7 @@ func TestScoreReturnsZeroWhenYesAbsent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cls, _ := New(Config{BaseURL: srv.URL}).(core.ClassifierProvider).Classifier("zerank-1-small")
+	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
 	scores, err := cls.Score(context.Background(), "q", []string{"d"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
@@ -188,7 +188,7 @@ func TestScoreScoresMultipleCandidates(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cls, _ := New(Config{BaseURL: srv.URL}).(core.ClassifierProvider).Classifier("zerank-1-small")
+	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
 	scores, err := cls.Score(context.Background(), "q", []string{"d1", "d2", "d3"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
@@ -202,13 +202,13 @@ func TestScoreScoresMultipleCandidates(t *testing.T) {
 }
 
 // TestProviderImplementsClassifierOnly verifies the adapter's role
-// surface: zerank provides only the ClassifierProvider role.
+// surface: zerank provides only the ScorerProvider role.
 // Type-asserting against CompleterProvider or EmbedderProvider
 // fails — there are no stub methods for those.
 func TestProviderImplementsClassifierOnly(t *testing.T) {
 	p := New(Config{BaseURL: "http://localhost"})
-	if _, ok := p.(core.ClassifierProvider); !ok {
-		t.Error("zerank should be a ClassifierProvider")
+	if _, ok := p.(core.ScorerProvider); !ok {
+		t.Error("zerank should be a ScorerProvider")
 	}
 	if _, ok := p.(core.CompleterProvider); ok {
 		t.Error("zerank should not be a CompleterProvider")

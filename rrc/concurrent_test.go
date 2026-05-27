@@ -113,7 +113,7 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 		t.Fatal("engineA produced empty wire on round 1")
 	}
 
-	// Build engineB from a fresh classifier + oracle. In production
+	// Build engineB from a fresh scorer + oracle. In production
 	// kernel.UpdateEngineConfig hydrates engineB with edges and
 	// scores from disk; for this test the point is that engineA
 	// continues to function while engineB exists — they hold no

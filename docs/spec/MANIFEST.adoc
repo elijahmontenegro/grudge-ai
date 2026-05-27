@@ -29,7 +29,7 @@
 
 1. **Core Library** (`spec/core`) -- A Go library providing provider-agnostic abstractions for language models, embeddings, and classifiers. Proto definitions are the truth types. The foundational dependency. Everything else is a consumer.
 
-2. **RRC Engine** (`spec/rrc`) -- A Go library implementing the {rrc-full} algorithm. Prerequisite detection, selection scoring, payload assembly, native format restoration, warm carry-forward. Stateful when the service provides persistent data structures (agent path), stateless when called per-request (proxy path). No HTTP, no UI, no opinions about deployment. Depends on proto types only -- not on core. Defines its own consumer interfaces (Classifier, Completer). Imported by the service.
+2. **RRC Engine** (`spec/rrc`) -- A Go library implementing the {rrc-full} algorithm. Prerequisite detection, selection scoring, payload assembly, native format restoration, warm carry-forward. Stateful when the service provides persistent data structures (agent path), stateless when called per-request (proxy path). No HTTP, no UI, no opinions about deployment. Depends on proto types only -- not on core. Defines its own consumer interfaces (Scorer, Completer). Imported by the service.
 
 3. **Service** (`spec/service`) -- The application. A system tray process that runs the RRC engine as an LLM proxy, handles agent orchestration via {agent-framework}, manages thread storage, exposes a {api-protocol} API, and serves the web UI on `spidey.localhost:8420`. One binary. The user opens their browser.
 
@@ -47,7 +47,7 @@ gen/go  <──  core  <──  service  ──>  web
 
 - `gen/go` depends on `google.golang.org/protobuf` only. Proto-generated Go types. The shared type language.
 - `core` depends on `gen/go`. Provider-agnostic interfaces, adapters.
-- `rrc` depends on `gen/go`. Defines its own consumer interfaces (Classifier, Completer) -- no import of `core`. Algorithm library, stateful or stateless depending on caller. Go structural typing ensures any `core` adapter satisfies `rrc`'s interfaces.
+- `rrc` depends on `gen/go`. Defines its own consumer interfaces (Scorer, Completer) -- no import of `core`. Algorithm library, stateful or stateless depending on caller. Go structural typing ensures any `core` adapter satisfies `rrc`'s interfaces.
 - `service` depends on `gen/go` + `core` + `rrc`. The application binary. Runs the RRC engine, orchestrates agents via {agent-framework}, serves the web UI, exposes proxy and {api-protocol} API.
 - `web` is a {ui-framework} app. Talks to the service via {api-protocol} ({api-client}). Served as static assets by the service.
 
@@ -93,13 +93,13 @@ spidey/
 │   ├── spidey/v1/            #   Canonical .proto sources
 │   │   ├── thread.proto      #     Message, Role, ContentBlock, Thread, SelectionScope
 │   │   ├── rrc.proto         #     Edge, QUD, QUDGraph, SelectionResult
-│   │   ├── classifier.proto  #     ClassifyRequest/Response
+│   │   ├── (removed — Scorer is Go-only)
 │   │   └── llm.proto         #     LLMMessage, CompletionRequest/Response, StreamChunk
 │   └── gen/go/spidey/v1/     #   Generated Go types (checked in)
 ├── core/                      # Provider-agnostic interfaces + adapters
 │   ├── completer.go          #   Completer interface
 │   ├── embedder.go           #   Embedder interface
-│   ├── classifier.go         #   Scorer interface (formerly Classifier)
+│   ├── scorer.go               #   Scorer interface
 │   ├── provider.go           #   Provider interfaces + registry
 │   ├── codec.go              #   Codec interface (proto ↔ provider wire format)
 │   ├── errors.go             #   Sentinel errors

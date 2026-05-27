@@ -18,7 +18,7 @@ import (
 func (r *Runner) SpawnSubagent(ctx context.Context, task string, forkThreadID string) (*Runner, error) {
 	forkedEngine := r.engine.Fork()
 
-	fork, err := NewRunner(forkedEngine, r.completer, r.db, forkThreadID, r.tools, r.modelName, r.instruction, r.rerankerModelID)
+	fork, err := NewRunner(forkedEngine, r.completer, r.db, forkThreadID, r.tools, r.modelName, r.instruction, r.rerankerModelID, r.inserter)
 	if err != nil {
 		return nil, fmt.Errorf("create fork runner: %w", err)
 	}

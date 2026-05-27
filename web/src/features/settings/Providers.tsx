@@ -18,7 +18,7 @@ export function Providers({ providers, setProviders }: ProvidersProps) {
   }
 
   const main = providers.main ?? EMPTY_PROVIDER
-  const classifier = providers.classifier ?? EMPTY_PROVIDER
+  const scorer = providers.scorer ?? EMPTY_PROVIDER
   const embedder = providers.embedder ?? EMPTY_PROVIDER
   const search = providers.search ?? EMPTY_PROVIDER
 
@@ -31,10 +31,10 @@ export function Providers({ providers, setProviders }: ProvidersProps) {
         onChange={(p) => setKey('main', p)}
       />
       <RoleCard
-        title="Classifier · RRC cross-encoder"
-        subtitle="Pairwise dependency scoring (NLI)"
-        role={classifier}
-        onChange={(p) => setKey('classifier', p)}
+        title="Scorer · RRC cross-encoder"
+        subtitle="Pairwise prerequisite relevance scoring"
+        role={scorer}
+        onChange={(p) => setKey('scorer', p)}
       />
       <RoleCard
         title="Embedder · RRC embeddings"

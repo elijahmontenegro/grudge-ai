@@ -3,7 +3,7 @@ package core
 import "context"
 
 // Scorer scores candidates against a query. The single contract for
-// every reranker / similarity classifier in the system —
+// every reranker / similarity scorer in the system —
 // (query, []candidates) → []float64, one score per candidate aligned
 // with the input order, higher = more relevant.
 //

@@ -20,18 +20,18 @@ models:
     model:
       - github.com/99designs/gqlgen/graphql.Time
   Thread:
-    model: github.com/emontenegr/spidey/gen/go/spidey/v1.Thread
+    model: github.com/emontenegr/spidey/proto/gen/go/spidey/v1.Thread
   Message:
-    model: github.com/emontenegr/spidey/gen/go/spidey/v1.Message
+    model: github.com/emontenegr/spidey/proto/gen/go/spidey/v1.Message
   Edge:
-    model: github.com/emontenegr/spidey/gen/go/spidey/v1.Edge
+    model: github.com/emontenegr/spidey/proto/gen/go/spidey/v1.Edge
   SelectedMessage:
-    model: github.com/emontenegr/spidey/gen/go/spidey/v1.SelectedMessage
+    model: github.com/emontenegr/spidey/proto/gen/go/spidey/v1.SelectedMessage
   ExcludedMessage:
-    model: github.com/emontenegr/spidey/gen/go/spidey/v1.ExcludedMessage
+    model: github.com/emontenegr/spidey/proto/gen/go/spidey/v1.ExcludedMessage
   SelectionResult:
-    model: github.com/emontenegr/spidey/gen/go/spidey/v1.SelectionResult
+    model: github.com/emontenegr/spidey/proto/gen/go/spidey/v1.SelectionResult
   QUD:
-    model: github.com/emontenegr/spidey/gen/go/spidey/v1.QUD
+    model: github.com/emontenegr/spidey/proto/gen/go/spidey/v1.QUD
   QUDGraph:
-    model: github.com/emontenegr/spidey/gen/go/spidey/v1.QUDGraph
+    model: github.com/emontenegr/spidey/proto/gen/go/spidey/v1.QUDGraph

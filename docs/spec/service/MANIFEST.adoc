@@ -269,10 +269,10 @@ Permissions are configurable per-thread. A thread working on a production codeba
 The service configures three model roles:
 
 - **Main model** -- The user's LLM. Reasoning, tool use, responses. Configured by the user (Anthropic, OpenAI, Ollama, etc.).
-- **Cross-encoder** -- NLI model for pairwise dependency scoring. The Classifier interface is provider-agnostic. Development environment uses TEI.
+- **Cross-encoder** -- NLI model for pairwise dependency scoring. The Scorer interface is provider-agnostic. Development environment uses TEI (rerank) and vLLM-served zerank.
 - **Small fast model** -- Internal utility. QUD extraction from thinking blocks, annotations, autocomplete, tool rationale. User configures during onboarding -- same Completer interface and provider selection as the main model. Sub-second latency required for autocomplete; multi-second acceptable for QUD extraction. Recommended models: sub-1B extraction-focused (Osmosis-Structure-0.6B, NuExtract-tiny, Qwen3.5-0.8B). Autocomplete uses a per-thread store of user input history as context -- the small model predicts likely next input based on thread context and input history.
 
-All three use provider-agnostic interfaces (Completer for main + small fast, Classifier for cross-encoder). The RRC engine defines its own consumer interfaces that any core adapter satisfies via Go structural typing.
+All three use provider-agnostic interfaces (Completer for main + small fast, Scorer for cross-encoder). The RRC engine defines its own consumer interfaces that any core adapter satisfies via Go structural typing.
 
 ==== First Run
 
