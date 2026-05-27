@@ -109,7 +109,7 @@ type Engine struct {
 }
 ----
 
-The classifier and completer are injected at construction, not per-call. Standard Go pattern (`http.Client` takes its `Transport` at construction). The engine holds references. For the proxy path (new engine per request), the service creates an engine with the same scorer/completer each time -- a reference copy, not a construction cost. Fork inherits the parent's scorer and completer.
+The scorer and completer are injected at construction, not per-call. Standard Go pattern (`http.Client` takes its `Transport` at construction). The engine holds references. For the proxy path (new engine per request), the service creates an engine with the same scorer/completer each time -- a reference copy, not a construction cost. Fork inherits the parent's scorer and completer.
 
 ==== DAG
 
@@ -216,9 +216,9 @@ var (
 
 **Method-to-error mapping:**
 
-- `OnMessage` → `ErrClassifierFailed` (classifier error during pairwise scoring)
+- `OnMessage` → `ErrScorerFailed` (scorer error during pairwise scoring)
 - `Select` → `ErrMessageNotFound` (promptID not in DAG), `ErrThreadNotFound` (threadID not in QUD graphs, when scope is thread-scoped)
-- `CarryForward` → `ErrClassifierFailed` (cross-encoder on thinking text), `ErrCompleterFailed` (small model QUD extraction)
+- `CarryForward` → `ErrScorerFailed` (cross-encoder on thinking text), `ErrCompleterFailed` (small model QUD extraction)
 - `Fork` → `ErrThreadNotFound` (parentThreadID not found)
 - `Merge` → `ErrThreadNotFound` (parentThreadID not found)
 
@@ -234,7 +234,7 @@ The service uses RWMutex on the global DAG and score cache for concurrent select
 
 - **OnMessage:** O(N) scorer calls where N is corpus size. Paid once per message arrival; results cached forever.
 - **Select:** O(V+E) traversal where V is selected messages and E is their edges. Bounded by score floor.
-- **CarryForward:** O(1) classifier call + O(1) completer call per thinking block (cross-encoder on thinking text + small model QUD extraction).
+- **CarryForward:** O(1) scorer call + O(1) completer call per thinking block (cross-encoder on thinking text + small model QUD extraction).
 - **Transitive reduction:** O(V·E) on the selected subgraph (V typically ≤30, E typically <100).
 
 Performance optimization is explicitly deferred. Correctness and completeness are the targets. O(N) pairwise scoring per message arrival is the accepted cost of prerequisite detection accuracy. The system may be slow; it must not be wrong.
@@ -243,7 +243,7 @@ Performance optimization is explicitly deferred. Correctness and completeness ar
 
 ==== Cross-Encoder Pairwise Dependency Classification
 
-A single cross-encoder classifies the dependency relationship between two messages. One model, one forward pass per pair, via the core classifier interface.
+A single cross-encoder scores the dependency relationship between two messages. One model, one forward pass per pair, via the core scorer interface.
 
 When message M_n arrives, the cross-encoder evaluates every (M_i, M_n) pair for i < n — across ALL threads, not just the thread M_n belongs to. Scoring is global because dependency does not respect organizational boundaries. A message in "backend architecture" may depend on a decision made in "project planning." Each pair produces a dependency score. Pairs scoring above threshold become edges in the prerequisite DAG.
 

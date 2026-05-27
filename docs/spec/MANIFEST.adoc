@@ -27,7 +27,7 @@
 
 {project-name} is an agentic software system built natively for {rrc-full} (RRC). Four concerns, four specs:
 
-1. **Core Library** (`spec/core`) -- A Go library providing provider-agnostic abstractions for language models, embeddings, and classifiers. Proto definitions are the truth types. The foundational dependency. Everything else is a consumer.
+1. **Core Library** (`spec/core`) -- A Go library providing provider-agnostic abstractions for language models, embeddings, and scorers. Proto definitions are the truth types. The foundational dependency. Everything else is a consumer.
 
 2. **RRC Engine** (`spec/rrc`) -- A Go library implementing the {rrc-full} algorithm. Prerequisite detection, selection scoring, payload assembly, native format restoration, warm carry-forward. Stateful when the service provides persistent data structures (agent path), stateless when called per-request (proxy path). No HTTP, no UI, no opinions about deployment. Depends on proto types only -- not on core. Defines its own consumer interfaces (Scorer, Completer). Imported by the service.
 
@@ -148,7 +148,7 @@ spidey/
 
 ==== In Scope (project-wide)
 
-- Provider-agnostic abstractions for LLMs, embedders, and classifiers
+- Provider-agnostic abstractions for LLMs, embedders, and scorers
 - RRC engine: cross-encoder prerequisite detection, QUD graph via carry-forward, prerequisite DAG, payload assembly
 - System tray service: RRC proxy for third-party clients, agent orchestration for native client, thread storage, {api-protocol} API
 - Web UI: agentic interface with RRC introspection, served on localhost

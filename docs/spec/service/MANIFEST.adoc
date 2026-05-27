@@ -315,7 +315,7 @@ Independent of either request flow:
 
 *Container:* Docker Engine API v1.53
 
-*Depends on:* `proto/gen/go/spidey/v1` (proto types), `spec/core` (LLM/classifier interfaces, provider adapters), `spec/rrc` (RRC engine), {agent-framework}
+*Depends on:* `proto/gen/go/spidey/v1` (proto types), `spec/core` (LLM/scorer interfaces, provider adapters), `spec/rrc` (RRC engine), {agent-framework}
 
 === Scope
 
@@ -357,7 +357,7 @@ Independent of either request flow:
 ==== Out of Scope
 
 - The RRC algorithm itself (belongs to `spec/rrc`; the service calls it)
-- LLM/classifier interface or adapter definitions (belongs to `spec/core`)
+- LLM/scorer interface or adapter definitions (belongs to `spec/core`)
 - Proto truth type definitions (belongs to `spec/core`)
 - Agentic UI, RRC introspection views, UX patterns (belongs to `spec/web`)
 - Cloud deployment or multi-tenancy
@@ -606,7 +606,7 @@ Proto types are the source of truth. Table schemas derive from proto field defin
 | `Message` | `messages` | `content` stored as proto-encoded BLOB (repeated ContentBlock, not flattened). Indexed on `(thread_id, position)`.
 | `Edge` | `edges` | Primary key `(from_message_id, to_message_id)`. Indexed on `to_message_id` for backward traversal.
 | `QUD` | `quds` | `addressed_by` stored as JSON array (repeated string). Indexed on `thread_id`.
-| Score cache | `scores` | Key: `(from_message_id, to_message_id)`. Value: cross-encoder score. Not a proto type — derived artifact from classifier.
+| Score cache | `scores` | Key: `(from_message_id, to_message_id)`. Value: cross-encoder score. Not a proto type — derived artifact from the scorer.
 |===
 
 On startup: load edges, scores, and QUD graphs from SQLite into RRC engine's in-memory structures via `Engine.LoadDAG`, `Engine.LoadScoreCache`, `Engine.LoadQUDGraph`.
@@ -703,7 +703,7 @@ Fields: `event` (enum: PreToolUse, PostToolUse, ThreadStart, ThreadEnd, PreCarry
 {
   "providers": {
     "main": {"adapter": "anthropic", "model": "claude-sonnet-4-20250514", "base_url": "https://api.anthropic.com"},
-    "classifier": {"adapter": "tei", "model": "cross-encoder/nli-deberta-v3-base", "base_url": "http://localhost:8080"},
+    "scorer": {"adapter": "zerank", "model": "zeroentropy/zerank-1-small", "base_url": "http://localhost:8080"},
     "small_fast": {"adapter": "ollama", "model": "osmosis-structure-0.6b", "base_url": "http://localhost:11434"}
   },
   "permissions": {
@@ -770,7 +770,7 @@ When a user edits message N in a thread:
 1. Service calls `Engine.Fork` at position N (same machinery as subagent forks)
 2. New thread created with shared message prefix (messages 1..N-1 are immutable, referenced not copied)
 3. Edited message inserted at position N in the new thread (new ID, new content)
-4. Edited message scored against predecessors (O(N) classifier calls + embedding)
+4. Edited message scored against predecessors (O(N) scorer calls + embedding)
 5. Old thread unchanged — old branch's identity and RRC state intact
 6. User navigates between branches
 
