@@ -2,10 +2,10 @@
 
 Selective memory assembly for LLM agents. Built on **Retrieval-Restored
 Continuation (RRC)** — instead of prepending the full conversation history
-on every model call, Spidey selects the specific prior turns the current
-query depends on and restores them as native conversation entries. The
-model receives a bounded input that looks like ordinary conversation
-history; it has no mechanism to tell which turns were retrieved.
+on every model call, Spidey selects the specific prior turns the new turn
+depends on and restores them as native conversation entries. The model
+receives a bounded input that looks like ordinary conversation history;
+it has no mechanism to tell which turns were retrieved.
 
 <!-- Drop a screenshot at docs/assets/screenshot.png and uncomment: -->
 <!-- ![Spidey UI](docs/assets/screenshot.png) -->
@@ -26,13 +26,14 @@ properties:
    turns, stored losslessly. No external knowledge base, no
    summarization, no write-time graph extraction. Lossy transformations
    irreversibly discard information based on what *looked* relevant at
-   write time; relevance is a property of the query, not the turn.
+   write time; relevance is decided at read time by the new turn, not
+   fixed when the prior turn was stored.
 
 2. **Prerequisite detection, not similarity.** Two-stage retrieval
    (bi-encoder candidates → cross-encoder filter) tuned with three-gate
-   hyperselective thresholding. The query's *prerequisites* — the turns
-   it depends on for coherent continuation — not topical matches.
-   Zero-return is a valid outcome.
+   hyperselective thresholding. The new turn's *prerequisites* — the
+   prior turns it depends on for coherent continuation — not topical
+   matches. Zero-return is a valid outcome.
 
 3. **Native format restoration.** Selected turns enter the input
    structurally identical to entries from the current session — no
@@ -40,9 +41,9 @@ properties:
    no formatting transformation. The model processes them through the
    same attention computation it applies to any conversation input.
 
-4. **Bounded assembly.** 0–5 turns per query in production. Working-
-   memory-sized, regardless of how long the conversation has been
-   running.
+4. **Bounded assembly.** 0–5 selected turns per call in production.
+   Working-memory-sized, regardless of how long the conversation has
+   been running.
 
 This is **structurally distinct from RAG**. RAG *augments* — labeled
 retrieved text inserted into a prompt template, generated against
