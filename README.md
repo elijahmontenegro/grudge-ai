@@ -1,32 +1,49 @@
 # Spidey
 
-Selective memory assembly for LLM agents. Built on **Retrieval-Restored
-Continuation (RRC)** — instead of prepending the full conversation history
-on every model call, Spidey selects the specific prior turns the new turn
-depends on and restores them as native conversation entries. The model
-receives a bounded input that looks like ordinary conversation history;
-it has no mechanism to tell which turns were retrieved.
+Spidey is an LLM agent framework with a different approach to memory.
+Most agents replay the full conversation history on every model call —
+Spidey doesn't. Each turn, it picks only the prior turns the new turn
+*depends on* and slips them back into the input as ordinary
+conversation entries: no template, no "Here is some relevant context:"
+header, no formatting. The model can't tell which turns were retrieved
+from any other turn in the session.
 
 <!-- Drop a screenshot at docs/assets/screenshot.png and uncomment: -->
 <!-- ![Spidey UI](docs/assets/screenshot.png) -->
 
-## RRC in a nutshell
+## Why this is different
 
-LLMs are stateless; the "conversation" is just an input sequence
-somebody assembled. The standard pattern prepends everything every
-turn, until attention dilutes and the model decoheres. RRC selects
-only the prior turns the new turn *depends on*, restores them in the
-model's native conversation format (no template, no "here is some
-relevant context:" wrapper), and stops. The model can't tell which
-turns were retrieved.
+Two patterns dominate agent memory today:
 
-RAG *augments* (labeled retrieved text in a prompt template, external
-corpus). RRC *restores* (native turns from the model's own history).
-Different operations, different consequences.
+- **Re-send everything.** The default. Works fine until the history
+  gets big — then the model starts forgetting instructions, contradicting
+  earlier turns, and behaving like it didn't see what just happened.
+- **Wrap retrieved snippets in a context block.** RAG-shaped: a
+  retriever finds relevant passages, the application formats them into
+  `Here is some relevant context: …` and pastes that into the prompt.
+  The model treats the block as a hint or supplementary material — not
+  as something it said.
 
-See [the paper](docs/rrc-paper.md) for the four defining properties,
-the three-gate threshold mechanism, reflective selection, and the
-comparison to neighboring techniques.
+Both leak the seam between retrieval and conversation. The model knows
+when it's being handed retrieved text, and it adjusts accordingly.
+
+Spidey's technique — **Retrieval-Restored Continuation (RRC)** — closes
+that seam. Conversation history is stored losslessly. On each new turn,
+a two-stage retriever picks the prior turns that turn depends on
+(prerequisite detection, not topical similarity), and those turns slot
+into the input in their original shape — same role tags, same content
+blocks, same position semantics as the live session. There's no
+framing for the model to "see retrieval" through, because the input
+isn't framed as having any. It just looks like a shorter version of
+the same conversation, with the load-bearing past included and the
+irrelevant past elided.
+
+RAG *augments*. RRC *restores*. Different verbs, different consequences.
+
+See [the paper](docs/rrc-paper.md) for the threshold mechanism,
+reflective selection (mid-generation re-retrieval driven by the model's
+own reasoning), and comparison to neighboring frameworks (Letta, Zep,
+FLARE, Jeong's reconstructed contexts).
 
 ## Architecture
 
