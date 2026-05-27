@@ -3,7 +3,7 @@ package graph
 import (
 	"strings"
 
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
 // protoRoleToDisplay maps proto roles to frontend-friendly names.

@@ -19,7 +19,7 @@ import (
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/internal/httpc"
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
 // dumpBudget caps how many distinct 5xx request bodies we dump per

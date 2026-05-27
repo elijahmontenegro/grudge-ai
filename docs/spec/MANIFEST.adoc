@@ -1,0 +1,200 @@
+= Spidey
+:project-name: Spidey
+:project-paradigm: RRC-Native Provider-Agnostic Agentic Framework
+// RRC
+:rrc-full: Retrieval-Restored Continuation
+// Stack
+:lang: Go 1.26.1
+:ui-framework: React 19.2.4
+:api-protocol: GraphQL
+:api-client: Apollo Client 4.1.6
+:api-server: gqlgen v0.17.89
+:codegen: buf v1.67.0, gqlgen v0.17.89, graphql-codegen v6.2.1, go generate
+:repo-layout: Monorepo with discrete Go modules
+:agent-framework: Google Agent Development Kit (ADK) v1.0.0 (google.golang.org/adk, Apache 2.0)
+:build-tool: Vite 8.0.5
+// Dev environment
+:dev-lm-runtime: Ollama
+:dev-embedder-runtime: TEI (Hugging Face Text Embeddings Inference)
+
+== Context
+
+=== Identity
+
+*Name:* {project-name}
+
+*Paradigm:* {project-paradigm}
+
+{project-name} is an agentic software system built natively for {rrc-full} (RRC). Four concerns, four specs:
+
+1. **Core Library** (`spec/core`) -- A Go library providing provider-agnostic abstractions for language models, embeddings, and classifiers. Proto definitions are the truth types. The foundational dependency. Everything else is a consumer.
+
+2. **RRC Engine** (`spec/rrc`) -- A Go library implementing the {rrc-full} algorithm. Prerequisite detection, selection scoring, payload assembly, native format restoration, warm carry-forward. Stateful when the service provides persistent data structures (agent path), stateless when called per-request (proxy path). No HTTP, no UI, no opinions about deployment. Depends on proto types only -- not on core. Defines its own consumer interfaces (Classifier, Completer). Imported by the service.
+
+3. **Service** (`spec/service`) -- The application. A system tray process that runs the RRC engine as an LLM proxy, handles agent orchestration via {agent-framework}, manages thread storage, exposes a {api-protocol} API, and serves the web UI on `spidey.localhost:8420`. One binary. The user opens their browser.
+
+4. **Web UI** (`spec/web`) -- A {ui-framework} application providing the agentic interface -- not a chat clone. Full RRC introspection: what was selected, excluded, prerequisite scores, prompt derivation. Agent state, tool visualization, execution traces. Served by the service on localhost; the user opens a browser tab. UX is a first-class spec concern.
+
+=== Dependency Graph
+
+----
+gen/go  <──  core  <──  service  ──>  web
+  │                       │
+  ├────── rrc   <─────────┘
+  │
+  (all Go modules depend on gen/go)
+----
+
+- `gen/go` depends on `google.golang.org/protobuf` only. Proto-generated Go types. The shared type language.
+- `core` depends on `gen/go`. Provider-agnostic interfaces, adapters.
+- `rrc` depends on `gen/go`. Defines its own consumer interfaces (Classifier, Completer) -- no import of `core`. Algorithm library, stateful or stateless depending on caller. Go structural typing ensures any `core` adapter satisfies `rrc`'s interfaces.
+- `service` depends on `gen/go` + `core` + `rrc`. The application binary. Runs the RRC engine, orchestrates agents via {agent-framework}, serves the web UI, exposes proxy and {api-protocol} API.
+- `web` is a {ui-framework} app. Talks to the service via {api-protocol} ({api-client}). Served as static assets by the service.
+
+=== Stack
+
+*Language:* {lang}
+
+*UI:* {ui-framework}
+
+*API Layer:* {api-protocol} -- server: {api-server} (Go), client: {api-client} (React)
+
+*Code Generation:* {codegen}
+
+*Agent Framework:* {agent-framework}
+
+*Build Tool (Web):* {build-tool}
+
+*Repository Layout:* {repo-layout}
+
+==== Code Generation Philosophy
+
+Code generation is a first-class architectural concern. The primary reason is maintainability: when truth types change, downstream code regenerates. No manual sync. This extends to generating bindings for different codebases and languages. It also establishes a single source of truth -- proto definitions generate Go types, {api-protocol} schema, and TypeScript client types through one pipeline.
+
+==== Agnostic Boundaries
+
+The following are explicitly provider-agnostic behind abstraction interfaces:
+
+- **Language Model** -- Any LLM (Claude, GPT, Gemini, Llama, Mistral, etc.)
+- **Embedder** -- Any embedding model (TEI, OpenAI embeddings, Cohere, etc.)
+- **Provider** -- Any serving infrastructure (Ollama, Anthropic API, OpenAI API, Google AI, vLLM, any OpenAI-compatible endpoint)
+
+The core library defines the abstraction interfaces. Provider implementations are separate packages. "Just works" is the design target -- consumers interact with capabilities, never with provider specifics.
+
+==== Development Environment
+
+The development environment uses {dev-lm-runtime} for local language model serving and {dev-embedder-runtime} for local embedding. These are development tools, not product dependencies. The product is agnostic to both.
+
+=== Repository Structure
+
+----
+spidey/
+├── proto/                     # Truth types + generated output
+│   ├── spidey/v1/            #   Canonical .proto sources
+│   │   ├── thread.proto      #     Message, Role, ContentBlock, Thread, SelectionScope
+│   │   ├── rrc.proto         #     Edge, QUD, QUDGraph, SelectionResult
+│   │   ├── classifier.proto  #     ClassifyRequest/Response
+│   │   └── llm.proto         #     LLMMessage, CompletionRequest/Response, StreamChunk
+│   └── gen/go/spidey/v1/     #   Generated Go types (checked in)
+├── core/                      # Provider-agnostic interfaces + adapters
+│   ├── completer.go          #   Completer interface
+│   ├── embedder.go           #   Embedder interface
+│   ├── classifier.go         #   Scorer interface (formerly Classifier)
+│   ├── provider.go           #   Provider interfaces + registry
+│   ├── codec.go              #   Codec interface (proto ↔ provider wire format)
+│   ├── errors.go             #   Sentinel errors
+│   ├── adapter/              #   Provider adapters (one package per provider)
+│   │   ├── ollama/, anthropic/, openai/, googleai/
+│   │   ├── vllm/, tei/, zerank/
+│   └── httpc/                 #   Retry policy + shared HTTP client
+├── rrc/                       # RRC engine (depends on proto/gen/go only, not core)
+│   ├── engine.go             #   Public API: NewEngine, OnMessage, Assemble, Fork, Merge
+│   ├── interfaces.go         #   Consumer-defined interfaces: Reranker, ChunkOracle
+│   ├── selection.go          #   Selection algorithm + DAG + MMR
+│   ├── score_cache.go        #   Score cache + Scorer composition
+│   ├── predicate.go          #   Reachability predicate
+│   ├── config.go, errors.go
+│   ├── chunk/                 #   Chunking + token estimator
+│   └── tiktoken/              #   Tokenizer (opt-in subpackage)
+├── service/                   # Application binary
+│   ├── cmd/{spidey,tickstat}/ #   Shipped binaries
+│   ├── agent/                 #   ADK runner, RRC-as-LLM adapter, tools, autonomous
+│   ├── storage/               #   SQLite: threads, messages, edges, scores, paths.go
+│   ├── kernel/                #   Bootstrap + runtime state (split across kernel/plans/selections/approvals/embed.go)
+│   ├── runtime/               #   Per-thread runner factory + registry
+│   ├── prompt/                #   Template assembly (templates/ embedded via //go:embed)
+│   ├── graph/                 #   GraphQL schema + resolvers + attachments.go
+│   ├── search/, sandbox/, config/, hooks/, secrets/, skills/, substrate/, pubsub/, tray/
+│   └── internal/adoc/         #   AsciiDoc include-resolver (internal-only)
+├── web/                       # React 19 + Apollo Client UI
+│   ├── package.json, vite.config.ts, codegen.ts
+│   ├── src/{domain,features,primitives,state,graphql,hooks,lib,data,test}/
+│   └── dist/                  #   Build output (embedded into service via //go:embed)
+├── deploy/                    # Container artifacts
+│   ├── sandbox/Dockerfile     #   Agent tool-execution sandbox
+│   ├── vllm/Dockerfile, README.md
+│   └── searxng/settings.yml
+├── tools/                     # Dev-only entry points (calibrate, smoke)
+├── internal/verifydeps/       # Module-private import-boundary linter
+├── docs/                      # Written-word artifacts
+│   ├── spec/                  #   CCA specifications (this file lives here)
+│   └── eval-reports/          #   Substrate eval methodology + results
+├── eval/                      # Python eval harness (curated)
+├── go.mod                     # Single Go module rooted at the repo
+└── buf.yaml                   # Protobuf build config (buf v1.67.0)
+----
+
+=== Scope
+
+==== In Scope (project-wide)
+
+- Provider-agnostic abstractions for LLMs, embedders, and classifiers
+- RRC engine: cross-encoder prerequisite detection, QUD graph via carry-forward, prerequisite DAG, payload assembly
+- System tray service: RRC proxy for third-party clients, agent orchestration for native client, thread storage, {api-protocol} API
+- Web UI: agentic interface with RRC introspection, served on localhost
+- Code generation pipeline: proto -> Go, GraphQL schema -> TypeScript
+- Single Go module rooted at the repo. `core/`, `rrc/`, `service/`, and `proto/gen/go/spidey/v1/` are packages, not independent modules.
+- Concurrency model specified in `spec/service` (RRC engine not goroutine-safe, service serializes access, RWMutex on global DAG/score cache, SQLite WAL mode)
+
+==== Out of Scope (project-wide)
+
+- Cloud-hosted or multi-tenant deployment
+- Mobile clients
+- Chat interface (this is an agentic interface)
+- Training or fine-tuning models
+- Provider-specific preferential treatment
+
+=== Abstract
+
+Existing agentic frameworks are either:
+- Tightly coupled to specific providers
+- Language-model wrappers with bolted-on agent patterns
+- Research prototypes not built for production use
+
+{project-name} addresses the gap: a production-grade, provider-agnostic agentic framework built natively for {rrc-full}. The core library provides clean abstractions. The service runs the RRC engine as invisible infrastructure -- any client gets selective memory by pointing at it. The web UI is the native RRC client with full introspection into selection, scoring, and prompt derivation.
+
+Specific third-party products are mentioned as examples only, with no preferential treatment.
+
+// tag::rrc[]
+=== {rrc-full} (RRC)
+
+LLMs are stateless. Every API call is an independent forward pass. The standard approach is brute force: the client sends the full conversation history every request. This works until attention dilutes across hundreds of messages and the model loses coherence.
+
+RRC replaces brute force with selective assembly. The client sends its full conversation as it normally would. RRC intercepts that request, identifies which specific messages the current prompt depends on, and forwards only those to the model as native conversation entries. The model sees 10 messages instead of 500 -- the prerequisites for coherent continuation. It cannot tell the difference.
+
+**RRC is not RAG.** RAG retrieves from external knowledge bases and injects labeled context ("here is relevant information"). RRC retrieves from the conversation the client already sent and restores native messages -- structurally indistinguishable from session history. Different corpus, different format, different model perception.
+
+==== Four Properties
+
+1. **Lossless corpus.** RRC expects the conversation it receives to be complete and unmodified. No summarization, no entity extraction upstream. This is a constraint on the client, not a service RRC provides. RRC does not own storage.
+2. **Prerequisite detection.** Selection targets the messages the prompt depends on, not topically similar content. A 1000-message conversation has many messages about the same topic -- the prompt depends on maybe 3.
+3. **Native format restoration.** Selected messages are placed in the model's input as ordinary conversation entries. No template, no label. The model processes them through standard attention.
+4. **Bounded selective assembly.** Zero-return is valid -- the model is capable without augmentation for a novel prompt.
+
+// end::rrc[]
+
+==== Delivery Model
+
+The service delivers RRC transparently. It runs a proxy that accepts standard LLM API requests from any client. The client sends its full conversation as it normally would. The proxy extracts the conversation, calls the RRC engine to select prerequisites and assemble the payload, then forwards the assembled payload to the upstream LLM. On the response path, the proxy parses the model's output stream and feeds extracted reasoning content back to the RRC engine for warm carry-forward.
+
+The client does not change. The model does not know. Each request is independent.

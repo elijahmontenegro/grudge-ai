@@ -15,9 +15,9 @@ import (
 	"path/filepath"
 	"time"
 
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/service/adoc"
+	"github.com/emontenegr/spidey/service/internal/adoc"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"

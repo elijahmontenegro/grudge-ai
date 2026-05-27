@@ -12,7 +12,7 @@ import (
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/internal/httpc"
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
 const apiVersion = "2023-06-01"

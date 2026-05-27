@@ -1,0 +1,788 @@
+= Spidey Service
+:project-name: Spidey
+:module-name: Service
+:rrc-full: Retrieval-Restored Continuation
+:lang: Go 1.26.1
+:api-protocol: GraphQL
+:api-server: gqlgen v0.17.89
+:api-client: Apollo Client 4
+:codegen: gqlgen v0.17.89, go generate
+:agent-framework: Google ADK Go v1.0.0 (google.golang.org/adk, Apache 2.0)
+:tray-lib: fyne.io/systray v1.12.0
+:port: 8420
+
+== Context
+
+=== Identity
+
+*Name:* {project-name} {module-name}
+
+*Paradigm:* System Tray Application
+
+The service is the application binary. It runs as a system tray process. Two distinct request flows share a common foundation:
+
+==== Proxy Path (third-party clients)
+
+A transparent RRC proxy. Third-party clients send standard LLM API requests -- they don't know the service exists. The proxy intercepts the request, runs the RRC engine statelessly (score, select, assemble), forwards to the upstream LLM, and streams the response back. Nothing persists. No DAG, no QUD graph, no carry-forward accumulation. Each request is independent.
+
+- **Entry point:** HTTP endpoint (standard LLM API format)
+- **State model:** Stateless. The client owns its corpus and sends it every time. The proxy does not store messages, scores, or edges across requests.
+- **Client awareness:** None. The client doesn't know RRC is involved.
+- **Response:** Streamed passthrough. The client sees a normal LLM response.
+
+==== Agent Path (native web UI)
+
+Orchestrated by Google ADK (Agent Development Kit) Go. The RRC engine integrates as an implementation of ADK's `model.LLM` interface -- ADK calls what it thinks is an LLM, and RRC intercepts transparently. Same pattern as the proxy path: the caller doesn't change, the model doesn't know.
+
+ADK provides: agent orchestration (sequential, parallel, loop agents), tool system (function tools with auto-declaration, toolsets, MCP integration), plugin lifecycle hooks, session/event model with state management, multi-agent patterns with agent transfer.
+
+RRC provides: prerequisite selection on every LLM call, carry-forward on every LLM response, compounding within tool chains. ADK doesn't know this is happening.
+
+The web UI issues {api-protocol} requests. ADK runs the agent loop. RRC sits between ADK and the LLM. Thread storage is persistent and server-owned. RRC introspection data flows to the web UI via {api-protocol} subscriptions.
+
+- **Entry point:** {api-protocol} API (queries, mutations, subscriptions)
+- **State model:** Stateful. The service owns thread history, agent state, carry-forward cache, and ADK session state.
+- **Client awareness:** Full. The web UI sees everything RRC does.
+- **Response:** Structured {api-protocol} responses + live subscriptions for streaming, agent state, and introspection.
+
+==== Shared Foundation
+
+Both paths share:
+
+- **RRC engine** -- The same engine code, two modes. The proxy path runs it statelessly (no persistence). The agent path runs it statefully (global DAG, per-thread QUD, compounding carry-forward).
+- **Provider routing** -- Both paths forward to the same upstream LLM, configured the same way.
+
+==== Subagents (Ephemeral Thread Forks)
+
+A subagent is an ephemeral thread fork. The parent model spawns it with a task via ADK's AgentTool. The subagent inherits a snapshot of the parent thread's DAG and score cache at fork time — warm start. It runs RRC per-event against its own forked corpus (parent's messages at fork time + its own new messages). Its carry-forward builds its own QUD graph — identity diverges from the parent through its own reasoning trajectory.
+
+When the subagent finishes, its messages and DAG edges merge back into the parent's corpus. The subagent's intermediate work (file reads, analysis, tool results) is available for future selection in the parent thread. Like a git branch that merges back — the work product reunites. The cross-encoder scores from the subagent transfer (messages are immutable, scores are valid). The parent only needs to score the subagent's messages against any parent messages that arrived after the fork.
+
+The subagent's result enters the parent thread as a message. In the UI, the subagent's intermediate work is collapsible — the user sees the result inline, expands to see the process.
+
+ADK agent types map to this model:
+
+- **AgentTool** -- Ephemeral thread fork. Task in, result out. Messages merge back.
+- **ParallelAgent** -- Multiple forks running concurrently. Each fork has its own RRC state. All merge back on completion.
+- **LoopAgent** -- Sequential execution within the same thread. No fork needed.
+- **SendMessage** -- Message a running fork. The fork continues with the new input. Another RRC selection event in the fork.
+
+==== Plan Mode
+
+A permission state transition. The service switches the agent to read-only mode: write tools (FileEdit, FileWrite, Bash write ops) are disabled, read tools (FileRead, Glob, Grep, Bash read ops, WebSearch, WebFetch) remain available. The agent explores the codebase and designs an implementation approach.
+
+**Lifecycle:**
+
+1. **Enter:** `EnterPlanMode` tool call. Service transitions permission state to `plan`. Write tools disabled. Plan mode prompt section included. Agent explores using read-only tools.
+2. **Explore:** Agent reads code, searches for patterns, identifies critical files. Multiple turns of exploration before designing.
+3. **Write plan:** Agent creates a plan directory -- `$XDG_DATA_HOME/spidey/plans/{slug}/` with `plan.adoc` as the entry point. Slug generated per plan (human-readable, unique per thread). The agent writes the plan and supporting artifacts (research notes, code analysis, architectural findings from the exploration phase). AsciiDoc `include::` directives compose artifacts into the plan. The agent builds the directory; the service creates it on first write.
+4. **Exit:** `ExitPlanMode` tool call. Service compiles the plan directory (resolves includes) and surfaces it to the user in the web UI for review. User approves, optionally edits, or rejects.
+5. **Post-approval:** Service restores previous permission state (write tools re-enabled). Plan content enters the thread as a message (available for RRC selection). Plan file persists on disk. Plan content injected as per-turn prompt section -- the agent sees the plan on every subsequent request.
+
+The plan is a design artifact, not a project management tool. The agent reads the plan and implements. There is no step-by-step status tracking. Progress is implicit in the work being done.
+
+**Plan format:** AsciiDoc directory -- the project's document regime. The agent writes structured sections (objective, approach, steps, critical files). No prescribed schema -- the agent structures the plan as the design requires. Supporting artifacts from the exploration phase compose into the plan via `include::` directives.
+
+Example plan directory:
+
+----
+plans/implement-auth/
+├── plan.adoc              # Entry point
+├── research.adoc          # Exploration findings
+└── existing-patterns.adoc # Code patterns found during exploration
+----
+
+Example `plan.adoc`:
+
+[source,asciidoc]
+----
+= Implement Auth Module
+
+\== Objective
+
+OAuth 2.0 with PKCE flow. Three endpoints: authorize, token, refresh.
+
+\== Research
+
+\include::research.adoc[]
+
+\== Approach
+
+Implement routes first, then PKCE flow, then retry logic.
+Each step builds on the previous. All behind Docker sandbox.
+
+\== Steps
+
+\=== Set up OAuth routes
+
+Register /auth/authorize, /auth/token, /auth/refresh endpoints.
+
+\=== Implement PKCE flow
+
+Code verifier generation, challenge computation, token exchange.
+
+\=== Add retry policy for token refresh
+
+Exponential backoff: 1s, 2s, 4s. Max 3 retries.
+
+\== Critical Files
+
+\include::existing-patterns.adoc[]
+
+* `service/auth/handler.go` -- route registration
+* `service/auth/pkce.go` -- PKCE implementation
+----
+
+**RRC integration:** The approved plan enters the thread as a message. RRC selects it as a prerequisite during execution. Carry-forward captures the model's reasoning about the plan. The plan's influence on selection compounds across rounds.
+
+**Re-entry:** If the agent re-enters plan mode after exiting, the existing plan file is available for revision. The previous plan remains in the thread corpus for RRC.
+
+==== Autonomous Mode
+
+The agent loop normally exits when the model's response contains no tool calls (stop reason: end_turn). Autonomous mode overrides this. The loop does not exit. The service runs another RRC round.
+
+The model's response is now in the corpus. Carry-forward happened. The engine selects fresh prerequisites. The model gets called again with this new selection and an empty user message — the same pattern as tool results returning with no user text. The model continues from context alone. Its reasoning drives the direction.
+
+No continuation prompt. No injected instructions. The selection IS the context. The carry-forward shaped the selection. The model's own prior thinking shaped the carry-forward. The model drives itself through its own accumulated reasoning.
+
+Emergent behavior is the feature. The model finishes a task, gets another round, and reasons about what comes next — review, edge cases, documentation, pivoting to something it noticed. The direction is not prescribed.
+
+- **Duration:** Freeform `time.Duration` with 2-week maximum. The loop exits when the timer expires or the user stops it.
+- **Controls:** Play (start), Pause (halt — user reviews, course corrects, resumes), Stop (end autonomous mode).
+- **Thread state:** A thread in autonomous mode shows its running state, elapsed time, and round count. Visible from the thread list.
+
+==== Payload Sizing
+
+The RRC engine returns a ranked selection -- every message that passes the score threshold, ordered by effective score. The engine is agnostic to model context windows and tokenizers. The service decides how many messages to actually send.
+
+The service sends the full selection to the LLM. If the model returns a context-length error, the service drops the lowest-scored message from the selection and retries. Repeat until the payload fits. Error-driven backoff -- no tokenizer, no estimation, no guessing. The model tells you when it's too much.
+
+==== Platform Paths (XDG Base Directory Specification)
+
+Spidey follows XDG for all platform paths:
+
+- **Config:** `$XDG_CONFIG_HOME/spidey/` (settings, provider config, permissions)
+- **Data:** `$XDG_DATA_HOME/spidey/` (SQLite database, threads, plans, skills)
+- **Cache:** `$XDG_CACHE_HOME/spidey/` (memoized prompt sections, temporary artifacts)
+
+==== Prompt Templates (PEaC -- Prompt Engineering as Code)
+
+System prompts are composed from independent sections -- each section is a Go `text/template` file (`.tmpl`) in the `templates/` directory. Version controlled. Programmatically assembled at runtime. Each section memoized independently. The composition IS the prompt architecture.
+
+**Composition model:** `system.tmpl` is the entry point. It includes section templates. Sections are independently authored, versioned, and testable. Mode changes (plan, autonomous, normal) are section inclusion/exclusion decisions -- not separate templates. Section content and inventory are implementation artifacts that evolve with tuning.
+
+**Section categories:**
+
+Stable sections (memoized, recomputed on config change or thread switch):
+
+- User identity: full name, preferences (from onboarding)
+- System: OS, available tools
+- Thread context: mounted directories, thread name
+- SPIDEY.md: project-level instructions from mounted directories
+
+Per-turn sections (recomputed each request):
+
+- Current time
+- Active plan content (if plan exists)
+
+Mode-conditional sections (included based on permission state):
+
+- Plan mode instructions (included when permission state is `plan`)
+- RRC context (the model's context is RRC-selected -- always included)
+
+Templates are not user-facing. They are engineering artifacts maintained in the codebase.
+
+**Design principle: don't put discoverable information in the prompt.** The system prompt contains only what the model cannot figure out on its own. User identity, thread name, mounted directories, SPIDEY.md instructions, active plan content -- these are non-discoverable. Git status, file trees, directory listings, file contents -- the model discovers these through tools. The prompt is lean.
+
+==== SPIDEY.md
+
+Any mounted directory can contain a `SPIDEY.md` file. The template system picks it up automatically and injects its content into the system prompt. Project-level instructions without configuration. Multiple mounted directories can each have their own `SPIDEY.md` — all are injected. This is the abstraction for project-specific prompt injection: drop a file, it works.
+
+==== User Profile
+
+User identity lives in the system prompt as a stable section. Captured during onboarding, injected into prompt templates on every request. Updated from time to time — by the user directly or via the small fast model when it detects relevant preference changes. Not a memory system. A supplementary system instruction that evolves.
+
+==== Skills
+
+Markdown files with YAML frontmatter. User-extensible capabilities — domain-specific instructions, workflows, constraints.
+
+Loaded from (priority order):
+
+1. User (`$XDG_DATA_HOME/spidey/skills/`)
+2. Project (`.spidey/skills/` in mounted directory)
+
+No bundled skills. Users create their own.
+
+Invoked from the web UI. Skill content is injected as message content (not system prompt) with argument substitution. Inline shell execution runs in the thread's sandbox.
+
+Users create custom skills by dropping a markdown file in the skills directory. Frontmatter specifies: name, description, when to use, allowed tools, arguments.
+
+==== Hooks
+
+Lifecycle event handlers. Shell commands or scripts executed on events. Escape hatches for automation without modifying core code.
+
+Events:
+
+- `PreToolUse` / `PostToolUse` -- before/after tool execution
+- `ThreadStart` / `ThreadEnd` -- thread lifecycle
+- `PreCarryForward` / `PostCarryForward` -- before/after thinking block processing (RRC-specific)
+- `UserPromptSubmit` -- before a user message enters the agent loop
+
+A hook can: block a tool call (agent sees denial), modify tool input, inject context, or run silently.
+
+Configured in settings (`$XDG_CONFIG_HOME/spidey/settings.json`), per-thread or global. Trust-gated — hooks only execute after workspace trust is accepted.
+
+==== Plans
+
+Plans are living AsciiDoc artifact directories, not messages. Per-plan: `$XDG_DATA_HOME/spidey/plans/{slug}/` with `plan.adoc` as entry point. Slug generated per plan (human-readable word slug, unique per thread). The directory contains the plan and supporting artifacts from the exploration phase, composed via AsciiDoc `include::` directives. See Plan Mode (above) for the full lifecycle and RRC integration.
+
+==== Thread Workspaces
+
+Each thread has one or more mounted directories. A thread isn't just a conversation — it's a workspace. File operations, git, code execution are scoped to the mounted directories. Directories are mutable — add or remove over the thread's lifetime.
+
+Mounted directories are injected into the system prompt template. Different threads, different directories, potentially different git repos.
+
+==== Docker Sandboxes
+
+Tool execution (shell commands, code execution, file writes) runs in Docker Sandboxes by default. The thread's mounted directories are volumes in the sandbox — the agent operates on real files but in isolation from the host.
+
+Sandboxed by default. Per-thread opt-out for advanced users who need direct host access. The `Thread` proto carries a `sandboxed` flag.
+
+==== Tool Permissions
+
+Tools are permission-gated. The agent cannot execute a tool without authorization. ADK provides `before_tool_callback` in its plugin system — every tool call is intercepted before execution.
+
+Permission levels:
+
+- **Allow** -- Tool executes without prompting.
+- **Ask** -- User is prompted before execution. The web UI shows the pending tool call, user approves or denies.
+- **Deny** -- Tool is blocked. User or policy has forbidden it.
+
+Default permission set: read-only tools (file read, glob, grep, search) → Allow. Write tools (file edit, write, bash, code execution) → Ask. Destructive tools (rm, git push) → Ask with warning.
+
+Permissions are configurable per-thread. A thread working on a production codebase might deny destructive operations. A sandbox thread might allow everything. The sandbox itself provides a safety boundary — even "allow all" is contained.
+
+**Auto-approve mode:** A permission mode where configured tool categories are pre-approved without prompting. For users who want reduced friction without full autonomous mode. Configured per-thread — which tools auto-approve, which still ask. Autonomous mode implies auto-approve for all tools. Auto-approve without autonomous means the user is still driving, just with fewer interruptions.
+
+==== Model Roles
+
+The service configures three model roles:
+
+- **Main model** -- The user's LLM. Reasoning, tool use, responses. Configured by the user (Anthropic, OpenAI, Ollama, etc.).
+- **Cross-encoder** -- NLI model for pairwise dependency scoring. The Classifier interface is provider-agnostic. Development environment uses TEI.
+- **Small fast model** -- Internal utility. QUD extraction from thinking blocks, annotations, autocomplete, tool rationale. User configures during onboarding -- same Completer interface and provider selection as the main model. Sub-second latency required for autocomplete; multi-second acceptable for QUD extraction. Recommended models: sub-1B extraction-focused (Osmosis-Structure-0.6B, NuExtract-tiny, Qwen3.5-0.8B). Autocomplete uses a per-thread store of user input history as context -- the small model predicts likely next input based on thread context and input history.
+
+All three use provider-agnostic interfaces (Completer for main + small fast, Classifier for cross-encoder). The RRC engine defines its own consumer interfaces that any core adapter satisfies via Go structural typing.
+
+==== First Run
+
+On first launch, the service probes localhost for default provider endpoints (Ollama at default port, TEI at default port). If detected, the web UI shows detected providers for user confirmation. If not detected, the web UI shows a setup form for endpoint URLs, model selection, and API keys.
+
+All three model roles must be configured. The system does not start without them. RRC is not optional -- there is no degraded mode or passthrough fallback.
+
+==== Error Policy
+
+- **LLM provider unreachable:** Error shown in the active thread. Agent pauses. User can retry or reconfigure.
+- **Cross-encoder unreachable:** System does not function. Error displayed prominently. Links to settings. System waits until resolved.
+- **Context-length error:** Error-driven backoff -- drop lowest-scored message, retry. Transparent to user.
+- **Autonomous run failure:** Agent pauses with error state. User reviews, retries, or stops.
+
+==== Service Infrastructure
+
+Independent of either request flow:
+
+- **System tray** -- Cross-platform via {tray-lib}. Tray icon (spider), lifecycle management, status indicators. On launch: service starts, tray icon appears, browser opens automatically to `spidey.localhost:{port}`. Context menu: Open Spidey, Settings, Quit Spidey. Double-click opens browser.
+- **Local DNS** -- The service binds to `spidey.localhost:{port}` (RFC 6761 reserves `.localhost` for loopback; modern browsers resolve it natively). Port {port} avoids elevated privileges required by port 80. No DNS configuration needed.
+- **Static asset serving** -- Serves the web UI at `spidey.localhost:{port}`. The browser opens automatically on launch.
+
+=== Stack
+
+*Language:* {lang}
+
+*API Layer:* {api-protocol} via {api-server}
+
+*Code Generation:* {codegen}
+
+*Agent Framework:* {agent-framework}
+
+*System Tray:* {tray-lib}
+
+*Persistence:* `modernc.org/sqlite` (SQLite 3.51.3)
+
+*Secrets:* `zalando/go-keyring v0.2.6` (macOS Keychain, Linux Secret Service, Windows Credential Manager)
+
+*AsciiDoc:* `include::` resolution and attribute substitution (custom, no full asciidoctor — compilation scope is limited to plan artifact composition)
+
+*Container:* Docker Engine API v1.53
+
+*Depends on:* `proto/gen/go/spidey/v1` (proto types), `spec/core` (LLM/classifier interfaces, provider adapters), `spec/rrc` (RRC engine), {agent-framework}
+
+=== Scope
+
+==== In Scope
+
+===== Proxy Path
+- HTTP endpoint accepting LLM API requests in any format the core library has an adapter for (Anthropic Messages, OpenAI Chat Completions, Ollama, etc.)
+- The client does not change -- it sends requests in its native format, the proxy accepts and translates via core provider adapters
+- Transparent forwarding via RRC engine (stateless mode)
+- Response stream parsing: passthrough with concurrent extraction of reasoning content
+- Stateless per-request handling (client provides corpus)
+
+===== Agent Path
+- {api-protocol} API: full schema and resolvers (orchestration, threads, RRC introspection, config)
+- {api-protocol} subscriptions: live agent state, streaming responses, RRC introspection during execution
+- Agent orchestration via ADK Go: LlmAgent, SequentialAgent, ParallelAgent, LoopAgent, agent transfer
+- Tool system via ADK Go: FunctionTool (auto-declaration from Go functions), Toolset (dynamic tool groups), MCP integration
+- Built-in tools: Bash, FileRead, FileEdit, FileWrite, Glob, Grep, NotebookEdit, WebSearch, WebFetch, AskUserQuestion, Skill, TodoWrite, EnterPlanMode, ExitPlanMode. All execute in thread's Docker sandbox.
+- Agent tools: Agent (spawn subagent as ephemeral thread fork), SendMessage (message a running subagent), TaskCreate/Get/Update/List/Stop/Output (task management)
+- MCP tools: dynamic tools from configured MCP servers via ADK's McpToolset
+- Plugin system via ADK Go: lifecycle hooks (before/after agent, model, tool execution)
+- Thread storage: persistent, complete, unmodified history (lossless corpus guarantee)
+- RRC-as-LLM adapter: implements ADK's `model.LLM` interface, routes through RRC engine to actual LLM via core Completer
+- Warm carry-forward: extract thinking blocks from every LLM response, pass to RRC engine as `CarryForwardInput` (proto), engine runs edge discovery (cross-encoder on thinking text) and QUD extraction (small fast model)
+- Autonomous mode: override model stop reason, continue running RRC rounds with empty user message, duration timer, play/pause/stop controls
+
+===== Shared
+- RRC engine integration (calling `spec/rrc` library — stateful for agent path, stateless for proxy path)
+- Provider routing: configuration for which upstream LLM to forward to
+- Semantic search: embed messages on arrival via core Embedder, store vectors, cosine similarity search across threads
+- AsciiDoc compilation: compile `.adoc` artifact directories (resolve includes, attributes) into resolved prose. Used for plan prompt injection, AI inspection of composed documents, and user-facing plan review. Infrastructure capability, not a feature.
+
+===== Infrastructure
+- Cross-platform system tray via {tray-lib} (macOS, Linux, Windows)
+- Service lifecycle: start, stop, health check, configuration
+- Static asset serving: web UI files on localhost
+- Service management UI: lightweight status/config accessible from tray
+
+==== Out of Scope
+
+- The RRC algorithm itself (belongs to `spec/rrc`; the service calls it)
+- LLM/classifier interface or adapter definitions (belongs to `spec/core`)
+- Proto truth type definitions (belongs to `spec/core`)
+- Agentic UI, RRC introspection views, UX patterns (belongs to `spec/web`)
+- Cloud deployment or multi-tenancy
+
+== Implementation
+
+=== Tool Specifications
+
+Tools are registered via ADK's FunctionTool with descriptions. Tool descriptions are implementation artifacts (tuned based on model behavior). The spec defines categories, permission defaults, and behavioral constraints.
+
+==== Categories and Defaults
+
+[cols="1,3,1"]
+|===
+| Category | Tools | Default
+
+| **Read** | FileRead, Glob, Grep, WebSearch, WebFetch, AskUserQuestion | Allow
+| **Write** | FileEdit, FileWrite, Bash, NotebookEdit | Ask
+| **Destructive** | rm, git push (subset of Bash, detected by command inspection) | Ask with warning
+| **Agent** | Agent, SendMessage, TaskCreate, TaskGet, TaskUpdate, TaskList, TaskStop, TaskOutput | Ask
+| **Plan** | EnterPlanMode, ExitPlanMode | Ask
+| **Skill** | Skill, TodoWrite | Ask
+|===
+
+==== EnterPlanMode
+
+Transitions permission state to `plan`. Write tools disabled, read tools remain available. The agent uses this proactively when the task is non-trivial: multiple possible approaches, architectural decisions, multi-file changes, unclear requirements. The agent does NOT use this for trivial changes, single-line fixes, or pure research.
+
+On entry: plan mode prompt section included (mode-conditional section in template composition). Previous permission state saved for restoration on exit.
+
+==== ExitPlanMode
+
+Compiles the plan directory (`$XDG_DATA_HOME/spidey/plans/{slug}/plan.adoc`, resolving includes). Surfaces compiled plan to user in web UI for review. User approves (optionally edits) or rejects.
+
+On approval: restores previous permission state. Plan content enters thread as a corpus message (available for RRC selection). Plan file persists on disk. Plan injected as per-turn prompt section. If plan is empty: user approved exiting plan mode without a plan (valid -- the exploration itself was the value).
+
+==== Plan Mode Tool Availability
+
+In plan mode, only read-category tools + AskUserQuestion are available. All write, destructive, agent, and skill tools are disabled. The agent can write ONLY to the plan file.
+
+=== File Tree
+
+----
+service/
+├── go.mod
+├── cmd/spidey/
+│   └── main.go              # Entrypoint: tray, server, lifecycle
+├── proxy/
+│   ├── handler.go           # HTTP handler, format detection, stream passthrough
+│   └── parser.go            # Response stream parsing, carry-forward extraction
+├── agent/
+│   ├── runner.go            # ADK agent runner, RRC-as-LLM adapter
+│   ├── tools.go             # Tool definitions (Bash, FileRead, etc.)
+│   ├── autonomous.go        # Autonomous loop: override stop, empty message, timer
+│   └── subagent.go          # Fork/merge lifecycle, ParallelAgent coordination
+├── adapter/
+│   └── genai.go             # ADK genai <-> Spidey proto type conversion
+├── storage/
+│   ├── db.go                # SQLite connection, migrations, WAL config
+│   ├── threads.go           # Thread CRUD
+│   ├── messages.go          # Message storage (lossless corpus)
+│   ├── edges.go             # DAG edge persistence
+│   ├── scores.go            # Score cache persistence
+│   ├── quds.go              # QUD graph persistence
+│   ├── viewstate.go         # UI view state persistence (scroll, expanded, drafts)
+│   ├── agentstate.go        # Agent execution state persistence
+│   └── plans.go             # Plan document persistence
+├── skills/
+│   └── loader.go            # Skill discovery: bundled, user, project
+├── hooks/
+│   └── hooks.go             # Lifecycle event dispatch, trust gating
+├── prompt/
+│   ├── template.go          # Section assembly, memoization
+│   └── sections.go          # Stable + per-turn section definitions
+├── graph/
+│   ├── schema.graphql       # GraphQL schema (gqlgen source)
+│   ├── resolver.go          # Generated resolver stubs
+│   └── model.go             # gqlgen model binding config (maps to proto Go types)
+├── adoc/
+│   └── compiler.go          # AsciiDoc compilation (include resolution, attribute substitution)
+├── sandbox/
+│   └── docker.go            # Docker container lifecycle, volume mounting
+├── search/
+│   └── embeddings.go        # Embed-on-arrival pipeline, cosine similarity search
+├── config/
+│   ├── settings.go          # Settings type, load/save from XDG
+│   └── keyring.go           # API key storage via go-keyring
+└── tray/
+    └── tray.go              # System tray: icon, menu, browser launch
+----
+
+=== Secrets
+
+API keys stored in OS credential store via `zalando/go-keyring v0.2.6` (macOS Keychain, Linux Secret Service, Windows Credential Manager). Non-secret configuration (endpoints, model names, preferences) in `$XDG_CONFIG_HOME/spidey/config.json`.
+
+=== Proxy Routes
+
+`POST /v1/chat/completions` -- OpenAI Chat Completions format. Detected by presence of `model` and `messages` fields with OpenAI message structure.
+
+`POST /v1/messages` -- Anthropic Messages format. Detected by presence of `model` and `messages` fields with Anthropic message structure.
+
+Format detected from request body structure. Response streamed in same format as request. Additional format support added via core provider adapters -- new adapter = new proxy format.
+
+=== {api-protocol} Schema
+
+The {api-protocol} schema is authored as API surface design. Types reference proto-generated Go types via gqlgen model binding (`gqlgen.yml` maps GraphQL types to generated proto Go types in `proto/gen/go/spidey/v1/`).
+
+==== Queries
+
+- `threads(includeArchived: Boolean): [Thread]` -- all threads with state indicators
+- `thread(id: ID!): Thread` -- single thread by ID
+- `search(query: String!, limit: Int): [SearchResult]` -- semantic search across all threads
+- `messages(threadId: ID!, limit: Int, offset: Int): [Message]` -- paginated messages in thread
+- `selectionResult(eventId: ID!): SelectionResult` -- RRC selection for a specific event
+- `qudGraph(threadId: ID!): QUDGraph` -- current QUD graph state for a thread
+- `settings: Settings` -- current configuration
+- `viewState(threadId: ID!): ViewState` -- persisted UI state for a thread
+
+==== Mutations
+
+- `createThread(name: String, workingDirs: [String!]): Thread`
+- `updateThread(id: ID!, name: String, workingDirs: [String!], sandboxed: Boolean): Thread`
+- `deleteThread(id: ID!): Boolean` -- hard delete with warning, irreversible
+- `archiveThread(id: ID!): Boolean`
+- `unarchiveThread(id: ID!): Boolean`
+- `editMessage(threadId: ID!, messagePosition: Int!, newContent: String!): Thread` -- creates branch, returns new thread
+- `compileAdoc(path: String!): String` -- compile AsciiDoc artifact directory, return resolved prose
+- `sendMessage(threadId: ID!, content: String!, scope: SelectionScope): Message`
+- `stopAgent(threadId: ID!): Boolean`
+- `pauseAgent(threadId: ID!): Boolean`
+- `resumeAgent(threadId: ID!, correction: String): Boolean`
+- `startAutonomous(threadId: ID!, prompt: String!, duration: String!): Boolean`
+- `approveToolCall(callId: ID!): Boolean`
+- `denyToolCall(callId: ID!, reason: String): Boolean`
+- `updateSettings(input: SettingsInput!): Settings`
+- `enterPlanMode(threadId: ID!): Boolean`
+- `approvePlan(threadId: ID!, executionMode: ExecutionMode!): Boolean`
+- `saveViewState(threadId: ID!, state: ViewStateInput!): ViewState`
+
+==== Subscriptions
+
+- `messageStream(threadId: ID!): StreamEvent` -- streaming tokens, new messages
+- `agentState(threadId: ID!): AgentState` -- running, paused, idle, round count
+- `toolExecution(threadId: ID!): ToolExecution` -- tool calls, approvals, results
+- `subagentProgress(threadId: ID!): SubagentProgress` -- fork state, task, progress
+- `threadStateChanges: ThreadStateEvent` -- all threads, for sidebar real-time updates
+
+==== Type Definitions
+
+Types reference proto-generated Go types via gqlgen model binding where applicable. Types not in proto are service-specific.
+
+[source,graphql]
+----
+enum SelectionScope { THREAD, ALL_THREADS }
+enum ExecutionMode { MANUAL, AUTONOMOUS }
+enum AgentStatus { IDLE, RUNNING, PAUSED }
+enum AgentMode { NORMAL, AUTONOMOUS, PLAN }
+
+type StreamEvent {
+  messageId: ID!
+  delta: String           # text delta (streaming tokens)
+  thinking: String        # thinking block delta
+  toolCall: ToolCallDelta # tool call delta
+  done: Boolean!
+  error: String           # stream failure
+}
+
+type ToolCallDelta {
+  id: ID!
+  name: String!
+  arguments: String       # JSON, may arrive incrementally
+}
+
+type AgentState {
+  threadId: ID!
+  status: AgentStatus!
+  mode: AgentMode!
+  roundCount: Int!
+  startedAt: DateTime
+  durationLimit: String   # time.Duration string, null if not autonomous
+  elapsedTime: String     # human-readable elapsed
+}
+
+type ToolExecution {
+  threadId: ID!
+  callId: ID!
+  toolName: String!
+  arguments: String!      # JSON
+  status: String!         # pending, approved, denied, completed, failed
+  result: String          # tool output, null until completed
+  isError: Boolean
+}
+
+type SubagentProgress {
+  threadId: ID!           # parent thread
+  forkThreadId: ID!       # subagent's thread
+  task: String!           # what the subagent was asked to do
+  status: String!         # running, completed, failed
+  roundCount: Int!
+}
+
+type ThreadStateEvent {
+  threadId: ID!
+  status: AgentStatus!
+  mode: AgentMode!
+  warmth: Int!
+  name: String!
+}
+
+type SearchResult {
+  messageId: ID!
+  threadId: ID!
+  threadName: String!
+  snippet: String!
+  score: Float!
+}
+
+input ViewStateInput {
+  scrollPosition: Float!
+  expandedMessageIds: [ID!]!
+  inputDraft: String!
+  citationExpansionState: String!  # JSON-encoded Record<string, boolean>
+}
+
+input SettingsInput {
+  providers: String       # JSON-encoded provider config map
+  permissions: String     # JSON-encoded permission map
+  mcpServers: String      # JSON-encoded MCP server list
+  preferences: String     # JSON-encoded preference map
+}
+----
+
+=== Persistence
+
+Single embedded database at `$XDG_DATA_HOME/spidey/spidey.db`. WAL mode. Single connection pool.
+
+==== Proto-Mapped Tables
+
+Proto types are the source of truth. Table schemas derive from proto field definitions. Column definitions are generated, not hand-authored.
+
+[cols="1,2,2"]
+|===
+| Proto Type | Table | Notes
+
+| `Thread` | `threads` | `working_dirs` normalized to `thread_working_dirs` join table (repeated field). All other fields map 1:1.
+| `Message` | `messages` | `content` stored as proto-encoded BLOB (repeated ContentBlock, not flattened). Indexed on `(thread_id, position)`.
+| `Edge` | `edges` | Primary key `(from_message_id, to_message_id)`. Indexed on `to_message_id` for backward traversal.
+| `QUD` | `quds` | `addressed_by` stored as JSON array (repeated string). Indexed on `thread_id`.
+| Score cache | `scores` | Key: `(from_message_id, to_message_id)`. Value: cross-encoder score. Not a proto type — derived artifact from classifier.
+|===
+
+On startup: load edges, scores, and QUD graphs from SQLite into RRC engine's in-memory structures via `Engine.LoadDAG`, `Engine.LoadScoreCache`, `Engine.LoadQUDGraph`.
+
+==== Service-Specific Tables
+
+These do not correspond to proto types. They are service persistence concerns — authored, not generated.
+
+[source,sql]
+----
+CREATE TABLE plans (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL UNIQUE,
+    dir_path TEXT NOT NULL,  -- absolute path to plan artifact directory
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_plans_thread ON plans(thread_id);
+
+CREATE TABLE view_state (
+    thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+    state BLOB NOT NULL,  -- JSON-encoded ViewState
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE agent_state (
+    thread_id TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+    status INTEGER NOT NULL DEFAULT 0,  -- idle=0, running=1, paused=2
+    mode INTEGER NOT NULL DEFAULT 0,    -- normal=0, autonomous=1
+    round_count INTEGER NOT NULL DEFAULT 0,
+    started_at TIMESTAMP,
+    duration_limit TEXT,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE user_input_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    input TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_input_history_thread ON user_input_history(thread_id);
+
+CREATE TABLE embeddings (
+    message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+    vector BLOB NOT NULL,  -- float32 array, binary encoded
+    model TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+----
+
+=== Skill Frontmatter Schema
+
+[source,yaml]
+----
+name: string       # required, unique identifier
+description: string # required, one-line description
+when_to_use: string # when this skill should be invoked
+allowed_tools:      # tools this skill may use
+  - string
+arguments:          # skill arguments
+  - name: string
+    type: string    # "string", "boolean", "number"
+    required: boolean
+    description: string
+----
+
+=== Hook Configuration Schema
+
+Configured in `$XDG_CONFIG_HOME/spidey/settings.json` under `hooks`:
+
+[source,json]
+----
+{
+  "hooks": [
+    {
+      "event": "PreToolUse",
+      "command": "/path/to/script.sh",
+      "match": "Bash*",
+      "timeout": "10s"
+    }
+  ]
+}
+----
+
+Fields: `event` (enum: PreToolUse, PostToolUse, ThreadStart, ThreadEnd, PreCarryForward, PostCarryForward, UserPromptSubmit), `command` (shell command), `match` (optional glob for tool name matching), `timeout` (duration, default 10s).
+
+=== Settings Schema
+
+`$XDG_CONFIG_HOME/spidey/config.json`:
+
+[source,json]
+----
+{
+  "providers": {
+    "main": {"adapter": "anthropic", "model": "claude-sonnet-4-20250514", "base_url": "https://api.anthropic.com"},
+    "classifier": {"adapter": "tei", "model": "cross-encoder/nli-deberta-v3-base", "base_url": "http://localhost:8080"},
+    "small_fast": {"adapter": "ollama", "model": "osmosis-structure-0.6b", "base_url": "http://localhost:11434"}
+  },
+  "permissions": {
+    "FileRead": "allow",
+    "Bash": "ask",
+    "FileWrite": "ask"
+  },
+  "mcp_servers": [
+    {"name": "github", "endpoint": "http://localhost:3000/mcp", "enabled": true}
+  ],
+  "hooks": [],
+  "preferences": {
+    "name": "John Doe",
+    "theme": "system"
+  }
+}
+----
+
+API keys are NOT stored in this file. They are stored in the OS credential store via go-keyring, keyed by provider adapter name.
+
+=== Concurrency
+
+- **RWMutex** on global DAG and score cache: concurrent reads during selection, exclusive writes during scoring.
+- **Per-thread QUD graphs** are naturally isolated (one thread = one QUD graph = no contention).
+- **SQLite WAL mode**, single connection pool. Concurrent readers, single writer.
+- **Agent loop** sequential per thread. One active LLM call per thread at a time.
+- **Goroutine-per-request** for proxy path (stateless, no shared state between requests).
+- **Subagents** run in separate goroutines. Fork creates an isolated Engine copy. No shared mutable state between parent and fork during execution. Merge acquires write lock on parent's data structures.
+
+=== Error Handling
+
+Fail fast. No retries except payload sizing backoff (error-driven, not failure masking).
+
+- **Proxy path:** Map upstream HTTP status codes. 200 on success. 502 on provider unreachable. 504 on provider timeout. 422 on context-length error (after backoff exhaustion).
+- **{api-protocol} path:** Standard {api-protocol} error extensions with error type field. Error types: `PROVIDER_UNAVAILABLE`, `CLASSIFIER_UNAVAILABLE`, `CONTEXT_LENGTH`, `TOOL_DENIED`, `AGENT_ERROR`.
+- **Subscription errors:** Error event pushed via subscription. Client displays inline in thread.
+- **Docker unavailable:** Fail fast. Error surfaced to user with link to settings. No tool execution until resolved. User can disable sandbox per-thread as opt-out.
+- **Hook failure:** Fail-closed. Hook command failure (non-zero exit, timeout, command not found) blocks the action. Error surfaced to user with hook name and error output. A hook that crashes is safer treated as denial than approval.
+- **`resumeAgent` correction:** The correction string is injected as a user message in the thread. This triggers a new RRC selection event — the correction enters the corpus and influences subsequent selections. If correction is empty, the agent resumes without additional input.
+
+=== Semantic Search
+
+Messages are embedded on arrival via the core Embedder interface (async, alongside cross-encoder scoring). Vectors stored in SQLite. Search query embedded at query time, ranked by cosine similarity against stored vectors. Search spans all threads.
+
+GraphQL: `search(query: String!, limit: Int): [SearchResult]` where `SearchResult` contains the message, thread, score, and snippet.
+
+=== AsciiDoc Compilation
+
+The service compiles AsciiDoc artifact directories (resolve `include::` directives, attributes) into resolved prose. This is infrastructure — used by:
+
+- **Plan prompt injection:** The per-turn plan section injects the compiled plan, not raw source. The AI reads resolved prose.
+- **AI inspection:** The AI can compile any `.adoc` artifact to inspect the composed output. Raw source files with disconnected includes are fragile to read. Compiled output is reliable.
+- **ExitPlanMode:** Compiles the plan directory before surfacing to the user for review.
+- **User-facing display:** Web UI receives compiled plan content for rendering.
+
+The AI works with two views: compiled output for reading, source files for writing. Compilation resolves the composition. Editing targets the source.
+
+=== Thread Branching
+
+Edit creates a branch. Messages are immutable — no mutation, no deletion.
+
+When a user edits message N in a thread:
+
+1. Service calls `Engine.Fork` at position N (same machinery as subagent forks)
+2. New thread created with shared message prefix (messages 1..N-1 are immutable, referenced not copied)
+3. Edited message inserted at position N in the new thread (new ID, new content)
+4. Edited message scored against predecessors (O(N) classifier calls + embedding)
+5. Old thread unchanged — old branch's identity and RRC state intact
+6. User navigates between branches
+
+**Data model:** Thread table has `parent_thread_id` and `branch_point_position` (nullable — root threads have no parent). Branches are threads. The sidebar shows branch relationships.
+
+**No message deletion.** Messages are immutable. If the user doesn't want a message, they branch from before it. The old branch can be archived (thread-level, not message-level).
+
+**Thread lifecycle:**
+
+- **Archive:** `archived_at` timestamp on thread. Hidden from active list, accessible from archive view. All RRC state preserved. Cross-thread edges still valid.
+- **Delete:** Hard destructive action with explicit warning. Wipes messages, edges, scores, QUD graph, embeddings. Cross-thread edges pointing to deleted messages cleaned up. Irreversible.
+
+=== Performance
+
+Performance optimization is explicitly deferred. Correctness and completeness are the targets. O(N) pairwise scoring per message arrival is the accepted cost of prerequisite detection accuracy. Complexity bounds are stated in `spec/rrc`. The system may be slow; it must not be wrong.

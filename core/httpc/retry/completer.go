@@ -11,7 +11,7 @@ import (
 	"iter"
 
 	"github.com/emontenegr/spidey/core"
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
 // Completer wraps any core.Completer with the retry policy.

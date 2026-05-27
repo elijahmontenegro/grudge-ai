@@ -38,7 +38,7 @@ package rrc
 import (
 	"fmt"
 
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
 // Rule is a pure transform: given the current wire and a resolver

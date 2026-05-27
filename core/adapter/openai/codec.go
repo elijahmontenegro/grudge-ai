@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/emontenegr/spidey/core"
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
 // Codec implements core.Codec for OpenAI Chat Completions wire

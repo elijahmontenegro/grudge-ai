@@ -8,8 +8,8 @@
 // kernel. See SANDBOX.md for details.
 //
 // Runtime contract: Docker CLI is invoked directly (no SDK) to keep the
-// dependency surface minimal. The image is built from repo-root
-// Dockerfile.sandbox via `docker compose build sandbox`.
+// dependency surface minimal. The image is built from
+// deploy/sandbox/Dockerfile via `docker compose build sandbox`.
 package sandbox
 
 import (

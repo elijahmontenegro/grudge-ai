@@ -1,10 +1,7 @@
 version: '3'
 
 # Build orchestration for spidey. Cross-platform (works on Windows
-# without WSL via go-task). Replaces ad-hoc per-module commands.
-
-vars:
-  MODULES: gen/go core rrc service
+# without WSL via go-task).
 
 tasks:
   default:
@@ -13,68 +10,60 @@ tasks:
       - task --list
     silent: true
 
+  # ./... from root would walk web/node_modules/, which contains the
+  # flatted npm package's reference Golang port. We don't ship that
+  # code; exclude via go-list filter so build/test/vet stay clean.
+
   build:
-    desc: Build all Go modules
+    desc: Build the spidey binary (compile-checks every other package via test)
     deps: [embed-sync]
     cmds:
-      - for: [gen/go, core, rrc, service]
-        cmd: cd {{.ITEM}} && go build ./...
+      - go build -o service/spidey.exe ./service/cmd/spidey
 
   test:
-    desc: Test all Go modules
+    desc: Test all Go packages
     cmds:
-      - for: [rrc, core, service]
-        cmd: cd {{.ITEM}} && go test ./...
+      - go test $(go list ./... | grep -v node_modules)
 
   lint:
-    desc: Vet all Go modules. Skips copylocks on service/graph because
+    desc: Vet all Go packages. Skips copylocks on service/graph because
           gqlgen's generated marshalers pass proto messages by value
           and proto types embed a sync.Mutex via MessageState. The
           warning is benign (marshalers don't mutate from multiple
           goroutines); excluding only that package preserves rigor on
           hand-written code.
     cmds:
-      - for: [gen/go, core, rrc]
-        cmd: cd {{.ITEM}} && go vet ./...
-      - cd service && go vet $(go list ./... | grep -v '/graph$')
-      - cd service && go vet -copylocks=false ./graph/...
+      - go vet $(go list ./... | grep -v -e node_modules -e '/service/graph$')
+      - go vet -copylocks=false ./service/graph/...
 
   verify:deps:
-    desc: Cross-module dependency-graph invariants (storage boundary, tiktoken decoupling)
+    desc: Dependency-graph invariants (storage boundary, tiktoken decoupling)
     cmds:
-      - go run ./scripts/verifydeps
-
-  verify:external:
-    desc: Build a foreign module that imports rrc — proves rrc is `go get`-shaped
-    cmds:
-      - cd scripts/verifydeps && go test -run TestRRC_BuildsFromForeignModule
+      - go run ./internal/verifydeps
 
   verify:
-    desc: Run every CI invariant — lint, dep-graph checks, foreign-module
-          build, Go tests, web tests
+    desc: Run every CI invariant — lint, dep-graph checks, Go tests, web tests
     cmds:
       - task: lint
       - task: verify:deps
-      - task: verify:external
       - task: test
       - task: web:test
 
   tidy:
-    desc: Run go mod tidy in each module
+    desc: Run go mod tidy
     cmds:
-      - for: [gen/go, core, rrc, service]
-        cmd: cd {{.ITEM}} && go mod tidy
+      - go mod tidy
 
   proto:
-    desc: Regenerate gen/go from .proto sources via buf
+    desc: Regenerate proto/gen/go from .proto sources via buf
     cmds:
       - buf generate
 
   proto:check:
-    desc: Verify gen/go is up to date with proto sources (CI)
+    desc: Verify proto/gen/go is up to date with proto sources (CI)
     cmds:
       - buf generate
-      - git diff --exit-code ge./
+      - git diff --exit-code proto/gen/
 
   web:install:
     desc: Install frontend dependencies
@@ -135,7 +124,7 @@ tasks:
   sandbox:image:
     desc: Build the sandbox docker image
     cmds:
-      - docker build -t spidey-sandbox -f Dockerfile.sandbox .
+      - docker build -t spidey-sandbox deploy/sandbox
 
   substrate:up:
     desc: Bring up the full production substrate sequentially — tei-embed

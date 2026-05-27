@@ -1,6 +1,6 @@
 package rrc
 
-import pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+import pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 
 // dag is the prerequisite DAG. Dual adjacency list — two indexes over the same
 // edge set. Backward: message → its prerequisites. Forward: message → its dependents.

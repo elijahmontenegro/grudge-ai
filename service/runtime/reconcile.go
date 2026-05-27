@@ -20,7 +20,7 @@ import (
 // Policy per row:
 //
 //   - Running + Autonomous with enough metadata + time remaining:
-//     auto-resume. Matches spec (spec/web/MANIFEST.adoc:206 —
+//     auto-resume. Matches spec (docs/spec/web/MANIFEST.adoc:206 —
 //     "Running autonomous agents resume or show their last
 //     state"). Launches a fresh RunAutonomous goroutine with a
 //     "continue" kickoff and the remaining-duration budget

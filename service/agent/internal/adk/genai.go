@@ -3,7 +3,7 @@ package adk
 import (
 	"encoding/json"
 
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 	"google.golang.org/genai"
 )
 

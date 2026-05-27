@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

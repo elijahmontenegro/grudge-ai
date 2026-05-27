@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
 // AutonomousState tracks the state of an autonomous run for a thread.
@@ -78,7 +78,7 @@ func (a *AutonomousState) waitIfPaused(ctx context.Context) error {
 // assembly and adapters stay pure (no prompt augmentation). Attachments
 // supplied here land on the initial kickoff message only.
 //
-// Per spec (spec/web/MANIFEST.adoc:187): "Autonomous run fails mid-execution
+// Per spec (docs/spec/web/MANIFEST.adoc:187): "Autonomous run fails mid-execution
 // → agent pauses with error visible, user reviews, retries or stops."
 // A SendMessage error is NOT an exit condition — the loop pauses via
 // autoState, lets OnAutonomousError surface the error (published to the

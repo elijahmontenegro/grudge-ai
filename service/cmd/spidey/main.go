@@ -28,7 +28,6 @@ import (
 	_ "github.com/emontenegr/spidey/core/adapter/tei"
 	_ "github.com/emontenegr/spidey/core/adapter/vllm"
 	_ "github.com/emontenegr/spidey/core/adapter/zerank"
-	"github.com/emontenegr/spidey/service/api"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/graph"
 	"github.com/emontenegr/spidey/service/kernel"
@@ -106,7 +105,7 @@ func main() {
 	// Attachment upload/download. Files land in the thread's sandbox
 	// workspace so they're immediately accessible to the agent via
 	// FileRead — same path surface whether sandboxed=true or not.
-	attachmentMgr := api.NewManager(cfg.DataDir)
+	attachmentMgr := graph.NewAttachmentManager(cfg.DataDir)
 	mux.HandleFunc("/api/attachments/", func(w http.ResponseWriter, r *http.Request) {
 		// One prefix routes both upload (POST) and download (GET) so
 		// clients don't need separate endpoints to construct.

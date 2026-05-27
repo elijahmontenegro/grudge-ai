@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
 // Codec is the bidirectional mapping between one LLM wire format and

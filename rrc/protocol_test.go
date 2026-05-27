@@ -3,7 +3,7 @@ package rrc
 import (
 	"testing"
 
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 )
 
 // fakeResolver — Resolver stub for rule tests. Given a list of

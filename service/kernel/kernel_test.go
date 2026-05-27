@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/substrate"

@@ -3,20 +3,27 @@ package prompt
 import (
 	"bytes"
 	"crypto/sha256"
+	"embed"
+	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
 	"strings"
 	"sync"
 	"text/template"
 )
 
+// Templates are baked into the binary. Putting them on disk and walking
+// candidate paths was load-bearing only for the multi-module layout —
+// once the binary is the single shippable, embed is the right shape.
+
+//go:embed templates/*
+var templatesFS embed.FS
+
 // Assembler composes system prompts from independent template sections.
 // Each section is memoized independently.
 type Assembler struct {
-	templateDir string
-	cache       map[string]cachedSection
-	mu          sync.RWMutex
+	cache map[string]cachedSection
+	mu    sync.RWMutex
 }
 
 type cachedSection struct {
@@ -24,11 +31,11 @@ type cachedSection struct {
 	output string
 }
 
-// NewAssembler creates a prompt assembler reading templates from the given directory.
-func NewAssembler(templateDir string) *Assembler {
+// NewAssembler creates a prompt assembler. Templates are embedded;
+// no filesystem lookup, no boot-time path resolution.
+func NewAssembler() *Assembler {
 	return &Assembler{
-		templateDir: templateDir,
-		cache:       make(map[string]cachedSection),
+		cache: make(map[string]cachedSection),
 	}
 }
 
@@ -48,8 +55,7 @@ type TemplateData struct {
 // Assemble renders the full system prompt from system.tmpl.
 // Section rendering errors are collected and returned after execution.
 func (a *Assembler) Assemble(data TemplateData) (string, error) {
-	entryPath := filepath.Join(a.templateDir, "system.tmpl")
-	tmplContent, err := os.ReadFile(entryPath)
+	tmplContent, err := templatesFS.ReadFile("templates/system.tmpl")
 	if err != nil {
 		return "", err
 	}
@@ -90,14 +96,13 @@ func (a *Assembler) Assemble(data TemplateData) (string, error) {
 }
 
 func (a *Assembler) renderSection(name string, data TemplateData) (string, error) {
-	path := filepath.Join(a.templateDir, name+".tmpl")
-	content, err := os.ReadFile(path)
+	content, err := templatesFS.ReadFile("templates/" + name + ".tmpl")
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			// Optional section — not every mode uses every section
 			return "", nil
 		}
-		return "", fmt.Errorf("read %s: %w", path, err)
+		return "", fmt.Errorf("read %s: %w", name, err)
 	}
 
 	hash := sha256.Sum256(content)

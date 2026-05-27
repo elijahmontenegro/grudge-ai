@@ -8,7 +8,7 @@ import (
 
 	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/core/httpc/retry"
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/agent"
 	"github.com/emontenegr/spidey/service/agent/tools"
@@ -224,7 +224,7 @@ func wireRunnerCallbacks(runner *agent.Runner, threadID string, deps Deps) {
 		}
 	}
 
-	// Per spec (spec/web/MANIFEST.adoc:187): autonomous errors pause
+	// Per spec (docs/spec/web/MANIFEST.adoc:187): autonomous errors pause
 	// the run rather than exit it. Handler pauses the autoState so
 	// the loop blocks at the next waitIfPaused, marks the DB row
 	// Paused, and publishes Paused to the UI as a retry-final event.

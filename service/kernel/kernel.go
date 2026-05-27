@@ -34,14 +34,13 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/emontenegr/spidey/core"
-	pb "github.com/emontenegr/spidey/gen/go/spidey/v1"
+	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/rrc/chunk"
 	"github.com/emontenegr/spidey/rrc/tiktoken"
@@ -170,8 +169,6 @@ func Bootstrap(ctx context.Context, cfg *config.Config, opts ...substrate.Option
 		return nil, fmt.Errorf("substrate: %w", err)
 	}
 
-	templateDir := resolveTemplateDir()
-
 	// MCP toolsets from settings.
 	var mcpConfigs []agent.MCPServerConfig
 	for _, srv := range cfg.Settings.MCPServers {
@@ -189,8 +186,7 @@ func Bootstrap(ctx context.Context, cfg *config.Config, opts ...substrate.Option
 		return nil, fmt.Errorf("mcp tools: %w", err)
 	}
 
-	assembler := prompt.NewAssembler(templateDir)
-	log.Printf("Prompt templates: %s", templateDir)
+	assembler := prompt.NewAssembler()
 
 	hookDispatcher := hooks.NewDispatcher(cfg.Settings.Hooks)
 
@@ -248,32 +244,6 @@ func (k *Kernel) Engine() *rrc.Engine {
 	return k.engine.Load()
 }
 
-// resolveTemplateDir walks the candidate paths (next to the
-// binary, then up one for repo-root dev layout) and returns the
-// first existing templates directory. Templates live at templates/
-// under the repo root; the spidey binary builds at
-// service/spidey.exe (one level deep), so the repo root is one
-// directory up. Falls back to the literal "templates" if nothing
-// matches; the assembler will error on first use if it's genuinely
-// missing.
-func resolveTemplateDir() string {
-	templateDir := "templates"
-	exePath, err := os.Executable()
-	if err != nil {
-		return templateDir
-	}
-	candidates := []string{
-		filepath.Join(filepath.Dir(exePath), "templates"),
-		filepath.Join(filepath.Dir(exePath), "..", "templates"),
-		"templates",
-	}
-	for _, c := range candidates {
-		if info, err := os.Stat(c); err == nil && info.IsDir() {
-			return c
-		}
-	}
-	return templateDir
-}
 
 // EmbedQueue returns the current bounded-fan-out pool for
 // post-insert embedding work. Nil if no embedder is configured or
@@ -391,157 +361,7 @@ func (k *Kernel) UpdateEngineConfig(ctx context.Context, cfg rrc.EngineConfig, o
 	return nil
 }
 
-// --- runner.PlanStore ---------------------------------------------------
-
-// GetPlan returns the cached plan content for a thread, or empty
-// if none is set.
-func (k *Kernel) GetPlan(threadID string) string {
-	k.planContentMu.RLock()
-	defer k.planContentMu.RUnlock()
-	return k.planContent[threadID]
-}
-
-// SetPlan stores plan content for a thread, overwriting any prior
-// content.
-func (k *Kernel) SetPlan(threadID, content string) {
-	k.planContentMu.Lock()
-	k.planContent[threadID] = content
-	k.planContentMu.Unlock()
-}
-
-// ClearPlan removes any cached plan content for a thread.
-// approvePlan / rejectPlan call this to drop the artifact.
-func (k *Kernel) ClearPlan(threadID string) {
-	k.planContentMu.Lock()
-	delete(k.planContent, threadID)
-	k.planContentMu.Unlock()
-}
-
-// --- runner.Selections + graph reads -----------------------------------
-
-// RecordSelection persists a selection event in the in-memory
-// citation tally and writes it through to the selections table for
-// audit. Called by the runner factory's selection callback.
-func (k *Kernel) RecordSelection(threadID string, result *pb.SelectionResult) {
-	k.selectionMu.Lock()
-	k.selectionResults[result.EventId] = result
-	k.latestSelection[threadID] = result.EventId
-	for _, sel := range result.Selected {
-		k.citationCount[sel.MessageId]++
-	}
-	k.selectionMu.Unlock()
-
-	// Event IDs are synthesized as sel-<target_message_id> in the
-	// engine. Strip the prefix to recover the target for the
-	// selections table FK.
-	targetID := result.EventId
-	if len(targetID) > 4 && targetID[:4] == "sel-" {
-		targetID = targetID[4:]
-	}
-	if err := k.DB.SaveSelection(result, targetID, threadID); err != nil {
-		log.Printf("SaveSelection(event=%s target=%s): %v", result.EventId, targetID, err)
-	}
-}
-
-// GetSelection returns the in-memory cached selection for an event
-// id. Used by graph.queryResolver.SelectionResult as the hot path
-// before falling back to DB lookup.
-func (k *Kernel) GetSelection(eventID string) (*pb.SelectionResult, bool) {
-	k.selectionMu.RLock()
-	defer k.selectionMu.RUnlock()
-	res, ok := k.selectionResults[eventID]
-	return res, ok
-}
-
-// CitationCount returns how many times this message has been
-// selected as a prerequisite this session.
-func (k *Kernel) CitationCount(messageID string) int {
-	k.selectionMu.RLock()
-	defer k.selectionMu.RUnlock()
-	return k.citationCount[messageID]
-}
-
-// --- runner.Approvals + graph reads ------------------------------------
-
-// RegisterApproval registers a buffered approval channel for a
-// pending tool call. Returns the receive side and an unregister
-// thunk; callers (the runner factory) defer the unregister.
-func (k *Kernel) RegisterApproval(callID, threadID string) (<-chan bool, func()) {
-	ch := make(chan bool, 1)
-	k.pendingMu.Lock()
-	k.pendingApprovals[callID] = ch
-	k.pendingThreadIDs[callID] = threadID
-	k.pendingMu.Unlock()
-	return ch, func() {
-		k.pendingMu.Lock()
-		delete(k.pendingApprovals, callID)
-		delete(k.pendingThreadIDs, callID)
-		k.pendingMu.Unlock()
-	}
-}
-
-// RegisterAnswer registers a buffered answer channel for a pending
-// AskUserQuestion. Returns the receive side and an unregister
-// thunk.
-func (k *Kernel) RegisterAnswer(callID string) (<-chan string, func()) {
-	ch := make(chan string, 1)
-	k.pendingMu.Lock()
-	k.pendingAnswers[callID] = ch
-	k.pendingMu.Unlock()
-	return ch, func() {
-		k.pendingMu.Lock()
-		delete(k.pendingAnswers, callID)
-		k.pendingMu.Unlock()
-	}
-}
-
-// SendApproval delivers an approval/denial verdict to the waiting
-// goroutine. Returns false if no approval is pending under callID
-// (stale answer, expired wait). Used by graph
-// approveToolCall/denyToolCall mutations.
-func (k *Kernel) SendApproval(callID string, approved bool) bool {
-	k.pendingMu.Lock()
-	ch, ok := k.pendingApprovals[callID]
-	k.pendingMu.Unlock()
-	if !ok {
-		return false
-	}
-	ch <- approved
-	return true
-}
-
-// SendAnswer delivers a question answer to the waiting AskUser
-// goroutine. Returns false if no question is pending under callID.
-// Used by graph answerQuestion mutation.
-func (k *Kernel) SendAnswer(callID, answer string) bool {
-	k.pendingMu.Lock()
-	ch, ok := k.pendingAnswers[callID]
-	k.pendingMu.Unlock()
-	if !ok {
-		return false
-	}
-	ch <- answer
-	return true
-}
-
-// ThreadIDForCall returns the thread id associated with a pending
-// approval, used by denyToolCall to synthesize the per-thread
-// denial-reason system message.
-func (k *Kernel) ThreadIDForCall(callID string) string {
-	k.pendingMu.Lock()
-	defer k.pendingMu.Unlock()
-	return k.pendingThreadIDs[callID]
-}
-
-// --- runner.EmbedEnqueuer ---------------------------------------------
-
-// Enqueue routes a message id into the bounded embed queue.
-// Tolerates a nil queue (embedder not configured / settings reload
-// cleared it) — silent no-op falls back to the startup backfill
-// goroutine and the live-embed path in ChunkOracle.EnsureVector,
-// so a slow or down embedder doesn't block message inserts.
-func (k *Kernel) Enqueue(messageID string) {
-	if q := k.EmbedQueue(); q != nil {
-		q.Enqueue(messageID)
-	}
-}
+// PlanStore methods → plans.go; Selections methods → selections.go;
+// Approvals methods → approvals.go; EmbedEnqueuer (Enqueue) →
+// embed.go. Same struct, methods spread across files in the same
+// package so each file owns one concern.

@@ -1,0 +1,4 @@
+results*.json
+run_*.log
+*.pyc
+__pycache__/
