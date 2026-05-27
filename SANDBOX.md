@@ -14,7 +14,7 @@ Spidey can run agent Bash tool calls inside a Docker container instead of on the
 - Writes inside a mounted working directory (the model can still `rm -rf` your project — that's what the mount is for).
 - Network-level exfiltration. The container has full outbound network access by default.
 
-For stronger isolation you'd need microVMs (Firecracker, Docker Sandboxes) or a user-namespace sandbox (bubblewrap, Seatbelt) — see `JOURNAL.md` for the research that led to this decision.
+For stronger isolation you'd need microVMs (Firecracker, Docker Sandboxes) or a user-namespace sandbox (bubblewrap, Seatbelt). Docker-on-host was chosen as the deliberate floor: it stops accidents, not adversaries.
 
 ## Build
 

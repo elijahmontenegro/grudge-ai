@@ -51,7 +51,7 @@ func ReconcileOnBoot(ctx context.Context, deps Deps) {
 	if len(rows) == 0 {
 		return
 	}
-	log.Printf("[Reconcile] inspecting %d non-idle agent_state row(s) from prior session", len(rows))
+	log.Printf("[Reconcile] inspecting %d non-idle agent_state row(s) left by the previous process", len(rows))
 
 	for _, st := range rows {
 		action := reconcileRow(ctx, st, deps)

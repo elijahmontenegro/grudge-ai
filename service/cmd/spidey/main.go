@@ -164,9 +164,9 @@ func main() {
 		Hooks:      hookDispatcher,
 	})
 
-	// Reconcile agent_state rows left non-Idle by the prior session.
-	// Goroutines don't survive process exit — any Running/Paused row
-	// in DB references a runner that no longer exists. Autonomous
+	// Reconcile agent_state rows left non-Idle by the previous process
+	// run. Goroutines don't survive process exit — any Running/Paused
+	// row in DB references a runner that no longer exists. Autonomous
 	// runs with remaining budget auto-resume; everything else
 	// normalizes to Idle so the UI stops lying. Runs synchronously
 	// before the HTTP listener starts so the first GraphQL query

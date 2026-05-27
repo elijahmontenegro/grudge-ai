@@ -69,7 +69,7 @@ func (t *Tracker) Get(eventID string) (*pb.SelectionResult, bool) {
 }
 
 // CitationCount returns how many times this message has been selected
-// as a prerequisite this session.
+// as a prerequisite since the tracker was constructed (process boot).
 func (t *Tracker) CitationCount(messageID string) int {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

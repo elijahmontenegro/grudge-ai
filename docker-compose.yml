@@ -88,11 +88,6 @@ services:
   # on queries, plain on documents) is text-level, not server-side
   # prompt config, so TEI handles it without modification — the
   # core/adapter/tei client prepends the prefix on EmbedQuery calls.
-  # This replaces the custom Python service from the prior session
-  # (services/zembed/) that was needed only because zembed-1 used
-  # sentence-transformers' encode_query/encode_document methods that
-  # don't fit TEI's per-server prompt model. Qwen3-Embedding's
-  # text-prefix recipe sidesteps that limitation entirely.
   tei-embed:
     image: ghcr.io/huggingface/text-embeddings-inference:cuda-1.9
     ports:

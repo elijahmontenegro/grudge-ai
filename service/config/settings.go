@@ -180,10 +180,10 @@ func probeProviders(s *Settings) {
 		}
 	}
 	// vLLM-served zerank-1-small at port 8000 — the production reranker.
-	// 1.7B Apache 2.0; uses identical Yes-token logprob recipe as zerank-2
-	// (the larger NC sibling that was the prior session's eval winner but
-	// didn't fit alongside a 4B embedder on 12GB). vLLM exposes an
-	// OpenAI-compatible /v1/models endpoint.
+	// 1.7B Apache 2.0; uses identical Yes-token logprob recipe as
+	// zerank-2 (the larger NC sibling — strong on quality but doesn't
+	// fit alongside a 4B embedder on 12GB; see docs/eval-reports/).
+	// vLLM exposes an OpenAI-compatible /v1/models endpoint.
 	if probeHTTP("http://localhost:8000/v1/models") {
 		s.Providers["scorer"] = ProviderConfig{
 			Adapter: "zerank",
@@ -195,8 +195,7 @@ func probeProviders(s *Settings) {
 	// 0.6B Apache 2.0 instruction-tuned asymmetric embedder. The Instruct/
 	// Query prefix is applied client-side by core/adapter/tei — TEI doesn't
 	// need per-request prompt support because the prefix is part of the
-	// query text. Replaces the custom services/zembed/ Python service from
-	// the prior session.
+	// query text.
 	if probeHTTP("http://localhost:8080/health") {
 		s.Providers["embedder"] = ProviderConfig{
 			Adapter: "tei",

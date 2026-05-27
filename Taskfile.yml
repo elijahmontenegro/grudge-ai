@@ -174,10 +174,15 @@ tasks:
 
   substrate:smoke:
     desc: Run the live-service smoke test against running tei-embed + vllm.
-          Compares against the eval-baseline (R2 r@5 = 31/31 = lossless contract).
-          Requires substrate:up to have completed; uses the WSL eval venv.
+          Compares against the eval baseline (R2 r@5 = 31/31 = lossless
+          contract). Requires substrate:up to have completed and a Python
+          environment with eval/requirements.txt installed. Override the
+          interpreter with PYTHON=... (default `python`).
+    vars:
+      PYTHON: '{{.PYTHON | default "python"}}'
+    dir: eval
     cmds:
-      - wsl -d Ubuntu-22.04 -e bash -c "cd /mnt/c/Code/spidey/eval && ~/eval-venv/bin/python run_live_smoke.py"
+      - '{{.PYTHON}} run_live_smoke.py'
 
   clean:
     desc: Remove build artifacts
