@@ -138,7 +138,7 @@ tasks:
   sandbox:image:
     desc: Build the sandbox docker image
     cmds:
-      - docker build -t spidey-sandbox deploy/sandbox
+      - docker build -t spidey-sandbox containers/sandbox
 
   substrate:up:
     desc: Bring up the full production substrate sequentially — tei-embed

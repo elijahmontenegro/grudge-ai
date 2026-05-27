@@ -206,7 +206,7 @@ func probeProviders(s *Settings) {
 	}
 	// SearXNG-served meta-search at port 8888 — the production search
 	// provider for the WebSearch tool. Container source at
-	// deploy/searxng/. Brought up alongside vllm + tei-embed by
+	// containers/searxng/. Brought up alongside vllm + tei-embed by
 	// task substrate:up; the FirstRun probe defaults the config when
 	// the service answers.
 	if probeHTTP("http://localhost:8888/") {

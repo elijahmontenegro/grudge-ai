@@ -32,7 +32,7 @@ services:
   sandbox:
     image: spidey-sandbox:latest
     build:
-      context: ./deploy/sandbox
+      context: ./containers/sandbox
     profiles: ["build-only"]
     # Prevent `docker compose up` from trying to run it — this image is
     # only ever invoked ephemerally by the Go runtime.
@@ -47,7 +47,7 @@ services:
   # and sigmoid(logit/5) yields the relevance score.
   vllm:
     build:
-      context: ./deploy/vllm
+      context: ./containers/vllm
       dockerfile: Dockerfile
     image: spidey-vllm:latest
     ports:
@@ -135,7 +135,7 @@ services:
     volumes:
       # Bind-mount the repo's settings.yml so the container picks up our
       # JSON-output + rate-limit config (the default image disables json).
-      - ./deploy/searxng:/etc/searxng:rw
+      - ./containers/searxng:/etc/searxng:rw
 
   # willfarrell/autoheal watches containers labeled `autoheal=true` and
   # restarts them when their Docker healthcheck reports `unhealthy`.

@@ -5,7 +5,7 @@
 ## Build
 
 ```sh
-docker build -t spidey-vllm deploy/vllm
+docker build -t spidey-vllm containers/vllm
 ```
 
 A thin wrapper over `vllm/vllm-openai:latest` that pins the model and serving args. Weights are downloaded on first start; vLLM does not cache them into the image. Use `docker compose build vllm` from the repo root to keep build context aligned with the rest of the substrate.

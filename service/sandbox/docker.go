@@ -9,7 +9,7 @@
 //
 // Runtime contract: Docker CLI is invoked directly (no SDK) to keep the
 // dependency surface minimal. The image is built from
-// deploy/sandbox/Dockerfile via `docker compose build sandbox`.
+// containers/sandbox/Dockerfile via `docker compose build sandbox`.
 package sandbox
 
 import (

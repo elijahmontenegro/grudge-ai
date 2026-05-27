@@ -6,7 +6,7 @@
 # filesystem except through that mount.
 #
 # Build: docker compose build sandbox
-#        (or `docker build -t spidey-sandbox:latest deploy/sandbox`)
+#        (or `docker build -t spidey-sandbox:latest containers/sandbox`)
 #
 # This is not a security boundary against hostile code — it's a workspace
 # fence. Shared kernel, standard container isolation. See SANDBOX.md.

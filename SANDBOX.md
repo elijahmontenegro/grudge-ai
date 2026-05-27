@@ -22,7 +22,7 @@ For stronger isolation you'd need microVMs (Firecracker, Docker Sandboxes) or a 
 docker compose build sandbox
 ```
 
-This produces `spidey-sandbox:latest` from `deploy/sandbox/Dockerfile`. Rebuild any time the Dockerfile changes.
+This produces `spidey-sandbox:latest` from `containers/sandbox/Dockerfile`. Rebuild any time the Dockerfile changes.
 
 ## What's inside
 
@@ -54,7 +54,7 @@ Threads have a `sandboxed` boolean in the GraphQL `Thread` type. Default is `fal
 
 ## Extending
 
-Edit `deploy/sandbox/Dockerfile`, add your packages to the `apt-get install` list, rebuild. The image rebuild is cached per layer, so adding a single package is cheap.
+Edit `containers/sandbox/Dockerfile`, add your packages to the `apt-get install` list, rebuild. The image rebuild is cached per layer, so adding a single package is cheap.
 
 If you need Spidey-specific tooling (e.g., a different Python version per project), create a derived image and point `service/sandbox/docker.go`'s `Image` constant at it. Resist per-thread image selection — it multiplies the build/cache surface and was not worth the complexity when weighed.
 

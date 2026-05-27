@@ -130,7 +130,7 @@ spidey/
 │   ├── package.json, vite.config.ts, codegen.ts
 │   ├── src/{domain,features,primitives,state,graphql,hooks,lib,data,test}/
 │   └── dist/                  #   Build output (embedded into service via //go:embed)
-├── deploy/                    # Container artifacts
+├── containers/                # Container build inputs
 │   ├── sandbox/Dockerfile     #   Agent tool-execution sandbox
 │   ├── vllm/Dockerfile, README.md
 │   └── searxng/settings.yml
