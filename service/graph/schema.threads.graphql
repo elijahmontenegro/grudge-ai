@@ -1,0 +1,70 @@
+type Thread {
+  id: ID!
+  name: String!
+  workingDirs: [String!]!
+  sandboxed: Boolean!
+  createdAt: DateTime!
+  parentThreadId: ID
+  branchPointPosition: Int
+  archivedAt: DateTime
+  messageCount: Int!
+  """
+  Live agent state for this thread. Resolved from the agent_state
+  table on demand. Surfacing these on Thread (rather than only via
+  the separate agentState query) lets the LIST_THREADS Apollo cache
+  carry sidebar-status info without a parallel module-scope state map.
+  """
+  status: AgentStatus!
+  mode: AgentMode!
+}
+
+type ThreadStateEvent {
+  threadId: ID!
+  status: AgentStatus!
+  mode: AgentMode!
+  warmth: Int!
+  name: String!
+}
+
+type ViewState {
+  threadId: ID!
+  scrollPosition: Float!
+  expandedMessageIds: [ID!]!
+  inputDraft: String!
+  citationExpansionState: String!
+}
+
+input ViewStateInput {
+  scrollPosition: Float!
+  expandedMessageIds: [ID!]!
+  inputDraft: String!
+  citationExpansionState: String!
+}
+
+type ActivityItem {
+  type: String!
+  threadId: ID!
+  threadName: String!
+  summary: String!
+  timestamp: DateTime!
+}
+
+extend type Query {
+  threads(includeArchived: Boolean): [Thread!]!
+  thread(id: ID!): Thread
+  viewState(threadId: ID!): ViewState
+  recentActivity(limit: Int): [ActivityItem!]!
+}
+
+extend type Mutation {
+  createThread(name: String, workingDirs: [String!], sandboxed: Boolean): Thread!
+  updateThread(id: ID!, name: String, workingDirs: [String!], sandboxed: Boolean): Thread!
+  deleteThread(id: ID!): Boolean!
+  archiveThread(id: ID!): Boolean!
+  unarchiveThread(id: ID!): Boolean!
+  saveViewState(threadId: ID!, state: ViewStateInput!): ViewState!
+}
+
+extend type Subscription {
+  threadStateChanges: ThreadStateEvent!
+}

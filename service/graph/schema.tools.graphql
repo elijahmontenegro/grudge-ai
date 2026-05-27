@@ -1,0 +1,28 @@
+type ToolExecution {
+  threadId: ID!
+  callId: ID!
+  toolName: String!
+  arguments: String!
+  status: String!
+  result: String
+  isError: Boolean
+}
+
+type SubagentProgress {
+  threadId: ID!
+  forkThreadId: ID!
+  task: String!
+  status: String!
+  roundCount: Int!
+}
+
+extend type Mutation {
+  approveToolCall(callId: ID!): Boolean!
+  denyToolCall(callId: ID!, reason: String): Boolean!
+  answerQuestion(callId: ID!, answer: String!): Boolean!
+}
+
+extend type Subscription {
+  toolExecution(threadId: ID!): ToolExecution!
+  subagentProgress(threadId: ID!): SubagentProgress!
+}

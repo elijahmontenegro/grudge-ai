@@ -1,0 +1,45 @@
+type SearchResult {
+  messageId: ID!
+  threadId: ID!
+  threadName: String!
+  snippet: String!
+  score: Float!
+}
+
+type Edge {
+  fromMessageId: ID!
+  toMessageId: ID!
+  score: Float!
+  source: String!
+  crossEncoderScore: Float!
+  temporalProximity: Float!
+}
+
+type SelectedMessage {
+  messageId: ID!
+  effectiveScore: Float!
+  hopDepth: Int!
+  threadId: ID!
+  crossThread: Boolean!
+  crossEncoderScore: Float!
+  temporalProximity: Float!
+}
+
+type ExcludedMessage {
+  messageId: ID!
+  reason: String!
+  score: Float!
+}
+
+type SelectionResult {
+  eventId: ID!
+  scope: SelectionScope!
+  threadId: ID!
+  selected: [SelectedMessage!]!
+  excluded: [ExcludedMessage!]!
+}
+
+extend type Query {
+  search(query: String!, limit: Int): [SearchResult!]!
+  selectionForMessage(messageId: ID!): SelectionResult
+}

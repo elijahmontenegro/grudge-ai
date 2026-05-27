@@ -1,0 +1,10 @@
+scalar DateTime
+
+enum SelectionScope { THREAD, ALL_THREADS }
+enum ExecutionMode { MANUAL, AUTONOMOUS }
+enum AgentStatus { IDLE, RUNNING, PAUSED }
+enum AgentMode { NORMAL, AUTONOMOUS, PLAN }
+
+type Query
+type Mutation
+type Subscription

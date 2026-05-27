@@ -1,0 +1,81 @@
+type Message {
+  id: ID!
+  role: String!
+  content: String!
+  thinking: String
+  toolCalls: [ToolCallBlock!]!
+  toolResults: [ToolResultBlock!]!
+  attachments: [AttachmentBlock!]!
+  position: Int!
+  threadId: ID!
+  createdAt: DateTime!
+  citedByCount: Int!
+}
+
+"""
+Attachment metadata on a message. Files live in the thread's sandbox
+workspace under `_attachments/{id}/{filename}`; `path` is the
+sandbox-relative location the agent resolves via FileRead. Download
+via GET /api/attachments/{threadId}/{id}/{filename}.
+"""
+type AttachmentBlock {
+  id: ID!
+  filename: String!
+  mimeType: String!
+  sizeBytes: Int!
+  path: String!
+}
+
+type ToolCallBlock {
+  id: ID!
+  name: String!
+  arguments: String!
+}
+
+type ToolResultBlock {
+  toolCallId: ID!
+  content: String!
+}
+
+"""
+AttachmentInput is the shape the client sends after a successful
+POST /api/attachments/{threadId} — echoing what that endpoint
+returned. The server reconstructs AttachmentContent blocks from
+these and stamps them into the message at send time.
+"""
+input AttachmentInput {
+  id: ID!
+  filename: String!
+  mimeType: String!
+  sizeBytes: Int!
+  path: String!
+  inlinedText: String
+}
+
+type StreamEvent {
+  messageId: ID!
+  delta: String
+  thinking: String
+  done: Boolean!
+  error: String
+}
+
+extend type Query {
+  messages(threadId: ID!, limit: Int, offset: Int): [Message!]!
+}
+
+extend type Mutation {
+  editMessage(threadId: ID!, messagePosition: Int!, newContent: String!): Thread!
+  compileAdoc(path: String!): String!
+  """
+  Send a user message. `attachments` references files already uploaded
+  via POST /api/attachments/{threadId} — the client uploads first, gets
+  back a list of AttachmentMeta, then passes those IDs here so the
+  server stamps AttachmentContent blocks into the stored message.
+  """
+  sendMessage(threadId: ID!, content: String!, scope: SelectionScope, attachments: [AttachmentInput!]): Message!
+}
+
+extend type Subscription {
+  messageStream(threadId: ID!): StreamEvent!
+}

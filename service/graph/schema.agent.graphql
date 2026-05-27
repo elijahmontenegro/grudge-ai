@@ -1,0 +1,64 @@
+type AgentState {
+  threadId: ID!
+  status: AgentStatus!
+  mode: AgentMode!
+  roundCount: Int!
+  startedAt: DateTime
+  durationLimit: String
+  elapsedTime: String
+  planContent: String
+  "Retry status of the underlying provider call. Null when not retrying."
+  retry: RetryStatus
+}
+
+"""
+Transient-failure retry progress for the current LLM request.
+Surfaced to the UI so the user sees "retrying 2/10, next attempt in
+8s" instead of a silent pause.
+"""
+type RetryStatus {
+  attempt: Int!
+  maxAttempts: Int!
+  "Last error message that triggered the retry (null on success)."
+  error: String
+  "Milliseconds until the next attempt. 0 when this is the final event."
+  nextDelayMs: Int!
+  "True when no more attempts will be made (success or exhaustion)."
+  final: Boolean!
+}
+
+extend type Query {
+  agentState(threadId: ID!): AgentState
+}
+
+extend type Mutation {
+  stopAgent(threadId: ID!): Boolean!
+  pauseAgent(threadId: ID!): Boolean!
+  resumeAgent(threadId: ID!, correction: String): Boolean!
+  """
+  Start an autonomous run. `attachments` attach to the initial kickoff
+  message only — subsequent rounds are empty user turns per the RRC
+  reflective-retrieval protocol.
+  """
+  startAutonomous(threadId: ID!, prompt: String!, duration: String!, attachments: [AttachmentInput!]): Boolean!
+  enterPlanMode(threadId: ID!): Boolean!
+  approvePlan(threadId: ID!, executionMode: ExecutionMode!): Boolean!
+  """
+  Reject the current plan and ask the agent to revise it. Clears the stored
+  plan content, re-enters plan mode, and queues a user-visible feedback
+  message so the next round starts with the critique. The caller typically
+  follows up with sendMessage(threadId, feedback) to actually kick the round.
+  """
+  rejectPlan(threadId: ID!, feedback: String): Boolean!
+  """
+  Overwrite the plan artifact (plan.adoc) with user-edited content before
+  approval. Backend writes the file, replaces the cached plan content,
+  re-publishes agentState so the panel re-renders with the edit. The model
+  will see the edited version when it reads plan.adoc during implementation.
+  """
+  updatePlanSource(threadId: ID!, content: String!): Boolean!
+}
+
+extend type Subscription {
+  agentState(threadId: ID!): AgentState!
+}
