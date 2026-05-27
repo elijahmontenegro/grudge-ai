@@ -141,13 +141,16 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	// zero-value engine fields).
 	engineCfg := r.substrate.Engine().Config()
 	engine, err := json.Marshal(map[string]any{
-		"edge_threshold":        engineCfg.EdgeThreshold,
-		"score_floor":           engineCfg.ScoreFloor,
-		"z_score_threshold":     engineCfg.ZScoreThreshold,
-		"min_batch_stddev":      engineCfg.MinBatchStdDev,
-		"radius_size":           engineCfg.RadiusSize,
-		"rerank_top_k":          engineCfg.RerankTopK,
-		"context_budget_tokens": engineCfg.ContextBudgetTokens,
+		"edge_threshold":           engineCfg.EdgeThreshold,
+		"score_floor":              engineCfg.ScoreFloor,
+		"z_score_threshold":        engineCfg.ZScoreThreshold,
+		"min_batch_stddev":         engineCfg.MinBatchStdDev,
+		"radius_size":              engineCfg.RadiusSize,
+		"rerank_top_k":             engineCfg.RerankTopK,
+		"context_budget_tokens":    engineCfg.ContextBudgetTokens,
+		"diversity_lambda":         engineCfg.DiversityLambda,
+		"budget_headroom_pct":      engineCfg.BudgetHeadroomPct,
+		"per_msg_delimiter_tokens": engineCfg.PerMsgDelimiterTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal engine config: %w", err)

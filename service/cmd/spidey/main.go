@@ -9,6 +9,7 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -45,8 +46,6 @@ import (
 	"github.com/emontenegr/spidey/service/storage"
 	"github.com/emontenegr/spidey/service/substrate"
 	"github.com/emontenegr/spidey/service/tray"
-
-	"path/filepath"
 )
 
 // Embedded web bundle. The Taskfile's embed-sync task copies the

@@ -5,12 +5,12 @@ import (
 	"github.com/emontenegr/spidey/service/runtime"
 )
 
-// runtimeDeps assembles the runtime.Deps bundle for the factory.
-// Substrate fields and runner state come from the embedded Kernel;
-// Pubsub is the only graph-specific implementation because
-// it translates plain runtime structs into gqlgen-generated event
-// types. Approvals / PlanStore / Selections / EmbedEnqueuer are
-// satisfied directly by the Kernel — no shim types needed.
+// runtimeDeps assembles the runtime.Deps bundle for the runner
+// factory. Each field maps directly to a resolver-held dependency;
+// the substrate Holder owns the engine/main-completer atomic-swap
+// reads. Pubsub is the only adapter type — it translates plain
+// runtime event structs into gqlgen-generated graph types so the
+// runtime layer stays free of GraphQL symbols.
 func (r *Resolver) runtimeDeps() runtime.Deps {
 	return runtime.Deps{
 		Registry:      r.runners,

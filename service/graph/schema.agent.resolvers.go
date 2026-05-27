@@ -84,7 +84,6 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 	//       still has Mode=Autonomous → kick a fresh RunAutonomous
 	//       goroutine so the UX doesn't lie.
 	entry, haveEntry := r.runners.Get(threadID)
-	restartedAutonomous := false
 	if haveEntry && entry.Runner.IsAutonomousActive() {
 		entry.Runner.ResumeAutonomous()
 	} else if st.Mode == storage.AgentModeAutonomous {
@@ -113,7 +112,6 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 					log.Printf("[Autonomous resumed] Error: %v", err)
 				}
 			}()
-			restartedAutonomous = true
 		}
 	}
 	gqlMode := AgentModeNormal
@@ -126,7 +124,6 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: AgentStatusRunning, Mode: gqlMode,
 	})
-	_ = restartedAutonomous
 	return true, r.db.SetAgentStatus(threadID, storage.AgentStatusRunning)
 }
 
