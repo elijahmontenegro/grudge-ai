@@ -12,55 +12,21 @@ it has no mechanism to tell which turns were retrieved.
 
 ## RRC in a nutshell
 
-LLM inference is stateless: every call is an independent forward pass.
-The "conversation" is constructed entirely by whoever assembles the
-input. The standard approach is brute force — prepend everything, every
-time. That has a soft ceiling (attention quality degrades as positions
-dilute; the advertised context limit is a product boundary, not an
-architectural wall) and per-turn cost that grows with history.
+LLMs are stateless; the "conversation" is just an input sequence
+somebody assembled. The standard pattern prepends everything every
+turn, until attention dilutes and the model decoheres. RRC selects
+only the prior turns the new turn *depends on*, restores them in the
+model's native conversation format (no template, no "here is some
+relevant context:" wrapper), and stops. The model can't tell which
+turns were retrieved.
 
-RRC replaces brute force with selective assembly, defined by four
-properties:
+RAG *augments* (labeled retrieved text in a prompt template, external
+corpus). RRC *restores* (native turns from the model's own history).
+Different operations, different consequences.
 
-1. **Self-referential corpus.** Retrieval targets the model's own past
-   turns, stored losslessly. No external knowledge base, no
-   summarization, no write-time graph extraction. Lossy transformations
-   irreversibly discard information based on what *looked* relevant at
-   write time; relevance is decided at read time by the new turn, not
-   fixed when the prior turn was stored.
-
-2. **Prerequisite detection, not similarity.** Two-stage retrieval
-   (bi-encoder candidates → cross-encoder filter) tuned with three-gate
-   hyperselective thresholding. The new turn's *prerequisites* — the
-   prior turns it depends on for coherent continuation — not topical
-   matches. Zero-return is a valid outcome.
-
-3. **Native format restoration.** Selected turns enter the input
-   structurally identical to entries from the current session — no
-   "Here is some relevant context:" wrapper, no augmentation template,
-   no formatting transformation. The model processes them through the
-   same attention computation it applies to any conversation input.
-
-4. **Bounded assembly.** Selection size is determined by the three
-   threshold gates (z-score, cross-encoder floor, batch standard
-   deviation), not by a fixed quota or by conversation length.
-   Zero-return is a valid outcome. What passes is whatever the gates
-   admit.
-
-This is **structurally distinct from RAG**. RAG *augments* — labeled
-retrieved text inserted into a prompt template, generated against
-external knowledge bases. RRC *restores* — native conversation turns
-from the model's own history, indistinguishable on the wire from session
-entries. One consequence is operational: per-turn compute is bounded by
-retrieval top-K, not by conversation length. Another is behavioral: the
-model continues as if it had remembered, because the input is
-structurally what it would be if it had.
-
-For the formal statement — including reflective selection (mid-
-generation re-retrieval driven by the model's own reasoning output),
-threshold calibration, and comparison to neighboring techniques (RAG,
-FLARE, Zep, Letta, selective context reconstruction) — see
-[the paper](docs/rrc-paper.md).
+See [the paper](docs/rrc-paper.md) for the four defining properties,
+the three-gate threshold mechanism, reflective selection, and the
+comparison to neighboring techniques.
 
 ## Architecture
 
