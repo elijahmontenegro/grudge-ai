@@ -8,64 +8,109 @@ import (
 	"github.com/emontenegr/spidey/core/httpc/retry"
 	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
 	"github.com/emontenegr/spidey/service/agent"
-	"github.com/emontenegr/spidey/service/kernel"
+	"github.com/emontenegr/spidey/service/approvals"
+	"github.com/emontenegr/spidey/service/config"
+	"github.com/emontenegr/spidey/service/hooks"
+	"github.com/emontenegr/spidey/service/messages"
+	"github.com/emontenegr/spidey/service/plans"
+	"github.com/emontenegr/spidey/service/prompt"
 	"github.com/emontenegr/spidey/service/pubsub"
 	"github.com/emontenegr/spidey/service/runtime"
+	"github.com/emontenegr/spidey/service/selections"
+	"github.com/emontenegr/spidey/service/skills"
 	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/spidey/service/substrate"
+
+	"google.golang.org/adk/tool"
 )
 
-// Resolver is the GraphQL root resolver. It embeds *kernel.Kernel
-// for shared runtime state (DB, Engine, Config, Main, Runners,
-// plan/selection caches, approval channels) and adds the GraphQL-
-// specific surface: pubsub topics typed against gqlgen's event
-// structs and the publish helpers that fan out to subscribers.
+// Resolver is the GraphQL root resolver. Holds explicit references
+// to every long-lived service component the resolvers reach into.
+// Each field has a single, named owner (no god-struct embed): the
+// substrate Holder owns the engine + embed-queue atomic swap; plans
+// / selections / approvals each own one in-memory cache; runners
+// owns the per-thread runner registry; the inserter centralizes
+// message-store + chunk derivation + embed enqueue.
 //
-// Substrate, ReloadProviders, plan-content/selection/approval
-// state, and the embed queue all live on Kernel. The graph layer
-// reads them through promoted fields/methods.
+// Pubsub topics are graph-specific (gqlgen-generated event structs);
+// they stay on the resolver. The runtime layer emits plain Go structs
+// and the deps.go bridge translates.
 type Resolver struct {
-	*kernel.Kernel
+	cfg        *config.Config
+	db         *storage.DB
+	substrate  *substrate.Holder
+	runners    *runtime.Registry
+	plans      *plans.Cache
+	selections *selections.Tracker
+	approvals  *approvals.Registry
+	inserter   *messages.Inserter
+	skills     []skills.Skill
+	mcpTools   []tool.Tool
+	assembler  *prompt.Assembler
+	hooks      *hooks.Dispatcher
 
 	// Per-thread fan-out topics for UI subscriptions. Each is a
-	// thin instance of pubsub.Topic / pubsub.Broadcast — the five
-	// near-identical sub/pub maps that used to live here are now
-	// one generic primitive parameterized per event shape.
+	// thin instance of pubsub.Topic / pubsub.Broadcast.
 	streams   *pubsub.Topic[*StreamEvent]
 	agents    *pubsub.Topic[*AgentState]
-	tools     *pubsub.Topic[*ToolExecution]
+	tools *pubsub.Topic[*ToolExecution]
 	subagents *pubsub.Topic[*SubagentProgress]
 	threads   *pubsub.Broadcast[*ThreadStateEvent]
 }
 
-// NewResolver wraps a Kernel with the GraphQL fan-out surface.
-// Every shared runtime concern (substrate, registry, caches,
-// embed queue) flows in through the kernel; resolvers consume
-// them via promotion.
-func NewResolver(k *kernel.Kernel) *Resolver {
+// Deps bundles the application-wide handles the resolver needs at
+// construction. main.go composes everything explicitly and hands it
+// here; the resolver doesn't own provider lifecycle or storage
+// open/close.
+type Deps struct {
+	Config     *config.Config
+	DB         *storage.DB
+	Substrate  *substrate.Holder
+	Runners    *runtime.Registry
+	Plans      *plans.Cache
+	Selections *selections.Tracker
+	Approvals  *approvals.Registry
+	Inserter   *messages.Inserter
+	Skills     []skills.Skill
+	MCPTools   []tool.Tool
+	Assembler  *prompt.Assembler
+	Hooks      *hooks.Dispatcher
+}
+
+// NewResolver wires the GraphQL resolver from the application's
+// explicit deps. Every shared concern flows in through Deps —
+// there's no embed, no god struct, no implicit promotion.
+func NewResolver(d Deps) *Resolver {
 	return &Resolver{
-		Kernel:    k,
+		cfg:        d.Config,
+		db:         d.DB,
+		substrate:  d.Substrate,
+		runners:    d.Runners,
+		plans:      d.Plans,
+		selections: d.Selections,
+		approvals:  d.Approvals,
+		inserter:   d.Inserter,
+		skills:     d.Skills,
+		mcpTools:   d.MCPTools,
+		assembler:  d.Assembler,
+		hooks:      d.Hooks,
+
 		streams:   pubsub.NewTopic[*StreamEvent](),
 		agents:    pubsub.NewTopic[*AgentState](),
-		tools:     pubsub.NewTopic[*ToolExecution](),
+		tools: pubsub.NewTopic[*ToolExecution](),
 		subagents: pubsub.NewTopic[*SubagentProgress](),
 		threads:   pubsub.NewBroadcast[*ThreadStateEvent](),
 	}
 }
 
 // getOrCreateRunner returns the active runner for a thread, creating
-// one via the runtime/runner factory if no entry exists. The factory
-// owns every concern — askCh goroutine, ToolDeps construction,
-// prompt assembly, retry wrapping, callback wiring. The resolver
-// supplies the Pubsub bridge (graph-typed translation) plus the
-// kernel-implemented Approvals / PlanStore / Selections /
-// EmbedEnqueuer interfaces via runtimeDeps.
-//
-// GetOrBuild covers the lookup-then-construct dance under one
-// critical section so two simultaneous callers for the same thread
-// (two browser tabs, boot reconciler racing first user message)
-// don't both run the build closure and orphan the loser's runner.
+// one via the runtime factory if no entry exists. GetOrBuild covers
+// the lookup-then-construct dance under one critical section so two
+// simultaneous callers for the same thread (two browser tabs, boot
+// reconciler racing first user message) don't both run the build
+// closure and orphan the loser's runner.
 func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
-	entry, err := r.Runners.GetOrBuild(threadID, func() (*runtime.Entry, error) {
+	entry, err := r.runners.GetOrBuild(threadID, func() (*runtime.Entry, error) {
 		return runtime.Build(threadID, r.runtimeDeps())
 	})
 	if err != nil {
@@ -74,12 +119,12 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 	return entry.Runner, nil
 }
 
-// storeMessage routes through the kernel's Inserter — chunk
-// derivation, InsertMessage, and embed enqueue all happen in one
-// place (service/messages). Graph-side and runtime-side inserts
-// converge on the same code path.
+// storeMessage routes through the inserter — chunk derivation,
+// InsertMessage, and embed enqueue all happen in one place
+// (service/messages). Graph-side and runtime-side inserts converge
+// on the same code path.
 func (r *Resolver) storeMessage(msg *pb.Message, _text string) error {
-	return r.Inserter.Insert(msg)
+	return r.inserter.Insert(msg)
 }
 
 // stopRunner stops and removes a thread's runner. The actual
@@ -88,7 +133,7 @@ func (r *Resolver) storeMessage(msg *pb.Message, _text string) error {
 // graph-typed Pubsub adapter so schema.resolvers callsites stay
 // terse.
 func (r *Resolver) stopRunner(threadID string) {
-	r.Runners.Stop(threadID, runtimePubsub{r})
+	r.runners.Stop(threadID, runtimePubsub{r})
 }
 
 // unsubscribeOnDone waits for ctx.Done, then calls cleanup under the lock.
@@ -138,7 +183,7 @@ func (r *Resolver) publishRetryStatus(threadID string, ev retry.Event) {
 		log.Printf("RETRY: thread=%s attempt=%d/%d nextDelay=%s err=%q", threadID, ev.Attempt, ev.MaxAttempts, ev.NextDelay, ev.Err.Error())
 	}
 
-	st, _ := r.DB.GetAgentState(threadID)
+	st, _ := r.db.GetAgentState(threadID)
 	base := &AgentState{ThreadID: threadID}
 	if st != nil {
 		switch st.Status {
@@ -207,3 +252,4 @@ func (r *Resolver) subscribeThreadState() chan *ThreadStateEvent {
 func (r *Resolver) publishThreadState(event *ThreadStateEvent) {
 	r.threads.Publish(event)
 }
+

@@ -28,10 +28,25 @@ import (
 	_ "github.com/emontenegr/spidey/core/adapter/tei"
 	_ "github.com/emontenegr/spidey/core/adapter/vllm"
 	_ "github.com/emontenegr/spidey/core/adapter/zerank"
+	"github.com/emontenegr/spidey/rrc/chunk"
+	"github.com/emontenegr/spidey/rrc/tiktoken"
+	"github.com/emontenegr/spidey/service/agent"
+	"github.com/emontenegr/spidey/service/approvals"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/graph"
-	"github.com/emontenegr/spidey/service/kernel"
+	"github.com/emontenegr/spidey/service/hooks"
+	"github.com/emontenegr/spidey/service/messages"
+	"github.com/emontenegr/spidey/service/plans"
+	"github.com/emontenegr/spidey/service/prompt"
+	srvruntime "github.com/emontenegr/spidey/service/runtime"
+	"github.com/emontenegr/spidey/service/sandbox"
+	"github.com/emontenegr/spidey/service/selections"
+	"github.com/emontenegr/spidey/service/skills"
+	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/spidey/service/substrate"
 	"github.com/emontenegr/spidey/service/tray"
+
+	"path/filepath"
 )
 
 // Embedded web bundle. The Taskfile's embed-sync task copies the
@@ -58,17 +73,97 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	// Bootstrap consolidates: token estimator, storage, sandbox preflight,
-	// substrate (providers + engine), MCP toolset loading, prompt
-	// assembler, hooks dispatcher, skill loading, runner registry, embed
-	// queue, and the per-thread caches the runner factory closes over.
-	k, err := kernel.Bootstrap(ctx, cfg)
+	// Composition root. Each component is constructed explicitly with
+	// its own narrow set of deps; no god struct sits between them.
+	//
+	// tiktoken is the committed token estimator. If it can't load —
+	// corrupt cache, network unreachable for first-run fetch — refuse
+	// to start rather than degrade silently to a char heuristic that
+	// would change the unit every downstream budget check operates in.
+	tokenEst, err := tiktoken.New()
 	if err != nil {
-		log.Fatalf("kernel: %v", err)
+		log.Fatalf("token estimator: %v", err)
 	}
-	defer k.Shutdown()
+	chunk.SetDefaultEstimator(tokenEst)
 
-	resolver := graph.NewResolver(k)
+	db, err := storage.Open(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("storage: %v", err)
+	}
+	defer db.Close()
+	if n := db.BackfillThreadNames(); n > 0 {
+		log.Printf("Named %d unnamed threads from first message", n)
+	}
+
+	// Sandbox preflight — non-fatal. Threads with sandboxed=true will
+	// fail at Bash-call time with the same error if the image is not
+	// built; logging here makes the situation visible at boot.
+	if err := sandbox.CheckReady(); err != nil {
+		log.Printf("Sandbox not ready: %v (sandboxed=false threads unaffected)", err)
+	} else {
+		log.Printf("Sandbox ready: image %s", sandbox.Image)
+	}
+
+	// MCP toolsets from settings.
+	var mcpConfigs []agent.MCPServerConfig
+	for _, srv := range cfg.Settings.MCPServers {
+		mcpConfigs = append(mcpConfigs, agent.MCPServerConfig{
+			Name: srv.Name, Endpoint: srv.Endpoint, Enabled: srv.Enabled,
+		})
+	}
+	mcpToolsets := agent.LoadMCPTools(mcpConfigs)
+	if len(mcpToolsets) > 0 {
+		log.Printf("Loaded %d MCP toolsets", len(mcpToolsets))
+	}
+	mcpTools, err := agent.MCPToolsAsTools(mcpToolsets)
+	if err != nil {
+		log.Fatalf("mcp tools: %v", err)
+	}
+
+	assembler := prompt.NewAssembler()
+	hookDispatcher := hooks.NewDispatcher(cfg.Settings.Hooks)
+	loadedSkills := skills.LoadAll(filepath.Join(cfg.DataDir, "skills"), nil)
+	if len(loadedSkills) > 0 {
+		log.Printf("Loaded %d skills", len(loadedSkills))
+	}
+
+	runners := srvruntime.NewRegistry()
+	plansCache := plans.New()
+	selsTracker := selections.New(db)
+	apprsRegistry := approvals.New()
+
+	// Substrate.Holder owns engine + embed-queue atomic pointers and
+	// serializes reloads. onReload stops in-flight runners against the
+	// stale engine; next request rebuilds them.
+	sub := substrate.NewHolder(cfg, db, runners.StopAll)
+	if err := sub.Bootstrap(ctx); err != nil {
+		log.Fatalf("substrate: %v", err)
+	}
+
+	// Inserter centralizes message-store + chunk derivation + embed
+	// enqueue. Closures pull live engine config + embed-queue across
+	// atomic substrate swaps. Both the graph layer and the runner
+	// route inserts through it so chunk derivation lives in one place.
+	inserter := messages.New(
+		db,
+		func() chunk.Config { return sub.Engine().Config().Chunk },
+		sub.Enqueue,
+	)
+
+	resolver := graph.NewResolver(graph.Deps{
+		Config:     cfg,
+		DB:         db,
+		Substrate:  sub,
+		Runners:    runners,
+		Plans:      plansCache,
+		Selections: selsTracker,
+		Approvals:  apprsRegistry,
+		Inserter:   inserter,
+		Skills:     loadedSkills,
+		MCPTools:   mcpTools,
+		Assembler:  assembler,
+		Hooks:      hookDispatcher,
+	})
 
 	// Reconcile agent_state rows left non-Idle by the prior session.
 	// Goroutines don't survive process exit — any Running/Paused row

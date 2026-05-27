@@ -182,7 +182,7 @@ func wireRunnerCallbacks(runner *agent.Runner, threadID string, deps Deps) {
 	// The hot-path read against the in-memory map happens off this
 	// path (the resolver implementation reads directly).
 	runner.SetSelectionCallback(func(result *pb.SelectionResult) {
-		deps.Selections.RecordSelection(threadID, result)
+		deps.Selections.Record(threadID, result)
 	})
 
 	runner.SetRoundCallback(func(round int, elapsed time.Duration) {

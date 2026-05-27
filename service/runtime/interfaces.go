@@ -33,10 +33,15 @@ type Approvals interface {
 
 // PlanStore is the per-thread plan-content cache. ExitPlan sets
 // content; agent-state publishes read it back to attach to the
-// outgoing AgentStateUpdate.
+// outgoing AgentStateUpdate. Clear is called by approve/reject
+// once the plan has been either accepted into normal mode or
+// thrown out. Method names are unqualified (Get/Set/Clear) because
+// implementations live in domain-named packages (e.g. plans.Cache)
+// — the package qualifier already says "plan".
 type PlanStore interface {
-	GetPlan(threadID string) string
-	SetPlan(threadID, content string)
+	Get(threadID string) string
+	Set(threadID, content string)
+	Clear(threadID string)
 }
 
 // Selections records one selection-event turn in a single call —
@@ -44,7 +49,7 @@ type PlanStore interface {
 // implementation owns whatever indexes it needs to answer
 // SelectionResult queries.
 type Selections interface {
-	RecordSelection(threadID string, result *pb.SelectionResult)
+	Record(threadID string, result *pb.SelectionResult)
 }
 
 // EmbedEnqueuer enqueues a message ID for post-insert chunk

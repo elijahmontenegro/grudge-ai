@@ -158,7 +158,7 @@ func (a *toolAgent) SetMode(ctx context.Context, mode string) error {
 	// render.
 	a.pubsub.PublishAgentState(AgentStateUpdate{
 		ThreadID: a.threadID, Status: AgentStatusRunning, Mode: gqlMode,
-		PlanContent: a.planStore.GetPlan(a.threadID),
+		PlanContent: a.planStore.Get(a.threadID),
 	})
 	return nil
 }
@@ -174,7 +174,7 @@ func (a *toolAgent) IsPlanMode() bool {
 // Mode stays Plan — ExitPlan is just surfacing; the user
 // explicitly flips mode via approvePlan / rejectPlan mutations.
 func (a *toolAgent) OnPlanContent(content string) {
-	a.planStore.SetPlan(a.threadID, content)
+	a.planStore.Set(a.threadID, content)
 	a.pubsub.PublishAgentState(AgentStateUpdate{
 		ThreadID: a.threadID, Status: AgentStatusIdle, Mode: AgentModePlan,
 		PlanContent: content,

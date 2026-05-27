@@ -13,21 +13,21 @@ import (
 // satisfied directly by the Kernel — no shim types needed.
 func (r *Resolver) runtimeDeps() runtime.Deps {
 	return runtime.Deps{
-		Registry:      r.Runners,
-		DB:            r.DB,
-		Engine:        r.Engine(),
-		Config:        r.Config,
-		Main:          r.Main,
-		Assembler:     r.Assembler,
-		Hooks:         r.Hooks,
-		Skills:        r.Skills,
-		MCPTools:      r.MCPTools,
-		Inserter:      r.Inserter,
+		Registry:      r.runners,
+		DB:            r.db,
+		Engine:        r.substrate.Engine(),
+		Config:        r.cfg,
+		Main:          r.substrate.Main(),
+		Assembler:     r.assembler,
+		Hooks:         r.hooks,
+		Skills:        r.skills,
+		MCPTools:      r.mcpTools,
+		Inserter:      r.inserter,
 		Pubsub:        runtimePubsub{r},
-		Approvals:     r.Kernel,
-		PlanStore:     r.Kernel,
-		Selections:    r.Kernel,
-		EmbedEnqueuer: r.Kernel,
+		Approvals:     r.approvals,
+		PlanStore:     r.plans,
+		Selections:    r.selections,
+		EmbedEnqueuer: r.substrate,
 	}
 }
 

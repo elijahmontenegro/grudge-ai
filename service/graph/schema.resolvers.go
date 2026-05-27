@@ -123,7 +123,7 @@ func (r *messageResolver) CreatedAt(ctx context.Context, obj *pb.Message) (*time
 
 // CitedByCount is the resolver for the citedByCount field.
 func (r *messageResolver) CitedByCount(ctx context.Context, obj *pb.Message) (int, error) {
-	return r.CitationCount(obj.Id), nil
+	return r.selections.CitationCount(obj.Id), nil
 }
 
 // CreateThread is the resolver for the createThread field.
@@ -155,7 +155,7 @@ func (r *mutationResolver) CreateThread(ctx context.Context, name *string, worki
 		Sandboxed:   sbx,
 		CreatedAt:   timestamppb.Now(),
 	}
-	if err := r.DB.CreateThread(t); err != nil {
+	if err := r.db.CreateThread(t); err != nil {
 		return nil, err
 	}
 	r.publishThreadState(&ThreadStateEvent{ThreadID: t.Id, Name: t.Name, Status: AgentStatusIdle, Mode: AgentModeNormal})
@@ -164,7 +164,7 @@ func (r *mutationResolver) CreateThread(ctx context.Context, name *string, worki
 
 // UpdateThread is the resolver for the updateThread field.
 func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*pb.Thread, error) {
-	t, err := r.DB.GetThread(id)
+	t, err := r.db.GetThread(id)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *st
 	if sandboxed != nil {
 		t.Sandboxed = *sandboxed
 	}
-	if err := r.DB.UpdateThread(t); err != nil {
+	if err := r.db.UpdateThread(t); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -185,17 +185,17 @@ func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *st
 
 // DeleteThread is the resolver for the deleteThread field.
 func (r *mutationResolver) DeleteThread(ctx context.Context, id string) (bool, error) {
-	if err := r.DB.DeleteThread(id); err != nil {
+	if err := r.db.DeleteThread(id); err != nil {
 		return false, err
 	}
-	r.DB.DeleteEdgesForThread(id)
+	r.db.DeleteEdgesForThread(id)
 	r.publishThreadState(&ThreadStateEvent{ThreadID: id})
 	return true, nil
 }
 
 // ArchiveThread is the resolver for the archiveThread field.
 func (r *mutationResolver) ArchiveThread(ctx context.Context, id string) (bool, error) {
-	if err := r.DB.ArchiveThread(id); err != nil {
+	if err := r.db.ArchiveThread(id); err != nil {
 		return false, err
 	}
 	r.publishThreadState(&ThreadStateEvent{ThreadID: id})
@@ -204,7 +204,7 @@ func (r *mutationResolver) ArchiveThread(ctx context.Context, id string) (bool, 
 
 // UnarchiveThread is the resolver for the unarchiveThread field.
 func (r *mutationResolver) UnarchiveThread(ctx context.Context, id string) (bool, error) {
-	if err := r.DB.UnarchiveThread(id); err != nil {
+	if err := r.db.UnarchiveThread(id); err != nil {
 		return false, err
 	}
 	r.publishThreadState(&ThreadStateEvent{ThreadID: id})
@@ -213,7 +213,7 @@ func (r *mutationResolver) UnarchiveThread(ctx context.Context, id string) (bool
 
 // EditMessage is the resolver for the editMessage field.
 func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*pb.Thread, error) {
-	parentThread, err := r.DB.GetThread(threadID)
+	parentThread, err := r.db.GetThread(threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 		ParentThreadId:      &threadID,
 		BranchPointPosition: &branchPos,
 	}
-	if err := r.DB.CreateThread(newThread); err != nil {
+	if err := r.db.CreateThread(newThread); err != nil {
 		return nil, err
 	}
 
@@ -260,12 +260,12 @@ func (r *mutationResolver) CompileAdoc(ctx context.Context, path string) (string
 // SendMessage is the resolver for the sendMessage field.
 func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope, attachments []*AttachmentInput) (*pb.Message, error) {
 	// Auto-name thread from first user message
-	corpus, err := r.DB.ThreadCorpus(threadID)
+	corpus, err := r.db.ThreadCorpus(threadID)
 	if err != nil {
 		return nil, fmt.Errorf("load corpus: %w", err)
 	}
 	if len(corpus) == 0 && content != "" {
-		if err := r.DB.UpdateThreadName(threadID, storage.TruncateThreadName(content)); err != nil {
+		if err := r.db.UpdateThreadName(threadID, storage.TruncateThreadName(content)); err != nil {
 			return nil, fmt.Errorf("update thread name: %w", err)
 		}
 	}
@@ -290,7 +290,7 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 	// state would persist until the user takes an explicit action like
 	// stop or approve. Read current mode from DB so we don't clobber it.
 	defer func() {
-		st, err := r.DB.GetAgentState(threadID)
+		st, err := r.db.GetAgentState(threadID)
 		if err != nil {
 			return
 		}
@@ -307,13 +307,13 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 			return
 		}
 		var planPtr *string
-		if pc := r.GetPlan(threadID); pc != "" {
+		if pc := r.plans.Get(threadID); pc != "" {
 			planPtr = &pc
 		}
 		// Narrow UPDATE (round 93 helper) so we don't wipe StartedAt /
 		// DurationLimit that an autonomous run may have set. Mode is
 		// already whatever it was — SetAgentStatus leaves it alone.
-		if err := r.DB.SetAgentStatus(threadID, storage.AgentStatusIdle); err == nil {
+		if err := r.db.SetAgentStatus(threadID, storage.AgentStatusIdle); err == nil {
 			r.publishAgentState(threadID, &AgentState{
 				ThreadID: threadID, Status: AgentStatusIdle, Mode: gqlMode,
 				PlanContent: planPtr,
@@ -339,18 +339,18 @@ func (r *mutationResolver) StopAgent(ctx context.Context, threadID string) (bool
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
 	})
-	if err := r.DB.EnsureAgentStateRow(threadID, storage.AgentStatusIdle, storage.AgentModeNormal); err != nil {
+	if err := r.db.EnsureAgentStateRow(threadID, storage.AgentStatusIdle, storage.AgentModeNormal); err != nil {
 		return false, err
 	}
-	return true, r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
+	return true, r.db.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
 }
 
 // PauseAgent is the resolver for the pauseAgent field.
 func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (bool, error) {
-	if entry, ok := r.Runners.Get(threadID); ok {
+	if entry, ok := r.runners.Get(threadID); ok {
 		entry.Runner.PauseAutonomous()
 	}
-	st, err := r.DB.GetAgentState(threadID)
+	st, err := r.db.GetAgentState(threadID)
 	if err != nil {
 		return false, fmt.Errorf("load state: %w", err)
 	}
@@ -364,13 +364,13 @@ func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (boo
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: AgentStatusPaused, Mode: gqlMode,
 	})
-	return true, r.DB.SetAgentStatus(threadID, storage.AgentStatusPaused)
+	return true, r.db.SetAgentStatus(threadID, storage.AgentStatusPaused)
 }
 
 // ResumeAgent is the resolver for the resumeAgent field.
 func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, correction *string) (bool, error) {
 	if correction != nil && *correction != "" {
-		corpus, err := r.DB.ThreadCorpus(threadID)
+		corpus, err := r.db.ThreadCorpus(threadID)
 		if err != nil {
 			return false, fmt.Errorf("load corpus: %w", err)
 		}
@@ -388,7 +388,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 	}
 	// Same full-row UPSERT concern as PauseAgent — preserve Mode/RoundCount
 	// rather than zeroing them via a partial state save.
-	st, err := r.DB.GetAgentState(threadID)
+	st, err := r.db.GetAgentState(threadID)
 	if err != nil {
 		return false, fmt.Errorf("load state: %w", err)
 	}
@@ -397,7 +397,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 	//   (b) Dead autonomous loop (runner exited, e.g. ctx cancel) but DB
 	//       still has Mode=Autonomous → kick a fresh RunAutonomous
 	//       goroutine so the UX doesn't lie.
-	entry, haveEntry := r.Runners.Get(threadID)
+	entry, haveEntry := r.runners.Get(threadID)
 	restartedAutonomous := false
 	if haveEntry && entry.Runner.IsAutonomousActive() {
 		entry.Runner.ResumeAutonomous()
@@ -409,7 +409,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 				return false, fmt.Errorf("restart runner: %w", rerr)
 			}
 			autoCtx, autoCancel := context.WithCancel(context.Background())
-			r.Runners.SetCancel(threadID, autoCancel)
+			r.runners.SetCancel(threadID, autoCancel)
 			// Continuation prompt — non-empty so the model gets a
 			// clear directive rather than inferring from RRC alone.
 			// If the caller supplied a correction it's already been
@@ -421,7 +421,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 			}
 			go func() {
 				defer r.stopRunner(threadID)
-				defer r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
+				defer r.db.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
 				defer r.publishAgentState(threadID, &AgentState{ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal})
 				if err := runner.RunAutonomous(autoCtx, kickoff, remaining); err != nil {
 					log.Printf("[Autonomous resumed] Error: %v", err)
@@ -441,7 +441,7 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 		ThreadID: threadID, Status: AgentStatusRunning, Mode: gqlMode,
 	})
 	_ = restartedAutonomous
-	return true, r.DB.SetAgentStatus(threadID, storage.AgentStatusRunning)
+	return true, r.db.SetAgentStatus(threadID, storage.AgentStatusRunning)
 }
 
 // StartAutonomous is the resolver for the startAutonomous field.
@@ -459,7 +459,7 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 		dur = maxDur
 	}
 	now := time.Now()
-	if err := r.DB.StartAutonomousRun(threadID, now, duration); err != nil {
+	if err := r.db.StartAutonomousRun(threadID, now, duration); err != nil {
 		return false, err
 	}
 
@@ -469,7 +469,7 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 		return false, fmt.Errorf("create runner: %w", err)
 	}
 	autoCtx, autoCancel := context.WithCancel(context.Background())
-	r.Runners.SetCancel(threadID, autoCancel)
+	r.runners.SetCancel(threadID, autoCancel)
 
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: AgentStatusRunning, Mode: AgentModeAutonomous,
@@ -478,7 +478,7 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 
 	go func() {
 		defer r.stopRunner(threadID)
-		defer r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
+		defer r.db.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
 		defer r.publishAgentState(threadID, &AgentState{
 			ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
 		})
@@ -492,7 +492,7 @@ func (r *mutationResolver) StartAutonomous(ctx context.Context, threadID string,
 
 // ApproveToolCall is the resolver for the approveToolCall field.
 func (r *mutationResolver) ApproveToolCall(ctx context.Context, callID string) (bool, error) {
-	if !r.SendApproval(callID, true) {
+	if !r.approvals.SendApproval(callID, true) {
 		return false, fmt.Errorf("no pending approval for call %s", callID)
 	}
 	return true, nil
@@ -500,12 +500,12 @@ func (r *mutationResolver) ApproveToolCall(ctx context.Context, callID string) (
 
 // DenyToolCall is the resolver for the denyToolCall field.
 func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reason *string) (bool, error) {
-	threadID := r.ThreadIDForCall(callID)
+	threadID := r.approvals.ThreadIDForCall(callID)
 	// Inject denial feedback as a system message — the user's denial reason is
 	// operational context for the model, not a user utterance. It belongs in the
 	// system domain, not the conversation.
 	if reason != nil && *reason != "" && threadID != "" {
-		corpus, _ := r.DB.ThreadCorpus(threadID)
+		corpus, _ := r.db.ThreadCorpus(threadID)
 		denialText := fmt.Sprintf("Tool call denied by user. Reason: %s", *reason)
 		msg := &pb.Message{
 			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
@@ -517,7 +517,7 @@ func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reas
 		}
 		_ = r.storeMessage(msg, denialText)
 	}
-	if !r.SendApproval(callID, false) {
+	if !r.approvals.SendApproval(callID, false) {
 		return false, fmt.Errorf("no pending approval for call %s", callID)
 	}
 	return true, nil
@@ -525,7 +525,7 @@ func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reas
 
 // AnswerQuestion is the resolver for the answerQuestion field.
 func (r *mutationResolver) AnswerQuestion(ctx context.Context, callID string, answer string) (bool, error) {
-	if !r.SendAnswer(callID, answer) {
+	if !r.approvals.SendAnswer(callID, answer) {
 		return false, fmt.Errorf("no pending question for call %s", callID)
 	}
 	return true, nil
@@ -533,7 +533,7 @@ func (r *mutationResolver) AnswerQuestion(ctx context.Context, callID string, an
 
 // UpdateSettings is the resolver for the updateSettings field.
 func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInput) (*Settings, error) {
-	s := &r.Config.Settings
+	s := &r.cfg.Settings
 	if input.Providers != nil {
 		// Replace semantics, not merge. `json.Unmarshal` into an
 		// existing map preserves keys the new payload omits; that
@@ -597,7 +597,7 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		// stayed in the score cache but produced no edge, and a fresh
 		// rebuild from chunk_scores under the loosened threshold is
 		// not wired here (separate concern).
-		live := r.Engine().Config()
+		live := r.substrate.Engine().Config()
 		live.EdgeThreshold = cfg.EdgeThreshold
 		live.ScoreFloor = cfg.ScoreFloor
 		live.ZScoreThreshold = cfg.ZScoreThreshold
@@ -608,7 +608,7 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		live.DiversityLambda = cfg.DiversityLambda
 		live.BudgetHeadroomPct = cfg.BudgetHeadroomPct
 		live.PerMsgDelimiterTokens = cfg.PerMsgDelimiterTokens
-		if err := r.UpdateEngineConfig(ctx, live); err != nil {
+		if err := r.substrate.UpdateEngineConfig(ctx, live); err != nil {
 			return nil, fmt.Errorf("update engine config: %w", err)
 		}
 		log.Printf("[Settings] Engine config applied live: thr=%.3f floor=%.3f z=%.2f minStd=%.3f radius=%d topK=%d budget=%d λ=%.2f headroom=%.2f delim=%d",
@@ -619,11 +619,11 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 			live.ContextBudgetTokens,
 			live.DiversityLambda, live.BudgetHeadroomPct, live.PerMsgDelimiterTokens)
 	}
-	if err := r.Config.Save(); err != nil {
+	if err := r.cfg.Save(); err != nil {
 		return nil, err
 	}
 	// Hot-reload providers from updated config
-	if err := r.ReloadProviders(ctx); err != nil {
+	if err := r.substrate.ReloadProviders(ctx); err != nil {
 		log.Printf("[Settings] Provider reload: %v", err)
 	}
 	return r.Query().Settings(ctx)
@@ -637,10 +637,10 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 // SendMessage. Mirrors claude-code's model where plan mode is a
 // toolPermissionContext.mode flag, not an agent status.
 func (r *mutationResolver) EnterPlanMode(ctx context.Context, threadID string) (bool, error) {
-	if err := r.DB.EnsureAgentStateRow(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
+	if err := r.db.EnsureAgentStateRow(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
 		return false, err
 	}
-	if err := r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
+	if err := r.db.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
 		return false, err
 	}
 	// Stop existing runner so a fresh one is created with plan mode prompt
@@ -678,14 +678,14 @@ func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, exe
 		stStatus = storage.AgentStatusRunning
 		gqlStatus = AgentStatusRunning
 	}
-	if err := r.DB.EnsureAgentStateRow(threadID, stStatus, stMode); err != nil {
+	if err := r.db.EnsureAgentStateRow(threadID, stStatus, stMode); err != nil {
 		return false, err
 	}
-	if err := r.DB.SetAgentStatusAndMode(threadID, stStatus, stMode); err != nil {
+	if err := r.db.SetAgentStatusAndMode(threadID, stStatus, stMode); err != nil {
 		return false, err
 	}
 	// Clear plan content — it's been approved and enters the corpus
-	r.ClearPlan(threadID)
+	r.plans.Clear(threadID)
 	r.publishAgentState(threadID, &AgentState{
 		ThreadID: threadID, Status: gqlStatus, Mode: gqlMode,
 	})
@@ -702,10 +702,10 @@ func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, exe
 			return false, fmt.Errorf("create runner: %w", err)
 		}
 		autoCtx, autoCancel := context.WithCancel(context.Background())
-		r.Runners.SetCancel(threadID, autoCancel)
+		r.runners.SetCancel(threadID, autoCancel)
 		go func() {
 			defer r.stopRunner(threadID)
-			defer r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
+			defer r.db.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModeNormal)
 			defer r.publishAgentState(threadID, &AgentState{
 				ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
 			})
@@ -730,15 +730,15 @@ func (r *mutationResolver) ApprovePlan(ctx context.Context, threadID string, exe
 // so the PlanPanel closes. The caller is expected to follow up with a
 // sendMessage carrying the feedback so the model revises plan.adoc.
 func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feedback *string) (bool, error) {
-	r.ClearPlan(threadID)
+	r.plans.Clear(threadID)
 
 	// Status stays Idle — rejectPlan itself doesn't execute a round. The
 	// follow-up sendMessage carrying the feedback is what actually kicks
 	// the revision round; its streaming surfaces via the usual path.
-	if err := r.DB.EnsureAgentStateRow(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
+	if err := r.db.EnsureAgentStateRow(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
 		return false, err
 	}
-	if err := r.DB.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
+	if err := r.db.SetAgentStatusAndMode(threadID, storage.AgentStatusIdle, storage.AgentModePlan); err != nil {
 		return false, err
 	}
 	// Stop the current runner so the next getOrCreateRunner picks up plan
@@ -761,7 +761,7 @@ func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feed
 // re-renders with the edited version. The model will see the new content on
 // its next FileRead of plan.adoc.
 func (r *mutationResolver) UpdatePlanSource(ctx context.Context, threadID string, content string) (bool, error) {
-	planDir, err := storage.PlanDirForThread(r.Config.DataDir, threadID)
+	planDir, err := storage.PlanDirForThread(r.cfg.DataDir, threadID)
 	if err != nil {
 		return false, err
 	}
@@ -772,12 +772,12 @@ func (r *mutationResolver) UpdatePlanSource(ctx context.Context, threadID string
 	if err := os.WriteFile(planPath, []byte(content), 0o644); err != nil {
 		return false, fmt.Errorf("write plan: %w", err)
 	}
-	r.SetPlan(threadID, content)
+	r.plans.Set(threadID, content)
 
 	// Re-publish agentState with the fresh plan content. Preserve whatever
 	// status/mode the runner is currently reporting — editing the plan is
 	// an out-of-band user action, not a state transition.
-	st, err := r.DB.GetAgentState(threadID)
+	st, err := r.db.GetAgentState(threadID)
 	if err != nil {
 		// State missing is non-fatal here — the file write already succeeded
 		// and a subsequent approve/reject will re-publish with sane defaults.
@@ -809,7 +809,7 @@ func (r *mutationResolver) SaveViewState(ctx context.Context, threadID string, s
 	if err != nil {
 		return nil, fmt.Errorf("marshal view state: %w", err)
 	}
-	if err := r.DB.SaveViewState(threadID, data); err != nil {
+	if err := r.db.SaveViewState(threadID, data); err != nil {
 		return nil, err
 	}
 	return &ViewState{
@@ -827,7 +827,7 @@ func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*
 	if includeArchived != nil {
 		incArch = *includeArchived
 	}
-	pbThreads, err := r.DB.ListThreads(incArch)
+	pbThreads, err := r.db.ListThreads(incArch)
 	if err != nil {
 		return nil, err
 	}
@@ -840,7 +840,7 @@ func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*
 
 // Thread is the resolver for the thread field.
 func (r *queryResolver) Thread(ctx context.Context, id string) (*pb.Thread, error) {
-	t, err := r.DB.GetThread(id)
+	t, err := r.db.GetThread(id)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -852,24 +852,24 @@ func (r *queryResolver) Thread(ctx context.Context, id string) (*pb.Thread, erro
 
 // Search is the resolver for the search field.
 func (r *queryResolver) Search(ctx context.Context, query string, limit *int) ([]*SearchResult, error) {
-	if r.Searcher == nil {
+	if r.substrate.Searcher() == nil {
 		return nil, fmt.Errorf("search unavailable: embedder not configured")
 	}
 	lim := 10
 	if limit != nil {
 		lim = *limit
 	}
-	results, err := r.Searcher.Search(ctx, query, lim)
+	results, err := r.substrate.Searcher().Search(ctx, query, lim)
 	if err != nil {
 		return nil, err
 	}
 	gqlResults := make([]*SearchResult, len(results))
 	for i, res := range results {
-		msg, err := r.DB.GetMessage(res.MessageID)
+		msg, err := r.db.GetMessage(res.MessageID)
 		if err != nil {
 			continue
 		}
-		thread, _ := r.DB.GetThread(msg.ThreadId)
+		thread, _ := r.db.GetThread(msg.ThreadId)
 		threadName := ""
 		if thread != nil {
 			threadName = thread.Name
@@ -894,7 +894,7 @@ func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *in
 	if offset != nil {
 		off = *offset
 	}
-	msgs, err := r.DB.ListMessages(threadID, lim, off)
+	msgs, err := r.db.ListMessages(threadID, lim, off)
 	if err != nil {
 		return nil, err
 	}
@@ -905,12 +905,12 @@ func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *in
 // which produced the given target message. Pure DB lookup — this is
 // the primary path for auditing any historical turn, live or long past.
 func (r *queryResolver) SelectionForMessage(ctx context.Context, messageID string) (*pb.SelectionResult, error) {
-	return r.DB.GetSelectionForMessage(messageID)
+	return r.db.GetSelectionForMessage(messageID)
 }
 
 // Settings is the resolver for the settings field.
 func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
-	s := r.Config.Settings
+	s := r.cfg.Settings
 	providers, err := json.Marshal(s.Providers)
 	if err != nil {
 		return nil, fmt.Errorf("marshal providers: %w", err)
@@ -935,7 +935,7 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	// config file. This lets the UI reflect the actual operating
 	// config (including any defaults that kicked in when Settings had
 	// zero-value engine fields).
-	engineCfg := r.Engine().Config()
+	engineCfg := r.substrate.Engine().Config()
 	engine, err := json.Marshal(map[string]any{
 		"edge_threshold":        engineCfg.EdgeThreshold,
 		"score_floor":           engineCfg.ScoreFloor,
@@ -960,7 +960,7 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 
 // ViewState is the resolver for the viewState field.
 func (r *queryResolver) ViewState(ctx context.Context, threadID string) (*ViewState, error) {
-	data, err := r.DB.GetViewState(threadID)
+	data, err := r.db.GetViewState(threadID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -977,7 +977,7 @@ func (r *queryResolver) ViewState(ctx context.Context, threadID string) (*ViewSt
 
 // AgentState is the resolver for the agentState query field.
 func (r *queryResolver) AgentState(ctx context.Context, threadID string) (*AgentState, error) {
-	st, err := r.DB.GetAgentState(threadID)
+	st, err := r.db.GetAgentState(threadID)
 	if err != nil {
 		return &AgentState{
 			ThreadID: threadID, Status: AgentStatusIdle, Mode: AgentModeNormal,
@@ -1004,7 +1004,7 @@ func (r *queryResolver) AgentState(ctx context.Context, threadID string) (*Agent
 	if st.DurationLimit != "" {
 		result.DurationLimit = &st.DurationLimit
 	}
-	if pc := r.GetPlan(threadID); pc != "" {
+	if pc := r.plans.Get(threadID); pc != "" {
 		result.PlanContent = &pc
 	}
 	return result, nil
@@ -1012,7 +1012,7 @@ func (r *queryResolver) AgentState(ctx context.Context, threadID string) (*Agent
 
 // Skills is the resolver for the skills field.
 func (r *queryResolver) Skills(ctx context.Context) ([]*SkillInfo, error) {
-	loaded := r.Resolver.Skills
+	loaded := r.Resolver.skills
 	result := make([]*SkillInfo, len(loaded))
 	for i, s := range loaded {
 		result[i] = &SkillInfo{Name: s.Name, Description: s.Description}
@@ -1029,12 +1029,12 @@ func (r *queryResolver) RecentActivity(ctx context.Context, limit *int) ([]*Acti
 	var items []*ActivityItem
 
 	// Recent threads with messages (activity = latest message per thread)
-	threads, err := r.DB.ListThreads(false)
+	threads, err := r.db.ListThreads(false)
 	if err != nil {
 		return nil, fmt.Errorf("list threads: %w", err)
 	}
 	for _, t := range threads {
-		lastMsg := r.DB.LatestMessage(t.Id)
+		lastMsg := r.db.LatestMessage(t.Id)
 		if lastMsg == nil {
 			continue
 		}
@@ -1152,14 +1152,14 @@ func (r *threadResolver) ArchivedAt(ctx context.Context, obj *pb.Thread) (*time.
 
 // MessageCount is the resolver for the messageCount field.
 func (r *threadResolver) MessageCount(ctx context.Context, obj *pb.Thread) (int, error) {
-	return r.DB.MessageCount(obj.Id), nil
+	return r.db.MessageCount(obj.Id), nil
 }
 
 // Status resolves the live agent status for a thread from
 // agent_state. Threads with no row default to Idle so a brand-new
 // thread reads cleanly without an explicit status insert.
 func (r *threadResolver) Status(ctx context.Context, obj *pb.Thread) (AgentStatus, error) {
-	st, _ := r.DB.GetAgentState(obj.Id)
+	st, _ := r.db.GetAgentState(obj.Id)
 	if st == nil {
 		return AgentStatusIdle, nil
 	}
@@ -1176,7 +1176,7 @@ func (r *threadResolver) Status(ctx context.Context, obj *pb.Thread) (AgentStatu
 // Mode resolves the live agent mode for a thread from agent_state.
 // Defaults to Normal when no row exists.
 func (r *threadResolver) Mode(ctx context.Context, obj *pb.Thread) (AgentMode, error) {
-	st, _ := r.DB.GetAgentState(obj.Id)
+	st, _ := r.db.GetAgentState(obj.Id)
 	if st == nil {
 		return AgentModeNormal, nil
 	}

@@ -16,7 +16,7 @@ import (
 // of one assemble per engine: Assemble holds an internal write lock
 // for the duration of OnMessage+Select+MMR, and Fork / Merge serialize
 // against it. Settings changes go through atomic engine replacement
-// (see service/kernel.UpdateEngineConfig) — there is no
+// (see service/substrate.Holder.UpdateEngineConfig) — there is no
 // in-place mutation surface and no externally-held lock.
 //
 // Scoring substrate: chunks (paragraph-sized slices of a message),

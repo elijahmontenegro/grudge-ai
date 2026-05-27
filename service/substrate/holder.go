@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/emontenegr/spidey/core"
 	"github.com/emontenegr/spidey/rrc"
 	"github.com/emontenegr/spidey/service/config"
 	"github.com/emontenegr/spidey/service/search"
@@ -67,11 +68,51 @@ func (h *Holder) Engine() *rrc.Engine {
 	return s.Engine
 }
 
+// Main returns the currently-active main completer (the user's LLM
+// for reasoning, tool use, responses).
+func (h *Holder) Main() core.Completer {
+	s := h.current.Load()
+	if s == nil {
+		return nil
+	}
+	return s.MainCompleter
+}
+
+// Scorer returns the currently-active scorer (cross-encoder
+// reranker). Nil if no scorer is configured.
+func (h *Holder) Scorer() core.Scorer {
+	s := h.current.Load()
+	if s == nil {
+		return nil
+	}
+	return s.Scorer
+}
+
+// Searcher returns the currently-active full-text + vector searcher.
+// Nil if no embedder is configured.
+func (h *Holder) Searcher() *search.Searcher {
+	s := h.current.Load()
+	if s == nil {
+		return nil
+	}
+	return s.Searcher
+}
+
 // EmbedQueue returns the bounded fan-out pool for post-insert
 // embedding work. Nil when no embedder is configured or after a
 // reload cleared it. Hot callers (Inserter, OnMessageStored)
 // tolerate nil — the startup backfill goroutine catches up later.
 func (h *Holder) EmbedQueue() *search.EmbedQueue { return h.embeds.Load() }
+
+// Enqueue routes a message id into the bounded embed queue. Tolerates
+// a nil queue (embedder not configured / settings reload cleared it)
+// — silent no-op so a slow or down embedder doesn't block message
+// inserts. Satisfies runtime.EmbedEnqueuer.
+func (h *Holder) Enqueue(messageID string) {
+	if q := h.embeds.Load(); q != nil {
+		q.Enqueue(messageID)
+	}
+}
 
 // ReloadProviders rebuilds the substrate from the current config and
 // atomically swaps it in. Existing runners (captured an old engine
