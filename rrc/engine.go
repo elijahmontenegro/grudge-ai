@@ -113,7 +113,7 @@ type Option func(*Engine)
 
 // WithChunkOracle wires the chunk + vector resolver. Required for
 // OnMessage to score; absent oracle ⇒ OnMessage returns
-// ErrClassifierUnavailable wrapping "no chunk oracle".
+// ErrScorerUnavailable wrapping "no chunk oracle".
 func WithChunkOracle(o ChunkOracle) Option {
 	return func(e *Engine) { e.oracle = o }
 }
@@ -155,7 +155,7 @@ func WithLoadedScores(scores []PersistedScore) Option {
 	}
 }
 
-// NewEngine constructs an RRC engine. The classifier is the only
+// NewEngine constructs an RRC engine. The scorer is the only
 // required external dependency; everything else (oracle, persister,
 // hydrated DAG / scores) flows in via Option. The engine is
 // immutable post-construction — any setting change rebuilds.
@@ -206,7 +206,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 	if e.oracle == nil {
 		// Without a chunk oracle we cannot score. Fail fast rather
 		// than pretending to work — the service wires this at startup.
-		return nil, OnMessageTelemetry{}, fmt.Errorf("%w: no chunk oracle configured", ErrClassifierUnavailable)
+		return nil, OnMessageTelemetry{}, fmt.Errorf("%w: no chunk oracle configured", ErrScorerUnavailable)
 	}
 	// A nil scorer is allowed: the oracle's Layer-1 retrieval score
 	// (ChunkRef.RetrievalScore) feeds edge formation directly. The
@@ -352,7 +352,7 @@ func (e *Engine) OnMessage(ctx context.Context, msg *pb.Message, corpus []*pb.Me
 				}
 				scores, rerr := e.scorer.Score(ctx, nc.Text, candTexts)
 				if rerr != nil {
-					return nil, OnMessageTelemetry{}, fmt.Errorf("%w: %v", ErrClassifierFailed, rerr)
+					return nil, OnMessageTelemetry{}, fmt.Errorf("%w: %v", ErrScorerFailed, rerr)
 				}
 				var crossCount, sameCount int
 				var crossMax, sameMax float64

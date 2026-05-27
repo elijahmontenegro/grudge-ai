@@ -26,7 +26,7 @@ func init() { chunk.SetDefaultEstimator(charEstimator{}) }
 // introduces non-determinism (random tie-breaking, time-dependent
 // ordering, map iteration leak) trips here.
 func TestAssemble_Deterministic(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("alpha", "query content", 0.8)
 	mc.SetScore("beta", "query content", 0.7)
 	mc.SetScore("gamma", "query content", 0.6)

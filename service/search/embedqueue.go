@@ -23,8 +23,8 @@ import (
 // deadlocked between the two TEI containers (documented in
 // NVIDIA/open-gpu-kernel-modules#968; TEI issue #713 matches the
 // "live HTTP, dead inference" signature we observed). Rerank
-// went silent, classifier errors started returning from OnMessage,
-// and — because classifier errors were being swallowed at the
+// went silent, scorer errors started returning from OnMessage,
+// and — because scorer errors were being swallowed at the
 // RRCLLM boundary (now fixed) — the autonomous loop generated
 // 33 blind rounds before anyone noticed.
 //
@@ -52,7 +52,7 @@ import (
 //     worker and do not crash the pool. Failures are not fatal
 //     to the message (it's already stored); only search recall
 //     for that message is degraded. If the backend is broken
-//     systemically, the RRC classifier path will fail separately
+//     systemically, the RRC scorer path will fail separately
 //     on the next OnMessage and surface through that channel.
 type EmbedQueue struct {
 	searcher   *Searcher

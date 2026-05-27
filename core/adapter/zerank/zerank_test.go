@@ -201,11 +201,11 @@ func TestScoreScoresMultipleCandidates(t *testing.T) {
 	}
 }
 
-// TestProviderImplementsClassifierOnly verifies the adapter's role
+// TestProviderImplementsScorerOnly verifies the adapter's role
 // surface: zerank provides only the ScorerProvider role.
 // Type-asserting against CompleterProvider or EmbedderProvider
 // fails — there are no stub methods for those.
-func TestProviderImplementsClassifierOnly(t *testing.T) {
+func TestProviderImplementsScorerOnly(t *testing.T) {
 	p := New(Config{BaseURL: "http://localhost"})
 	if _, ok := p.(core.ScorerProvider); !ok {
 		t.Error("zerank should be a ScorerProvider")

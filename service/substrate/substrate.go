@@ -1,18 +1,15 @@
 // Package substrate constructs the providers + engine + storage
-// triple that the runtime kernel depends on. Build returns a
-// Substrate value the consumer hands to NewResolver (and, in the
-// future, to a non-GraphQL kernel.Bootstrap).
+// triple the rest of the service depends on. Build returns an
+// immutable Substrate value; Holder wraps Build + an atomic.Pointer
+// + ReloadProviders / UpdateEngineConfig so settings changes can
+// swap the live substrate in place without restart.
 //
 // What lives here: every provider construction, engine setup,
 // score persister wiring, chunk oracle wiring, edge/score hydration
 // — the things that turn a config snapshot plus an open DB into a
 // live RRC substrate. What doesn't: HTTP, GraphQL, signal handling,
 // MCP/skills/hooks/assembler (those are runner-side concerns the
-// kernel composes on top of the substrate).
-//
-// ReloadProviders in service/graph performs the in-place hot-swap
-// equivalent for settings changes; it stays separate because its
-// concurrent-safety properties are not the same as a fresh boot.
+// composition root assembles around the substrate).
 package substrate
 
 import (
@@ -134,14 +131,13 @@ func WithChunkOracle(co rrc.ChunkOracle) Option {
 }
 
 // Build wires the substrate from a loaded config and an open DB.
-// Returns a Substrate ready for the kernel to consume.
+// Returns a Substrate ready for the Holder to install.
 //
 // Build is intentionally tolerant of an unconfigured config block
-// (first run): the corresponding Substrate fields stay nil, and
-// the consumer (resolver, kernel) is expected to render a
-// not-yet-configured UX rather than crash. Scorer == nil ||
-// MainCompleter == nil produces a warning here so boot logs
-// surface the situation early.
+// (first run): the corresponding Substrate fields stay nil, and the
+// consumer is expected to render a not-yet-configured UX rather
+// than crash. Scorer == nil || MainCompleter == nil produces a
+// warning here so boot logs surface the situation early.
 //
 // Options override fields that would otherwise come from cfg —
 // see WithScorer / WithChunkOracle.
@@ -266,7 +262,7 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	//   - chunk oracle
 	//   - score persister (write-through to DB on every new chunk-pair score)
 	// The engine has no public mutation surface — settings changes
-	// rebuild it via kernel.UpdateEngineConfig / ReloadProviders.
+	// rebuild it via Holder.UpdateEngineConfig / ReloadProviders.
 	engineOpts := []rrc.Option{}
 	if edges, err := db.AllEdges(); err == nil && len(edges) > 0 {
 		engineOpts = append(engineOpts, rrc.WithLoadedEdges(edges))

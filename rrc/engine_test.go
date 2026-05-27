@@ -24,7 +24,7 @@ type mockScorer struct {
 	callCount  int
 }
 
-func newMockClassifier() *mockScorer {
+func newMockScorer() *mockScorer {
 	return &mockScorer{pairScores: make(map[string]float64)}
 }
 
@@ -159,10 +159,10 @@ func testEngine(mc *mockScorer, o *mockChunkOracle) *Engine {
 
 func TestNewEngine(t *testing.T) {
 	cfg := DefaultConfig()
-	e := NewEngine(cfg, newMockClassifier())
+	e := NewEngine(cfg, newMockScorer())
 
 	if e.scorer == nil {
-		t.Fatal("classifier should not be nil")
+		t.Fatal("scorer should not be nil")
 	}
 	// Assert the calibrated default (0.60 — see DefaultConfig comment
 	// in config.go for the eval-derived rationale). If the default
@@ -175,7 +175,7 @@ func TestNewEngine(t *testing.T) {
 }
 
 func TestOnMessage_EmptyCorpus(t *testing.T) {
-	e := testEngine(newMockClassifier(), newMockChunkOracle())
+	e := testEngine(newMockScorer(), newMockChunkOracle())
 	msg := makeMsg("m1", 0, "t1", "hello")
 
 	edges, _, err := e.OnMessage(context.Background(), msg, nil)
@@ -187,7 +187,7 @@ func TestOnMessage_EmptyCorpus(t *testing.T) {
 	}
 }
 
-func TestOnMessage_NilClassifier(t *testing.T) {
+func TestOnMessage_NilScorer(t *testing.T) {
 	// A nil scorer is allowed: the engine takes the Layer-1
 	// retrieval score from ChunkRef.RetrievalScore as the candidate's
 	// score directly. Edges form whenever that score clears
@@ -220,20 +220,20 @@ func TestOnMessage_NilOracle(t *testing.T) {
 	// Symmetric to nil scorer: no oracle means OnMessage cannot
 	// resolve chunks. Same failure class — surface, don't silently
 	// produce zero edges.
-	e := NewEngine(DefaultConfig(), newMockClassifier())
+	e := NewEngine(DefaultConfig(), newMockScorer())
 	msg := makeMsg("m1", 1, "t1", "hello")
 	corpus := []*pb.Message{makeMsg("m0", 0, "t1", "hi")}
 
 	_, _, err := e.OnMessage(context.Background(), msg, corpus)
-	if !errors.Is(err, ErrClassifierUnavailable) {
-		t.Fatalf("expected ErrClassifierUnavailable, got %v", err)
+	if !errors.Is(err, ErrScorerUnavailable) {
+		t.Fatalf("expected ErrScorerUnavailable, got %v", err)
 	}
 }
 
 func TestOnMessage_BelowThreshold_SameThread(t *testing.T) {
 	// Edge formation gates on raw CE — below EdgeThreshold produces
 	// no edge regardless of thread relationship.
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("hi", "hello", 0.3) // reranker 0.3
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
@@ -252,7 +252,7 @@ func TestOnMessage_BelowThreshold_SameThread(t *testing.T) {
 }
 
 func TestOnMessage_BelowThreshold_CrossThread(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("hi", "hello", 0.3)
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
@@ -271,7 +271,7 @@ func TestOnMessage_BelowThreshold_CrossThread(t *testing.T) {
 }
 
 func TestOnMessage_AboveThreshold(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("what is a tomato cake", "tell me more about tomato cake", 0.8)
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
@@ -301,7 +301,7 @@ func TestOnMessage_AboveThreshold(t *testing.T) {
 }
 
 func TestOnMessage_MultipleCorpusMessages(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("hello", "how are you", 0.7)
 	mc.SetScore("nice weather", "how are you", 0.2)
 	mc.SetScore("tell me a joke", "how are you", 0.6)
@@ -328,7 +328,7 @@ func TestOnMessage_MultipleCorpusMessages(t *testing.T) {
 }
 
 func TestSelect_NoEdges(t *testing.T) {
-	e := testEngine(newMockClassifier(), newMockChunkOracle())
+	e := testEngine(newMockScorer(), newMockChunkOracle())
 
 	result, err := e.Select("m0", pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
 	if err != nil {
@@ -340,7 +340,7 @@ func TestSelect_NoEdges(t *testing.T) {
 }
 
 func TestSelect_LinearChain(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	// CE-only gating. Above-threshold (≥0.5) chain: a→b→c→d. Below-
 	// threshold off-chain links should not form edges.
 	mc.SetScore("a", "b", 0.8)
@@ -394,7 +394,7 @@ func TestSelect_LinearChain(t *testing.T) {
 
 func TestSelect_ScoreFloorCutoff(t *testing.T) {
 	// DAG-direct edge insert; independent of OnMessage path.
-	e := testEngine(newMockClassifier(), newMockChunkOracle())
+	e := testEngine(newMockScorer(), newMockChunkOracle())
 
 	// Below the ScoreFloor of DefaultConfig (0.3).
 	e.dag.AddEdge(&pb.Edge{
@@ -413,7 +413,7 @@ func TestSelect_ScoreFloorCutoff(t *testing.T) {
 }
 
 func TestSelect_ThreadScope(t *testing.T) {
-	e := testEngine(newMockClassifier(), newMockChunkOracle())
+	e := testEngine(newMockScorer(), newMockChunkOracle())
 
 	// Edges set CrossEncoderScore directly — extractSubgraph reads it
 	// via edgeScoreUnderConfig as the gating signal. CE=1.0 ≥ 0.5
@@ -450,7 +450,7 @@ func TestSelect_ThreadScope(t *testing.T) {
 }
 
 func TestFork(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("hello", "world", 0.8)
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
@@ -470,12 +470,12 @@ func TestFork(t *testing.T) {
 	}
 
 	if fork.scorer != e.scorer {
-		t.Fatal("fork should share classifier reference")
+		t.Fatal("fork should share scorer reference")
 	}
 }
 
 func TestMerge(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
@@ -562,7 +562,7 @@ func TestScoreCache(t *testing.T) {
 }
 
 func TestSelect_TransitiveReduction(t *testing.T) {
-	e := testEngine(newMockClassifier(), newMockChunkOracle())
+	e := testEngine(newMockScorer(), newMockChunkOracle())
 
 	// Diamond: m0 -> m2, m0 -> m1 -> m2. Direct m0->m2 is redundant.
 	// CrossEncoderScore set directly because extractSubgraph
@@ -607,7 +607,7 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestOnMessage_ScoreCachePopulated(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("a", "b", 0.3) // reranker 0.3 — below the EdgeThreshold fused cutoff
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
@@ -633,7 +633,7 @@ func TestOnMessage_ScoreCachePopulated(t *testing.T) {
 }
 
 func TestOnMessage_SkipsSelf(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
@@ -648,7 +648,7 @@ func TestOnMessage_SkipsSelf(t *testing.T) {
 		t.Fatal("should not create edges to self")
 	}
 	if mc.callCount != 0 {
-		t.Fatal("should not call classifier when only self in corpus")
+		t.Fatal("should not call scorer when only self in corpus")
 	}
 }
 
@@ -692,7 +692,7 @@ func TestOnMessage_Gate1_AbsoluteThreshold(t *testing.T) {
 	// strict `>` against zero-init, so CE=0.0 is treated as unscored
 	// and the candidate never enters the batch. Any non-zero CE
 	// below the threshold exercises gate 1 correctly.
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("low", "query", 0.1)
 	mc.SetScore("high", "query", 0.5)
 	o := newMockChunkOracle()
@@ -728,7 +728,7 @@ func TestOnMessage_CrossThreadGatesUniformly(t *testing.T) {
 	cfg.ZScoreThreshold = 0
 	cfg.MinBatchStdDev = 0
 
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("cross", "q", 0.6)
 	mc.SetScore("same", "q", 0.6)
 	o := newMockChunkOracle()
@@ -746,7 +746,7 @@ func TestOnMessage_CrossThreadGatesUniformly(t *testing.T) {
 		t.Fatalf("CE=0.6 should clear EdgeThreshold=0.5 for both thread relationships, got %d edges", len(edges))
 	}
 	// Sub-threshold CE rejected uniformly too.
-	mc2 := newMockClassifier()
+	mc2 := newMockScorer()
 	mc2.SetScore("low-cross", "q2", 0.4)
 	mc2.SetScore("low-same", "q2", 0.4)
 	o2 := newMockChunkOracle()
@@ -772,7 +772,7 @@ func TestOnMessage_Gate2_ZScoreBlocksCluster(t *testing.T) {
 	// cluster z-scores sit below ZScoreThreshold.
 	//   CE=0.55  (x2, cluster)
 	//   CE=0.70  (outlier)
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("a", "q", 0.55)
 	mc.SetScore("b", "q", 0.55)
 	mc.SetScore("c", "q", 0.70)
@@ -806,7 +806,7 @@ func TestOnMessage_Gate2_Disabled(t *testing.T) {
 	// floor (0.05 from threeGateConfig) doesn't fire.
 	cfg := threeGateConfig()
 	cfg.ZScoreThreshold = 0
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("a", "q", 0.6)
 	mc.SetScore("b", "q", 0.7)
 	mc.SetScore("c", "q", 0.8)
@@ -833,7 +833,7 @@ func TestOnMessage_Gate3_BatchIndiscriminate(t *testing.T) {
 	// Tight cluster of above-threshold candidates — stddev falls
 	// below MinBatchStdDev. Gate 3 fires for the whole batch: zero
 	// edges even though every candidate clears gate 1.
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("a", "q", 0.51)
 	mc.SetScore("b", "q", 0.52)
 	mc.SetScore("c", "q", 0.53)
@@ -864,7 +864,7 @@ func TestOnMessage_Gate3_Disabled(t *testing.T) {
 	// cluster clears gate 2 with z ≈ 1.22).
 	cfg := threeGateConfig()
 	cfg.MinBatchStdDev = 0
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("a", "q", 0.51)
 	mc.SetScore("b", "q", 0.52)
 	mc.SetScore("c", "q", 0.53)
@@ -895,7 +895,7 @@ func TestOnMessage_Gate2_SingleCandidateNoOp(t *testing.T) {
 	// candidate case.
 	cfg := threeGateConfig()
 	cfg.MinBatchStdDev = 0
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("a", "q", 0.5) // CE=0.5 ≥ EdgeThreshold=0.5 → passes gate 1
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
@@ -928,7 +928,7 @@ func TestOnMessage_RescoredFilterInvariant(t *testing.T) {
 	cfg := threeGateConfig()
 	cfg.RerankTopK = 2
 
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("a", "q", 0.78)
 	mc.SetScore("b", "q", 0.72)
 	mc.SetScore("c", "q", 0.6) // not scored under RerankTopK=2
@@ -966,7 +966,7 @@ func TestOnMessage_CachedScoresCountAsRescored(t *testing.T) {
 	cfg := threeGateConfig()
 	cfg.MinBatchStdDev = 0 // isolate the aggregation path
 
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("a", "q", 0.8)
 	mc.SetScore("b", "q", 0.5)
 
@@ -1120,7 +1120,7 @@ func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 	o.set("dup2", []float32{0.99, 0.01, 0})
 	o.set("dup3", []float32{0.98, 0.02, 0})
 	o.set("distinct", []float32{0, 1, 0})
-	e := NewEngine(cfg, newMockClassifier(), WithChunkOracle(o))
+	e := NewEngine(cfg, newMockScorer(), WithChunkOracle(o))
 
 	selected := []*pb.SelectedMessage{
 		{MessageId: "dup1", EffectiveScore: 0.95},
@@ -1165,7 +1165,7 @@ func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 // engine running MMR is a configuration bug, not an acceptable
 // degradation mode.
 func TestApplyMMR_NoOracleError(t *testing.T) {
-	e := NewEngine(DefaultConfig(), newMockClassifier())
+	e := NewEngine(DefaultConfig(), newMockScorer())
 	// No SetChunkOracle call.
 	_, err := e.ApplyMMR(context.Background(), []*pb.SelectedMessage{
 		{MessageId: "a", EffectiveScore: 0.5},
@@ -1246,7 +1246,7 @@ func TestApplyMMR_DelegationParity(t *testing.T) {
 // of computing "λ·x + 0" or "0 + (1-λ)·diversity" — those extremes
 // collapse to the non-MMR paths the caller already has.
 func TestApplyMMR_LambdaExtremesNoOp(t *testing.T) {
-	e := NewEngine(DefaultConfig(), newMockClassifier(), WithChunkOracle(newVectorOracle()))
+	e := NewEngine(DefaultConfig(), newMockScorer(), WithChunkOracle(newVectorOracle()))
 	selected := []*pb.SelectedMessage{
 		{MessageId: "a", EffectiveScore: 0.9},
 		{MessageId: "b", EffectiveScore: 0.8},

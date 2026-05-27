@@ -20,7 +20,7 @@ import (
 // subagent forks while the parent's round is in flight), this test
 // catches the resulting DAG corruption.
 func TestAssemble_ConcurrentSameEngine(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("alpha", "query", 0.8)
 	mc.SetScore("beta", "query", 0.7)
 
@@ -73,16 +73,16 @@ func TestAssemble_ConcurrentSameEngine(t *testing.T) {
 
 // TestEngineSwap_OldEngineKeepsWorking — an engine built from a
 // snapshot of edges + scores stays usable after a fresh engine is
-// constructed elsewhere. Models the kernel.UpdateEngineConfig
+// constructed elsewhere. Models the substrate.Holder.UpdateEngineConfig
 // pattern: build engineB from disk, atomically swap, but in-flight
 // goroutines that captured engineA still finish their work.
 //
-// The kernel's atomic.Pointer ensures new operations land on engineB.
+// The Holder's atomic.Pointer ensures new operations land on engineB.
 // This test pins the contract that engineA itself doesn't break
 // because a sibling engine exists — they share neither state nor
 // goroutines.
 func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("p", "q", 0.9)
 
 	cfg := DefaultConfig()
@@ -114,11 +114,11 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 	}
 
 	// Build engineB from a fresh scorer + oracle. In production
-	// kernel.UpdateEngineConfig hydrates engineB with edges and
-	// scores from disk; for this test the point is that engineA
-	// continues to function while engineB exists — they hold no
-	// shared mutable state.
-	mcB := newMockClassifier()
+	// substrate.Holder.UpdateEngineConfig hydrates engineB with
+	// edges and scores from disk; for this test the point is that
+	// engineA continues to function while engineB exists — they
+	// hold no shared mutable state.
+	mcB := newMockScorer()
 	mcB.SetScore("p", "q", 0.9)
 	oB := newMockChunkOracle()
 	oB.Register("p1", "p")
@@ -150,7 +150,7 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 // while a sibling subagent is also forking from the same parent;
 // without lock isolation, both forks observe partial DAG state.
 func TestFork_Concurrent(t *testing.T) {
-	mc := newMockClassifier()
+	mc := newMockScorer()
 	mc.SetScore("a", "b", 0.8)
 
 	cfg := DefaultConfig()

@@ -57,10 +57,10 @@ func main() {
 			check("zerank satisfies ScorerProvider", fmt.Errorf("type assertion failed"))
 		} else {
 			check("zerank satisfies ScorerProvider", nil)
-			classifier, err := cp.Scorer("zeroentropy/zerank-1-small")
+			scorer, err := cp.Scorer("zeroentropy/zerank-1-small")
 			check("zerank.Scorer()", err)
 			if err == nil {
-				scores, err := classifier.Score(ctx,
+				scores, err := scorer.Score(ctx,
 					"What is the capital of France?",
 					[]string{
 						"Paris is the capital and largest city of France.",

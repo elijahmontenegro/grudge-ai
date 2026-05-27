@@ -61,7 +61,7 @@ type EngineConfig struct {
 
 	// Chunk controls how long messages are split for embedding and
 	// cross-encoder scoring. Message-level scoring silently truncated
-	// at the model's 512-token boundary under the old classifier,
+	// at the model's 512-token boundary under the old scorer,
 	// which made anything past ~2KB invisible to RRC (paper §6.8
 	// "Cross-Encoder Input Truncation"). Chunking is per protocol
 	// §6.5 implementation freedom — messages remain the graph unit,
