@@ -41,9 +41,11 @@ properties:
    no formatting transformation. The model processes them through the
    same attention computation it applies to any conversation input.
 
-4. **Bounded assembly.** 0–5 selected turns per call in production.
-   Working-memory-sized, regardless of how long the conversation has
-   been running.
+4. **Bounded assembly.** Selection size is determined by the three
+   threshold gates (z-score, cross-encoder floor, batch standard
+   deviation), not by a fixed quota or by conversation length.
+   Zero-return is a valid outcome. What passes is whatever the gates
+   admit.
 
 This is **structurally distinct from RAG**. RAG *augments* — labeled
 retrieved text inserted into a prompt template, generated against
