@@ -18,18 +18,18 @@ above a z-score threshold relative to the candidate batch's mean, and
 the batch's own standard deviation must exceed a minimum (if the
 cross-encoder can't discriminate this batch, the round returns nothing).
 
-Selected turns are inserted into the LLM input alongside the new turn,
-in the same conversation format they were stored in — same role tags,
+Selected turns are prepended to the LLM input before the new turn, in
+the same conversation format they were stored in — same role tags,
 same content blocks, same position semantics. There's no
 `Here is some relevant context: …` wrapper and no separate context
 block; the input to the model is a conversation transcript that's
 shorter than the full history.
 
-This mechanism is documented as Retrieval-Restored Continuation (RRC):
+This technique is documented as Retrieval-Restored Continuation (RRC):
 [docs/rrc-paper.md](docs/rrc-paper.md). The paper covers the design
-rationale, the threshold mechanism, reflective re-retrieval mid-
-generation, and comparison to RAG, Letta, Zep, FLARE, and Jeong's
-selective context reconstruction.
+rationale, the threshold gates, reflective re-retrieval mid-generation,
+and comparison to RAG, Letta, Zep, FLARE, and Jeong's selective
+context reconstruction.
 
 ## Architecture
 
