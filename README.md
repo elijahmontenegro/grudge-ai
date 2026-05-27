@@ -1,49 +1,35 @@
 # Spidey
 
-Spidey is an LLM agent framework with a different approach to memory.
-Most agents replay the full conversation history on every model call —
-Spidey doesn't. Each turn, it picks only the prior turns the new turn
-*depends on* and slips them back into the input as ordinary
-conversation entries: no template, no "Here is some relevant context:"
-header, no formatting. The model can't tell which turns were retrieved
-from any other turn in the session.
+Spidey is an open-source LLM agent framework.
 
 <!-- Drop a screenshot at docs/assets/screenshot.png and uncomment: -->
 <!-- ![Spidey UI](docs/assets/screenshot.png) -->
 
-## Why this is different
+## Memory
 
-Two patterns dominate agent memory today:
+Conversation history is stored as-is — every turn, including tool calls
+and tool results, in its original format.
 
-- **Re-send everything.** The default. Works fine until the history
-  gets big — then the model starts forgetting instructions, contradicting
-  earlier turns, and behaving like it didn't see what just happened.
-- **Wrap retrieved snippets in a context block.** RAG-shaped: a
-  retriever finds relevant passages, the application formats them into
-  `Here is some relevant context: …` and pastes that into the prompt.
-  The model treats the block as a hint or supplementary material — not
-  as something it said.
+When a new turn arrives, prior turns are scored: a bi-encoder picks a
+candidate set by embedding similarity; a cross-encoder scores each
+candidate against the new turn. A turn is selected when its
+cross-encoder score clears three threshold gates — above a raw floor,
+above a z-score threshold relative to the candidate batch's mean, and
+the batch's own standard deviation must exceed a minimum (if the
+cross-encoder can't discriminate this batch, the round returns nothing).
 
-Both leak the seam between retrieval and conversation. The model knows
-when it's being handed retrieved text, and it adjusts accordingly.
+Selected turns are inserted into the LLM input alongside the new turn,
+in the same conversation format they were stored in — same role tags,
+same content blocks, same position semantics. There's no
+`Here is some relevant context: …` wrapper and no separate context
+block; the input to the model is a conversation transcript that's
+shorter than the full history.
 
-Spidey's technique — **Retrieval-Restored Continuation (RRC)** — closes
-that seam. Conversation history is stored losslessly. On each new turn,
-a two-stage retriever picks the prior turns that turn depends on
-(prerequisite detection, not topical similarity), and those turns slot
-into the input in their original shape — same role tags, same content
-blocks, same position semantics as the live session. There's no
-framing for the model to "see retrieval" through, because the input
-isn't framed as having any. It just looks like a shorter version of
-the same conversation, with the load-bearing past included and the
-irrelevant past elided.
-
-RAG *augments*. RRC *restores*. Different verbs, different consequences.
-
-See [the paper](docs/rrc-paper.md) for the threshold mechanism,
-reflective selection (mid-generation re-retrieval driven by the model's
-own reasoning), and comparison to neighboring frameworks (Letta, Zep,
-FLARE, Jeong's reconstructed contexts).
+This mechanism is documented as Retrieval-Restored Continuation (RRC):
+[docs/rrc-paper.md](docs/rrc-paper.md). The paper covers the design
+rationale, the threshold mechanism, reflective re-retrieval mid-
+generation, and comparison to RAG, Letta, Zep, FLARE, and Jeong's
+selective context reconstruction.
 
 ## Architecture
 
