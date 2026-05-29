@@ -1,20 +1,21 @@
-// Command promptdump renders the model-facing surface with mock data
-// and prints it to stdout. The model sees TWO composed authored
+// Command promptdump renders the full model-facing surface with mock
+// data and prints it to stdout. The model sees TWO composed authored
 // surfaces every turn:
 //
 //  1. The system prompt — composed from service/prompt/templates/*.adoc
 //  2. The tool schemas — Name + Description per tool, composed from
 //     service/agent/tools/descriptions/*.adoc
 //
-// By default this command prints (1). Pass -tools to also print (2),
-// or -only-tools to print only the tool descriptions.
+// By default this command prints BOTH because both are what the model
+// actually sees. Use -prompt=false or -tools=false to suppress one
+// surface; -mode picks plan/autonomous variants of the system prompt.
 //
 // Usage:
 //
-//	go run ./tools/promptdump                       # system prompt, normal mode
-//	go run ./tools/promptdump -mode plan            # system prompt, plan mode
-//	go run ./tools/promptdump -tools                # system prompt + all tool descriptions
-//	go run ./tools/promptdump -only-tools           # only tool descriptions
+//	go run ./tools/promptdump                    # both surfaces (default)
+//	go run ./tools/promptdump -mode plan         # both, with plan-mode prompt
+//	go run ./tools/promptdump -tools=false       # just the system prompt
+//	go run ./tools/promptdump -prompt=false      # just the tool descriptions
 //
 // This is a workflow tool — it lets you read the assembled model-facing
 // surface without booting the full service. For regression-locked
@@ -36,17 +37,24 @@ func main() {
 	userName := flag.String("user", "emontenegr", "user name for the User section")
 	threadName := flag.String("thread", "promptdump", "thread name")
 	sandboxed := flag.Bool("sandboxed", false, "sandbox flag")
-	showTools := flag.Bool("tools", false, "also print all tool descriptions")
-	onlyTools := flag.Bool("only-tools", false, "print only tool descriptions, skip system prompt")
+	showPrompt := flag.Bool("prompt", true, "render the system prompt")
+	showTools := flag.Bool("tools", true, "render the tool descriptions")
 	flag.Parse()
 
-	if !*onlyTools {
+	if !*showPrompt && !*showTools {
+		fmt.Fprintln(os.Stderr, "both -prompt and -tools are false; nothing to render")
+		os.Exit(2)
+	}
+
+	if *showPrompt {
+		fmt.Println("================================================================")
+		fmt.Println("SYSTEM PROMPT (composed from service/prompt/templates/*.adoc)")
+		fmt.Println("================================================================")
 		asm, err := prompt.NewAssembler()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "NewAssembler: %v\n", err)
 			os.Exit(1)
 		}
-
 		data := prompt.TemplateData{
 			UserName:    *userName,
 			ThreadName:  *threadName,
@@ -58,7 +66,6 @@ func main() {
 			CurrentTime: "2026-05-29T00:00:00Z (mock)",
 			Mode:        *mode,
 		}
-
 		out, err := asm.Assemble(data)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Assemble: %v\n", err)
@@ -67,13 +74,14 @@ func main() {
 		fmt.Print(out)
 	}
 
-	if *showTools || *onlyTools {
-		if !*onlyTools {
+	if *showTools {
+		if *showPrompt {
 			fmt.Println()
-			fmt.Println("================================================================")
-			fmt.Println("TOOL DESCRIPTIONS (second composed surface the model sees)")
-			fmt.Println("================================================================")
 		}
+		fmt.Println("================================================================")
+		fmt.Println("TOOL SCHEMAS (Name + Description per tool — fed to the model")
+		fmt.Println("via ADK FunctionDeclaration alongside the system prompt)")
+		fmt.Println("================================================================")
 		descs := tools.AllDescriptions()
 		names := make([]string, 0, len(descs))
 		for n := range descs {
