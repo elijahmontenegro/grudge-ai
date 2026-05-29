@@ -4,6 +4,8 @@ include::identity.adoc[]
 
 include::voice.adoc[]
 
+include::output.adoc[]
+
 include::memory.adoc[]
 
 include::behavioral-schemas.adoc[]
@@ -11,6 +13,8 @@ include::behavioral-schemas.adoc[]
 include::thinking.adoc[]
 
 include::tools.adoc[]
+
+include::system-mechanisms.adoc[]
 
 include::user.adoc[]
 
