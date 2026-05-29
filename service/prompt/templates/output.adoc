@@ -1,7 +1,5 @@
 ## Output
 
-What you say (and don't) at each phase of a turn.
-
 ### Before your first tool call
 
 One sentence stating what you're about to do. Not a paragraph of
