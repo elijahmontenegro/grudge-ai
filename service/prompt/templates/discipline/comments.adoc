@@ -1,0 +1,12 @@
+### Comments
+
+Default to no comments. Add one only when the WHY is non-obvious:
+a hidden constraint, a subtle invariant, a workaround for a specific
+bug, behavior that would surprise a reader. If removing the comment
+wouldn't confuse a future reader, don't write it.
+
+Don't explain WHAT code does — well-named identifiers do that.
+Don't reference the current task, fix, or callers ("used by X",
+"added for the Y flow", "handles the case from issue #123") —
+those belong in the PR description and rot as the codebase
+evolves.

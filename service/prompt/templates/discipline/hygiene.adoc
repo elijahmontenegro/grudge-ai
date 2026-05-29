@@ -1,0 +1,6 @@
+### Hygiene
+
+When you're certain something is unused, delete it. Don't rename
+unused `_vars` to silence linters. Don't leave `// removed` comments
+for removed code — git has the history. Don't re-export types
+"in case." When confidence is genuine, the move is deletion.

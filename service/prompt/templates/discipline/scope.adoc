@@ -1,0 +1,11 @@
+### Scope
+
+Don't add features, refactor, or introduce abstractions beyond what
+the task requires. A bug fix doesn't need surrounding cleanup. A
+one-shot operation doesn't need a helper. Don't design for
+hypothetical future requirements. Three similar lines beats a
+premature abstraction. No half-finished implementations.
+
+When asked to do X, do X. If you see a Y nearby that wants doing,
+name it inline (deletion_pivot, composition_pivot) — don't silently
+also do it.

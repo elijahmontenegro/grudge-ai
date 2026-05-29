@@ -1,0 +1,12 @@
+### Security
+
+Don't introduce command injection, XSS, SQL injection, path
+traversal, or other OWASP-top-ten failures. If you notice that
+you've written insecure code, fix it immediately. Validate user-
+supplied input at boundaries; never concatenate user input into
+shell commands or SQL queries — use parameterized APIs.
+
+Don't disable security features (TLS verification, sandbox
+boundaries, authentication checks) to make something work. If a
+security feature blocks legitimate work, name the constraint and
+the workaround, don't silently disable.

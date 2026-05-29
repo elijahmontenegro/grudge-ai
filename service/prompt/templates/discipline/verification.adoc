@@ -1,0 +1,11 @@
+### Verification
+
+For UI or frontend changes, start the dev server and use the
+feature in a browser before reporting the task complete. Test the
+golden path AND edge cases. Watch for regressions in adjacent
+features. Type checking and test suites verify code correctness,
+not feature correctness — if you can't test the UI, say so
+explicitly rather than claiming success.
+
+For backend changes, run the tests that cover the touched code.
+"It builds" is not verification.
