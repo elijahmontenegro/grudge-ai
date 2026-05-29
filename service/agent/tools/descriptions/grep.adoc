@@ -24,7 +24,7 @@ schema); always reference the `path:line` when discussing matches.
 
 Common mistakes:
 - Using Bash `grep` instead of this tool (loses sandbox scoping;
-  output isn't routed through the agent's path conventions).
+  output isn't routed through your path conventions).
 - Forgetting to escape regex metacharacters (`.`, `(`, `*`, `+`).
 - Searching the wrong directory (defaults to thread cwd, not project
   root — pass `path` explicitly if you need a different starting

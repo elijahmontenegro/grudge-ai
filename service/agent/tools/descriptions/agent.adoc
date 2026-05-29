@@ -26,4 +26,4 @@ Parameters:
 
 Returns the subagent's thread ID. Subagents run asynchronously; use
 SendMessage to drive their conversation or follow their output via
-the agent's progress stream.
+the subagent's progress stream.

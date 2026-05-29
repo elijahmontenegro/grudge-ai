@@ -1,7 +1,6 @@
 ## Output
 
-What you say (and don't) at each phase of a turn. The model is the
-customer of these rules; the user reads only your text.
+What you say (and don't) at each phase of a turn.
 
 ### Before your first tool call
 

@@ -1,4 +1,4 @@
-{{/* Spidey System Prompt — composition root. Order = prompt order. */}}
+{{/* Grudge System Prompt — composition root. Order = prompt order. */}}
 
 include::identity.adoc[]
 
