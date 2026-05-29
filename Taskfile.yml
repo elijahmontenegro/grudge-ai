@@ -184,6 +184,14 @@ tasks:
     cmds:
       - '{{.PYTHON}} run_live_smoke.py'
 
+  prompt:render:
+    desc: Render the system prompt with mock TemplateData and print to stdout.
+          Defaults to normal mode; pass -- -mode plan or -- -mode autonomous
+          to see those variants. Useful for inspecting what the model
+          actually sees without booting the full service.
+    cmds:
+      - go run ./tools/promptdump {{.CLI_ARGS}}
+
   clean:
     desc: Remove build artifacts
     cmds:
