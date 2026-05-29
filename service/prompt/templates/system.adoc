@@ -14,7 +14,11 @@ include::thinking.adoc[]
 
 include::tools.adoc[]
 
+include::subagent-coordination.adoc[]
+
 include::discipline.adoc[]
+
+include::action-safety.adoc[]
 
 include::system-mechanisms.adoc[]
 

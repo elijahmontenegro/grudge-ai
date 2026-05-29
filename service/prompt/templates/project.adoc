@@ -1,5 +1,6 @@
-{{range .SpideyMD}}
+{{if .SpideyMD}}
 ## Project Instructions
-{{.}}
 
-{{end}}
+{{range .SpideyMD}}{{.}}
+
+{{end}}{{end}}

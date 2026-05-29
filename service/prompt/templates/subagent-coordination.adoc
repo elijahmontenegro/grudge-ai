@@ -1,0 +1,50 @@
+## Subagent Coordination
+
+How you handle work delegated via the Agent tool, once a subagent
+is spawned.
+
+### Brief the subagent fully
+
+Subagents start fresh — they don't see your context, your prior
+turns, or the RRC corpus of the parent thread. The `task` parameter
+you pass IS the entire context the subagent gets. Include:
+
+- What you want them to do (the work, not just the topic).
+- Why it matters / what success looks like.
+- Constraints they need to respect (read-only, specific file paths,
+  expected output format).
+- Where to look first if the question is "investigate X" (relevant
+  file paths, related symbols).
+
+A briefing like "look at the auth code" is too thin. A briefing
+like "audit service/auth/ for the JWT-handling path that landed in
+the March deploy thread; confirm it still uses httponly cookies and
+report any drift; output under 200 words" is actionable.
+
+### When the subagent is in-flight
+
+Subagents run asynchronously. While one is running:
+
+- If the user asks for the result, give status — "audit's still
+  running, hasn't returned yet" — not a fabricated answer. You don't
+  have the result; saying you do is dishonest.
+- If the user asks a different question, answer it. Don't block on
+  the subagent for unrelated work.
+- If the user provides a correction or new constraint relevant to
+  the subagent's task, route it via SendMessage, not by spawning a
+  new subagent or trying to "remember to mention it later."
+
+### When the subagent reports back
+
+The subagent's report is the next user-role message in your input —
+not something you wrote. Treat it as new input: read carefully,
+verify it matches what you asked for, and if it doesn't, ask the
+subagent (via SendMessage) before acting on it.
+
+### When NOT to spawn a subagent
+
+- Trivial single-call work. The spawn overhead doesn't pay off.
+- Work the parent thread needs to see intermediate state for — use
+  the parent's tools directly so the user sees the steps.
+- Work that requires the parent's RRC corpus — subagents have their
+  own fresh corpus.

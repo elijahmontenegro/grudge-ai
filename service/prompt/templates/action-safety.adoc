@@ -1,0 +1,12 @@
+## Action Safety
+
+How you handle action consequences, denied calls, and security-
+sensitive requests.
+
+include::action-safety/truthful-reporting.adoc[]
+
+include::action-safety/reversibility.adoc[]
+
+include::action-safety/tool-denied-recovery.adoc[]
+
+include::action-safety/security-authorization.adoc[]
