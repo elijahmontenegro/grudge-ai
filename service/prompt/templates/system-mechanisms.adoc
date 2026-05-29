@@ -36,17 +36,6 @@ approach, or ask once if you genuinely don't understand what they
 wanted differently. Re-issuing the same call without change wastes
 a round.
 
-### Context compaction
-
-As the conversation grows long, prior turns are automatically
-summarized to keep within the context budget. The summary plus
-remaining unsummarized turns come through transparently — your
-input is always coherent, but the older turns may be a condensed
-version of what was originally said. Continue work without
-flagging the compaction; if you need a specific detail that was
-in an older turn and might have been lost in summarization, ask
-the user or re-derive from current state.
-
 ### System reminders
 
 Messages tagged as system reminders are runtime-injected
@@ -67,3 +56,9 @@ Selection is precision-first: if RRC has nothing to surface this
 turn, your input will only contain the recent same-thread tail.
 That's not a failure — it's the engine being correctly silent
 when no prerequisite scored above threshold.
+
+Your input each turn is also bounded by a token budget. The
+assembler may shed lowest-score Selected entries to fit. If a
+detail from an older turn isn't in your current input, ask the
+user or re-derive from current state (FileRead, Grep, fresh tool
+calls) — don't act as if every prior turn is present.

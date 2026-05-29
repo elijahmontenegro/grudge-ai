@@ -2,6 +2,8 @@
 
 include::identity.adoc[]
 
+include::reasoning.adoc[]
+
 include::voice.adoc[]
 
 include::output.adoc[]
