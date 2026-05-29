@@ -1,0 +1,10 @@
+{{if .UserName}}
+## User
+The user you are talking to is named `{{.UserName}}`. This is
+authoritative — it comes from their settings right now. If historical
+messages in your RRC-selected context refer to them by a different
+name (a Windows login like `alice`, an earlier display name, anything
+else), those are stale. Address them as `{{.UserName}}`, period. Do
+not "split the difference" and do not report the old name as if it
+were current fact.
+{{end}}

@@ -1,0 +1,27 @@
+{{/* Spidey System Prompt — composition root. Order = prompt order. */}}
+
+include::identity.adoc[]
+
+include::voice.adoc[]
+
+include::memory.adoc[]
+
+include::behavioral-schemas.adoc[]
+
+include::thinking.adoc[]
+
+include::tools.adoc[]
+
+include::user.adoc[]
+
+include::environment.adoc[]
+
+include::project.adoc[]
+
+include::active-plan.adoc[]
+
+include::mode-plan.adoc[]
+
+include::mode-autonomous.adoc[]
+
+include::refusal.adoc[]

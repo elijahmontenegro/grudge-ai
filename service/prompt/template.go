@@ -2,41 +2,29 @@ package prompt
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"embed"
-	"errors"
 	"fmt"
-	"io/fs"
 	"strings"
-	"sync"
 	"text/template"
+
+	"github.com/emontenegr/spidey/service/internal/adoc"
 )
 
-// Templates are baked into the binary. Putting them on disk and walking
-// candidate paths was load-bearing only for the multi-module layout —
-// once the binary is the single shippable, embed is the right shape.
+// Templates are baked into the binary. The composition root
+// `system.adoc` pulls in independent behavioral fragments via
+// `include::` directives.
 
 //go:embed templates/*
 var templatesFS embed.FS
 
-// Assembler composes system prompts from independent template sections.
-// Each section is memoized independently.
+// Assembler renders the system prompt for each request.
+//
+// Composition (pass 1: adoc include resolution) runs once at
+// NewAssembler. The resulting text is parsed as text/template and
+// stored. Per-request Assemble runs pass 2: text/template execution
+// against the request-specific TemplateData.
 type Assembler struct {
-	cache map[string]cachedSection
-	mu    sync.RWMutex
-}
-
-type cachedSection struct {
-	hash   [32]byte
-	output string
-}
-
-// NewAssembler creates a prompt assembler. Templates are embedded;
-// no filesystem lookup, no boot-time path resolution.
-func NewAssembler() *Assembler {
-	return &Assembler{
-		cache: make(map[string]cachedSection),
-	}
+	tmpl *template.Template
 }
 
 // TemplateData provides values for template rendering.
@@ -52,82 +40,29 @@ type TemplateData struct {
 	Mode        string // "normal", "plan", "autonomous"
 }
 
-// Assemble renders the full system prompt from system.tmpl.
-// Section rendering errors are collected and returned after execution.
-func (a *Assembler) Assemble(data TemplateData) (string, error) {
-	tmplContent, err := templatesFS.ReadFile("templates/system.tmpl")
+// NewAssembler composes the embedded fragments into a single
+// text/template, parsed once at construction. A composition or
+// parse failure is a build-time bug (malformed fragment, missing
+// include) and is surfaced immediately as an error.
+func NewAssembler() (*Assembler, error) {
+	composed, err := adoc.CompileFS(templatesFS, "templates/system.adoc")
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("compose system prompt: %w", err)
 	}
-
-	// Collect section errors during template execution.
-	var sectionErrors []string
-	var sectionMu sync.Mutex
-
-	funcMap := template.FuncMap{
-		"section": func(name string) string {
-			result, err := a.renderSection(name, data)
-			if err != nil {
-				sectionMu.Lock()
-				sectionErrors = append(sectionErrors, fmt.Sprintf("section %q: %v", name, err))
-				sectionMu.Unlock()
-				return ""
-			}
-			return result
-		},
+	tmpl, err := template.New("system").Funcs(template.FuncMap{
 		"join": strings.Join,
-	}
-
-	tmpl, err := template.New("system").Funcs(funcMap).Parse(string(tmplContent))
+	}).Parse(composed)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("parse composed prompt: %w", err)
 	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", err
-	}
-
-	if len(sectionErrors) > 0 {
-		return "", fmt.Errorf("template section errors: %s", strings.Join(sectionErrors, "; "))
-	}
-
-	return buf.String(), nil
+	return &Assembler{tmpl: tmpl}, nil
 }
 
-func (a *Assembler) renderSection(name string, data TemplateData) (string, error) {
-	content, err := templatesFS.ReadFile("templates/" + name + ".tmpl")
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			// Optional section — not every mode uses every section
-			return "", nil
-		}
-		return "", fmt.Errorf("read %s: %w", name, err)
-	}
-
-	hash := sha256.Sum256(content)
-
-	a.mu.RLock()
-	if cached, ok := a.cache[name]; ok && cached.hash == hash {
-		a.mu.RUnlock()
-		return cached.output, nil
-	}
-	a.mu.RUnlock()
-
-	tmpl, err := template.New(name).Parse(string(content))
-	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", name, err)
-	}
-
+// Assemble renders the system prompt against the per-request data.
+func (a *Assembler) Assemble(data TemplateData) (string, error) {
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("execute %s: %w", name, err)
+	if err := a.tmpl.Execute(&buf, data); err != nil {
+		return "", err
 	}
-
-	output := buf.String()
-	a.mu.Lock()
-	a.cache[name] = cachedSection{hash: hash, output: output}
-	a.mu.Unlock()
-
-	return output, nil
+	return buf.String(), nil
 }

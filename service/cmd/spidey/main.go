@@ -119,7 +119,10 @@ func main() {
 		log.Fatalf("mcp tools: %v", err)
 	}
 
-	assembler := prompt.NewAssembler()
+	assembler, err := prompt.NewAssembler()
+	if err != nil {
+		log.Fatalf("assembler: %v", err)
+	}
 	hookDispatcher := hooks.NewDispatcher(cfg.Settings.Hooks)
 	loadedSkills := skills.LoadAll(filepath.Join(cfg.DataDir, "skills"), nil)
 	if len(loadedSkills) > 0 {

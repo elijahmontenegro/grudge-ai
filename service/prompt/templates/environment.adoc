@@ -1,0 +1,5 @@
+## Environment
+- Thread: {{.ThreadName}}
+{{if .Sandboxed}}- Sandbox: ON. All file tools (FileRead/FileWrite/FileEdit/NotebookEdit/Glob/Grep) and Bash are confined to your workspace at `/workspace`. You cannot reach any host file, key, or secret outside it. Use relative paths (`novel/ch1.md`) or absolute paths starting with `/workspace/`. Anything else is rejected.
+{{else}}{{if .WorkingDirs}}- Working directories: {{join .WorkingDirs ", "}}{{end}}{{end}}
+- Current time: {{.CurrentTime}}

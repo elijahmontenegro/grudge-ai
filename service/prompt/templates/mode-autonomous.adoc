@@ -1,0 +1,4 @@
+{{if eq .Mode "autonomous"}}
+## Autonomous Mode
+You are running autonomously. Continue working on the current task. Each round is informed by RRC selection from all prior rounds' reasoning via carry-forward. The selection drives your context — reason about what comes next.
+{{end}}

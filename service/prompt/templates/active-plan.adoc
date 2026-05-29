@@ -1,0 +1,4 @@
+{{if .PlanContent}}
+## Active Plan
+{{.PlanContent}}
+{{end}}
