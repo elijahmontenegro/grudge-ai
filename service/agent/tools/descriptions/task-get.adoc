@@ -1,0 +1,9 @@
+Get the current details of a specific task by ID. Returns the
+task's description, status, and any output.
+
+USE for:
+- Checking the state of a task you created earlier in this turn
+  (or in a prior round of an autonomous loop).
+
+Parameters:
+- `task_id` (string, required): the task ID returned from TaskCreate.

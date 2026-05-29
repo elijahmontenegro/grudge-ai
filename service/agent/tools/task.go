@@ -14,7 +14,7 @@ import (
 
 func registerTaskTools(c *buildCtx) error {
 	taskCreate, err := functiontool.New(
-		functiontool.Config{Name: "TaskCreate", Description: "Create a task to track work progress. Returns the task ID."},
+		functiontool.Config{Name: "TaskCreate", Description: descriptionFor("TaskCreate")},
 		func(ctx tool.Context, args TaskCreateArgs) (TaskCreateResult, error) {
 			if c.deps.Tasks == nil {
 				return TaskCreateResult{}, fmt.Errorf("task store not initialized")
@@ -28,7 +28,7 @@ func registerTaskTools(c *buildCtx) error {
 	}
 
 	taskGet, err := functiontool.New(
-		functiontool.Config{Name: "TaskGet", Description: "Get details of a specific task by ID."},
+		functiontool.Config{Name: "TaskGet", Description: descriptionFor("TaskGet")},
 		func(ctx tool.Context, args TaskGetArgs) (TaskGetResult, error) {
 			if c.deps.Tasks == nil {
 				return TaskGetResult{}, fmt.Errorf("task store not initialized")
@@ -45,7 +45,7 @@ func registerTaskTools(c *buildCtx) error {
 	}
 
 	taskUpdate, err := functiontool.New(
-		functiontool.Config{Name: "TaskUpdate", Description: "Update a task's status (pending, in_progress, completed) or delete it (status=deleted)."},
+		functiontool.Config{Name: "TaskUpdate", Description: descriptionFor("TaskUpdate")},
 		func(ctx tool.Context, args TaskUpdateArgs) (TaskUpdateResult, error) {
 			if c.deps.Tasks == nil {
 				return TaskUpdateResult{}, fmt.Errorf("task store not initialized")
@@ -66,7 +66,7 @@ func registerTaskTools(c *buildCtx) error {
 	}
 
 	taskList, err := functiontool.New(
-		functiontool.Config{Name: "TaskList", Description: "List all tasks with their status."},
+		functiontool.Config{Name: "TaskList", Description: descriptionFor("TaskList")},
 		func(ctx tool.Context, args TaskListArgs) (TaskListResult, error) {
 			if c.deps.Tasks == nil {
 				return TaskListResult{Tasks: []string{}}, nil
@@ -84,7 +84,7 @@ func registerTaskTools(c *buildCtx) error {
 	}
 
 	taskStop, err := functiontool.New(
-		functiontool.Config{Name: "TaskStop", Description: "Stop a running task by marking it completed."},
+		functiontool.Config{Name: "TaskStop", Description: descriptionFor("TaskStop")},
 		func(ctx tool.Context, args TaskStopArgs) (TaskStopResult, error) {
 			if c.deps.Tasks == nil {
 				return TaskStopResult{}, fmt.Errorf("task store not initialized")
@@ -98,7 +98,7 @@ func registerTaskTools(c *buildCtx) error {
 	}
 
 	taskOutput, err := functiontool.New(
-		functiontool.Config{Name: "TaskOutput", Description: "Get the description and status of a task."},
+		functiontool.Config{Name: "TaskOutput", Description: descriptionFor("TaskOutput")},
 		func(ctx tool.Context, args TaskOutputArgs) (TaskOutputResult, error) {
 			if c.deps.Tasks == nil {
 				return TaskOutputResult{}, fmt.Errorf("task store not initialized")

@@ -1,0 +1,19 @@
+Create a structured task list for tracking work in the current turn
+or across an autonomous loop. Returns nothing user-facing beyond the
+fact of creation; the list surfaces in the UI for the user to track
+progress.
+
+USE for:
+- Multi-step work where the user benefits from seeing the plan
+  before execution.
+- Autonomous loops where tracking state helps the next round.
+
+DON'T use for:
+- Trivial single-step tasks (the overhead isn't justified).
+- A surrogate for actually doing the work (do not write a TodoWrite
+  and then narrate without executing).
+
+After writing a todo, work through it. Use TaskUpdate to mark items
+as in_progress when you start them and completed when they're done.
+The todo is for tracking, not for performing thinking-instead-of-
+acting.

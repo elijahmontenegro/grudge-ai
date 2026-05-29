@@ -1,0 +1,17 @@
+Send a follow-up message to a running subagent in its forked thread.
+The subagent receives the text as a new user message and continues
+its conversation from there.
+
+USE for:
+- Iterating with a subagent you spawned via Agent.
+- Providing additional context, corrections, or follow-up questions
+  to an in-progress subagent.
+
+Parameters:
+- `thread_id` (string, required): the subagent's thread ID
+  (returned from the Agent tool).
+- `content` (string, required): the message text.
+
+The subagent processes the message asynchronously. If you need its
+output before continuing, follow its progress stream rather than
+making blocking assumptions about timing.

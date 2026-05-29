@@ -1,0 +1,9 @@
+List all tasks with their IDs and current status. Returns the
+collection.
+
+USE for:
+- Auditing what tasks exist before creating new ones.
+- Finding tasks to update or remove.
+- Stale-list cleanup (deleted-marking tasks that no longer apply).
+
+This is read-only; safe to call without approval.

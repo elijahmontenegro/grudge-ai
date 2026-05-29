@@ -1,0 +1,20 @@
+Update a task's status or output. Status transitions: pending →
+in_progress → completed. To remove a task, set status to deleted.
+
+USE for:
+- Marking a task as in_progress when you start it.
+- Marking a task as completed when the work is fully done (not
+  partially — completed means done).
+- Adding output/notes to a task as work progresses.
+
+Parameters:
+- `task_id` (string, required): the task ID.
+- `status` (string, optional): pending | in_progress | completed | deleted.
+- `output` (string, optional): updated output text.
+
+Common mistakes:
+- Marking a task completed when only part of it is done. Keep it
+  in_progress until fully accomplished — partial completion lies
+  to the user about what's left.
+- Skipping the in_progress mark and going straight to completed
+  (the user loses the intermediate signal).

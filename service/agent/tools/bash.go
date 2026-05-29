@@ -14,7 +14,7 @@ import (
 
 func registerBashTool(c *buildCtx) error {
 	bash, err := functiontool.New(
-		functiontool.Config{Name: "Bash", Description: "Execute a shell command. Returns stdout/stderr and exit code."},
+		functiontool.Config{Name: "Bash", Description: descriptionFor("Bash")},
 		func(ctx tool.Context, args BashArgs) (BashResult, error) {
 			if err := c.planGuard(""); err != nil {
 				return BashResult{Output: err.Error(), ExitCode: 1}, nil

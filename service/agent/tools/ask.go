@@ -81,18 +81,8 @@ func validateAskUserArgs(args AskUserArgs) error {
 func registerAskUserTool(c *buildCtx) error {
 	askUser, err := functiontool.New(
 		functiontool.Config{
-			Name: "AskUserQuestion",
-			Description: "Prompt the user with one or more multiple-choice questions and wait for their answers. " +
-				"Use this when you genuinely need a decision from the user that can't be inferred from context.\n\n" +
-				"Input: `questions` — a non-null array of 1–4 question objects. Each question MUST have ALL FOUR fields populated:\n" +
-				"  • `question` (string): the complete question, ending with a question mark.\n" +
-				"  • `header` (string): a short chip label ≤20 chars (e.g. \"Coffee\", \"Library\").\n" +
-				"  • `options` (array of 2–4 {label, description}): distinct choices. Do NOT include an \"Other\" option — the UI adds a free-text escape automatically.\n" +
-				"  • `multiSelect` (boolean): true when the user may pick multiple options; usually false.\n\n" +
-				"Exact shape you must emit:\n" +
-				"{\"questions\":[{\"header\":\"Coffee\",\"question\":\"How do you take your coffee?\",\"multiSelect\":false,\"options\":[{\"label\":\"Black\",\"description\":\"No milk, no sugar.\"},{\"label\":\"With milk\",\"description\":\"Splash of milk.\"},{\"label\":\"Sweetened\",\"description\":\"Sugar or syrup added.\"}]}]}\n\n" +
-				"DO NOT pass `questions: null` or omit the `options`/`header` fields — the call will error and you must retry with the full structure.\n\n" +
-				"Result: `answers` — a map from each question's text to the user's chosen label(s). Multi-select answers are comma-joined. \"Other\" returns the user's typed text.",
+			Name:        "AskUserQuestion",
+			Description: descriptionFor("AskUserQuestion"),
 		},
 		func(ctx tool.Context, args AskUserArgs) (AskUserResult, error) {
 			if err := validateAskUserArgs(args); err != nil {

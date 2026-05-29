@@ -1,0 +1,34 @@
+Surgically edit a file: find `old_string` and replace it with
+`new_string`. The `old_string` MUST appear exactly once in the file —
+if it doesn't, the edit is rejected. On sandboxed threads paths are
+scoped to `/workspace`.
+
+USE for:
+- Targeted changes to existing files (one-line fixes, renames in a
+  specific location, inserting before/after a known marker).
+- Edits where preserving surrounding content matters.
+
+DON'T use for:
+- Creating new files → use FileWrite.
+- Wholesale rewrites where most of the file is changing → use
+  FileWrite (more honest about the scope of change).
+- Changes where the old text appears multiple times → narrow
+  `old_string` to include surrounding context that makes it unique.
+
+Parameters:
+- `path` (string, required): file to edit.
+- `old_string` (string, required): exact text to find (must be
+  unique).
+- `new_string` (string, required): replacement text. May be empty
+  to delete the old_string.
+
+Common failure modes:
+- `old_string` not found because the file was modified since your
+  last FileRead. Always read just before editing if you're unsure
+  of current state.
+- `old_string` not unique. Expand it to include unique surrounding
+  lines.
+- Whitespace mismatch — exact match means exact, including indent.
+
+Approval is required. Plan mode disables this tool except for the
+plan artifact path.

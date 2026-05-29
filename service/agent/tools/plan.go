@@ -19,7 +19,7 @@ import (
 
 func registerPlanTools(c *buildCtx) error {
 	enterPlan, err := functiontool.New(
-		functiontool.Config{Name: "EnterPlanMode", Description: "Enter plan mode. Write tools disabled, read tools available. Explore codebase and design implementation approach."},
+		functiontool.Config{Name: "EnterPlanMode", Description: descriptionFor("EnterPlanMode")},
 		func(ctx tool.Context, args PlanModeArgs) (PlanModeResult, error) {
 			if err := c.requireApproval(ctx, "EnterPlanMode", marshalArgs(args)); err != nil {
 				return PlanModeResult{}, err
@@ -40,7 +40,7 @@ func registerPlanTools(c *buildCtx) error {
 	}
 
 	exitPlan, err := functiontool.New(
-		functiontool.Config{Name: "ExitPlanMode", Description: "Signal that the plan is ready for user review. Do NOT paraphrase or re-summarize the plan — the user sees it surfaced in the artifacts panel. A brief one-line acknowledgment is enough."},
+		functiontool.Config{Name: "ExitPlanMode", Description: descriptionFor("ExitPlanMode")},
 		func(ctx tool.Context, args PlanModeArgs) (PlanModeResult, error) {
 			if err := c.requireApproval(ctx, "ExitPlanMode", marshalArgs(args)); err != nil {
 				return PlanModeResult{}, err

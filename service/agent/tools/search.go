@@ -17,7 +17,7 @@ import (
 
 func registerSearchTools(c *buildCtx) error {
 	glob, err := functiontool.New(
-		functiontool.Config{Name: "Glob", Description: "Find files matching a glob pattern. On sandboxed threads paths are scoped to the workspace."},
+		functiontool.Config{Name: "Glob", Description: descriptionFor("Glob")},
 		func(ctx tool.Context, args GlobArgs) (GlobResult, error) {
 			dir, err := c.resolvePath(args.Path)
 			if err != nil {
@@ -35,7 +35,7 @@ func registerSearchTools(c *buildCtx) error {
 	}
 
 	grep, err := functiontool.New(
-		functiontool.Config{Name: "Grep", Description: "Search file contents for a regex pattern. Returns matching lines with file paths and line numbers. On sandboxed threads paths are scoped to the workspace."},
+		functiontool.Config{Name: "Grep", Description: descriptionFor("Grep")},
 		func(ctx tool.Context, args GrepArgs) (GrepResult, error) {
 			var dir string
 			if c.deps.Sandboxed {

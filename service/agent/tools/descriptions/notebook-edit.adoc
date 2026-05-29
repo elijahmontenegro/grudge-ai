@@ -1,0 +1,24 @@
+Replace the source content of a specific cell in a Jupyter notebook
+(.ipynb). The cell is identified by zero-based index. On sandboxed
+threads paths are scoped to `/workspace`.
+
+USE for:
+- Editing a known cell in a notebook (after reading it to see indices).
+- Replacing analysis code, markdown narration, or generated output.
+
+DON'T use for:
+- Adding or removing cells (this only edits an existing cell).
+- Non-notebook files → use FileEdit or FileWrite.
+
+Parameters:
+- `path` (string, required): path to the .ipynb file.
+- `cell_index` (int, required): zero-based index of the cell.
+- `content` (string, required): new cell source content.
+
+The tool validates that the file is a valid notebook JSON and that
+the cell index is in range. It does NOT verify cell type (code vs
+markdown); make sure your replacement content matches the cell's
+type (code cells expect Python or whatever kernel; markdown cells
+expect markdown).
+
+Approval is required. Plan mode disables this tool.

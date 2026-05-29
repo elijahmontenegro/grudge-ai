@@ -1,0 +1,31 @@
+Fetch the content of a specific URL via HTTP GET. Returns the raw
+response body plus the HTTP status code.
+
+USE for:
+- Reading a known URL (documentation, paper, API spec).
+- Following up on a WebSearch result to get the full page.
+- Pulling raw data from an HTTP endpoint.
+
+DON'T use for:
+- General web discovery → use WebSearch first.
+- Authenticated APIs that need headers/auth (this tool doesn't
+  set custom headers).
+- Binary downloads (the response is returned as a string; binary
+  content will arrive mangled).
+
+Parameters:
+- `url` (string, required): the URL to fetch. Full http:// or
+  https:// URL.
+
+Output: raw response body (HTML, JSON, text — whatever the server
+returns) plus the integer status code. Inspect the status before
+acting on the body; a 200 with HTML doesn't mean the content is
+what you expected (login walls, error pages, etc., still return 200).
+
+Common mistakes:
+- Fetching a URL from a search snippet without verifying the page is
+  what you want.
+- Treating an HTML page as JSON (parse the body shape before
+  consuming).
+- Ignoring the status code when the body is empty or has an error
+  page rendered as 200.

@@ -1,0 +1,40 @@
+Execute a shell command on the host (or inside the sandbox container
+when the thread is sandboxed). Returns stdout/stderr concatenated and
+the exit code.
+
+USE for: running scripts, build/test commands, git operations,
+multi-command pipelines, work that doesn't have a dedicated tool.
+
+DON'T use for:
+- Reading file contents → use FileRead (offset/limit slicing, cleaner
+  output, sandbox-scoped path resolution).
+- Finding files by name pattern → use Glob (faster, sandbox-scoped).
+- Searching file contents → use Grep (sandbox-scoped, structured
+  output with path:line refs).
+
+Each Bash call is independent. `cd /some/dir` in one call does NOT
+persist to the next call. Chain in the same command if you need it
+(`cd /some/dir && ./script.sh`).
+
+Destructive commands (rm -rf, git push --force, git reset --hard,
+git checkout --) are blocked by a safety net even when approval is
+granted. The block is not bypassable by approval. Reshape the command
+into a surgical operation (specific path, named files, safer git
+op) instead of trying to push through. The safety net only fires on
+non-sandboxed threads; sandboxed threads can destroy inside the
+container freely since the container boundary already contains the
+blast radius.
+
+Long-running commands have no enforced timeout — they run until they
+finish or are killed externally. For uncertain-duration commands,
+prefer running them with explicit time bounds (`timeout 60s ...`)
+or pipe output to a file you can poll.
+
+Common mistakes to avoid:
+- Calling Bash to cat/head/tail a file instead of FileRead.
+- Using `grep -rn` in Bash instead of the Grep tool (loses sandbox
+  scoping; results aren't structured).
+- Issuing `rm -rf` then expecting approval to unlock it — approval
+  doesn't bypass the destructive-command safety net.
+- Assuming working-directory state persists across calls.
+- Redirecting stderr to /dev/null and missing the real error.

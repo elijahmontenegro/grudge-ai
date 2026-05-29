@@ -16,7 +16,7 @@ import (
 
 func registerWebTools(c *buildCtx) error {
 	webSearch, err := functiontool.New(
-		functiontool.Config{Name: "WebSearch", Description: "Search the web for current information. Returns titles, URLs, and snippets."},
+		functiontool.Config{Name: "WebSearch", Description: descriptionFor("WebSearch")},
 		func(ctx tool.Context, args WebSearchArgs) (WebSearchResult, error) {
 			if c.deps.SearchURL == "" {
 				return WebSearchResult{}, fmt.Errorf("web search not configured — set a search provider (e.g. SearXNG) in Settings")
@@ -66,7 +66,7 @@ func registerWebTools(c *buildCtx) error {
 	}
 
 	webFetch, err := functiontool.New(
-		functiontool.Config{Name: "WebFetch", Description: "Fetch content from a URL."},
+		functiontool.Config{Name: "WebFetch", Description: descriptionFor("WebFetch")},
 		func(ctx tool.Context, args WebFetchArgs) (WebFetchResult, error) {
 			req, err := http.NewRequestWithContext(ctx, "GET", args.URL, nil)
 			if err != nil {

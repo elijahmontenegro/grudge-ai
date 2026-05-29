@@ -14,7 +14,7 @@ import (
 
 func registerAgentTools(c *buildCtx) error {
 	agentTool, err := functiontool.New(
-		functiontool.Config{Name: "Agent", Description: "Spawn a subagent to handle a complex task autonomously. The subagent runs in an ephemeral thread fork with its own RRC state."},
+		functiontool.Config{Name: "Agent", Description: descriptionFor("Agent")},
 		func(ctx tool.Context, args AgentToolArgs) (AgentToolResult, error) {
 			if err := c.requireApproval(ctx, "Agent", marshalArgs(args)); err != nil {
 				return AgentToolResult{}, err
@@ -32,7 +32,7 @@ func registerAgentTools(c *buildCtx) error {
 	}
 
 	sendMsg, err := functiontool.New(
-		functiontool.Config{Name: "SendMessage", Description: "Send a message to a running subagent. The subagent receives it as a new user message in its forked thread."},
+		functiontool.Config{Name: "SendMessage", Description: descriptionFor("SendMessage")},
 		func(ctx tool.Context, args SendMessageArgs) (SendMessageResult, error) {
 			if err := c.requireApproval(ctx, "SendMessage", marshalArgs(args)); err != nil {
 				return SendMessageResult{}, err

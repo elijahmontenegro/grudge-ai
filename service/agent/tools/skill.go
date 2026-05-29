@@ -15,7 +15,7 @@ import (
 
 func registerSkillTools(c *buildCtx) error {
 	skill, err := functiontool.New(
-		functiontool.Config{Name: "Skill", Description: "Invoke a skill by name with optional arguments. Skill content is injected as context."},
+		functiontool.Config{Name: "Skill", Description: descriptionFor("Skill")},
 		func(ctx tool.Context, args SkillArgs) (SkillResult, error) {
 			if err := c.requireApproval(ctx, "Skill", marshalArgs(args)); err != nil {
 				return SkillResult{}, err
@@ -37,7 +37,7 @@ func registerSkillTools(c *buildCtx) error {
 	}
 
 	todoWrite, err := functiontool.New(
-		functiontool.Config{Name: "TodoWrite", Description: "Create a structured task list for tracking work."},
+		functiontool.Config{Name: "TodoWrite", Description: descriptionFor("TodoWrite")},
 		func(ctx tool.Context, args TodoWriteArgs) (TodoWriteResult, error) {
 			if c.deps.Tasks == nil {
 				return TodoWriteResult{}, fmt.Errorf("task store not available")

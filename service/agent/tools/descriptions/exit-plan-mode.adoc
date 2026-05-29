@@ -1,0 +1,20 @@
+Signal that the plan artifact at `<plan-dir>/plan.adoc` is ready for
+the user to review. The plan is surfaced in the artifacts panel —
+the user sees it rendered there. You stay in plan mode after this
+call.
+
+USE for:
+- Signaling plan-ready after writing `plan.adoc`.
+- Re-signaling after revising the plan based on user feedback.
+
+DO NOT paraphrase, summarize, or re-state the plan in chat. That's
+redundant noise — the user sees the plan rendered in the panel. A
+single one-line acknowledgment ("Plan ready for review.") is enough.
+
+After this call:
+- The user either approves via the panel (mode flips to Normal,
+  next turn executes the plan).
+- The user rejects with feedback (you receive it as a chat message,
+  revise plan.adoc, call ExitPlanMode again).
+- The user sends a follow-up without approving — treat it as
+  iteration feedback and refine the plan.

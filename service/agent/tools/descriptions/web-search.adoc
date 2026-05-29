@@ -1,0 +1,24 @@
+Search the web for current information. Returns up to 8 results,
+each with a title, URL, and snippet. Backed by a configured search
+provider (e.g. SearXNG); if no provider is configured, the call
+fails with a clear error.
+
+USE for:
+- Looking up information that postdates your training cutoff.
+- Finding documentation, papers, or specs you don't have locally.
+- Verifying a fact you're not certain about.
+
+DON'T use for:
+- Things you already know with confidence — just answer (the
+  hedge_excision schema applies: if you have evidence, state the
+  call instead of searching).
+- Looking up a specific URL → use WebFetch directly.
+- Reading a local file → use FileRead.
+
+Parameters:
+- `query` (string, required): the search query. Plain text;
+  search-engine syntax (quotes, site:, etc.) is passed through.
+
+After search, follow up with WebFetch on the specific URLs that
+look promising — the snippet is usually too short to act on. Don't
+quote the snippet as if it were the authoritative source.

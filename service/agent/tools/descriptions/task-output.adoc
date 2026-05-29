@@ -1,0 +1,9 @@
+Get the description and current status of a specific task by ID.
+
+USE for:
+- Reading what a task says before deciding what to do with it.
+
+Parameters:
+- `task_id` (string, required): the task ID.
+
+This is a focused read — for the full task collection use TaskList.

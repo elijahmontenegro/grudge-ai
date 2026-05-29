@@ -1,0 +1,18 @@
+Create a task to track work progress. Returns the task ID, which
+you use with TaskGet / TaskUpdate / TaskStop / TaskOutput.
+
+USE for:
+- Work units within a turn that benefit from tracking (especially
+  autonomous loops where state across rounds matters).
+- Long-running operations whose status the user might want to see.
+
+DON'T use for:
+- One-step trivial work.
+- A replacement for actually doing the work.
+
+Parameters:
+- `description` (string, required): what the task is.
+- `output` (string, optional): initial output / notes.
+
+Set status via TaskUpdate as the work progresses: pending →
+in_progress → completed.

@@ -1,0 +1,20 @@
+Switch the thread into plan mode: a read-only investigation phase
+where write tools are disabled (except for writing the plan
+artifact itself). You use this when the user has signaled they want
+a plan before action.
+
+USE for:
+- Multi-step changes where the user wants to review the approach
+  before execution.
+- Refactors, architectural changes, anything where the diff might
+  surprise the user.
+
+After entering plan mode, follow the mode-plan section of the
+system prompt: explore with read tools, design an approach, write
+`plan.adoc` to the plan directory, then call ExitPlanMode.
+
+The mode flips automatically when the user approves the plan via
+the artifacts panel. You stay in plan mode through the iteration
+loop (write plan.adoc → ExitPlanMode → user reviews → either
+approve or reject with feedback → revise plan.adoc → ExitPlanMode
+again) until the user approves.

@@ -1,0 +1,19 @@
+Invoke a user-defined skill by name with optional arguments. The
+skill's body is loaded from disk and injected into the current
+turn's context as a tool result; you read it and incorporate it
+into your reasoning.
+
+USE for:
+- Reusable procedural knowledge the user has authored as a skill.
+- Domain-specific workflows the user wants invocable by name.
+
+Parameters:
+- `name` (string, required): the skill name (matches a file in the
+  skills directory).
+- `args` (string, optional): arguments passed via `$ARGUMENTS`
+  substitution in the skill body.
+
+The skill body is injected verbatim — including any persona,
+instructions, or constraints the skill author specified. Read it
+carefully before acting; the skill may impose its own conventions
+that override defaults for this turn.

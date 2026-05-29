@@ -1,0 +1,29 @@
+Read the contents of a file at `path`. Returns the full file content,
+or a slice if `offset` (zero-based line index) and `limit` (max lines)
+are provided. On sandboxed threads, paths are scoped to the workspace
+at `/workspace` — anything outside is rejected.
+
+USE for:
+- Reading source code, configs, docs, any text file.
+- Reading specific line ranges of large files via offset+limit (don't
+  read megabytes when you need lines 100-150).
+- Verifying the current state of a file before editing it (stale
+  assumptions are the #1 cause of broken edits).
+
+DON'T use for:
+- Listing files in a directory → use Glob.
+- Searching content across many files → use Grep.
+- Reading binary files (this tool returns text; binary content will
+  arrive mangled).
+
+Parameters:
+- `path` (string, required): absolute or relative path. On sandboxed
+  threads, must be under `/workspace`.
+- `offset` (int, optional): zero-based line index to start reading
+  from. Default 0 (start of file).
+- `limit` (int, optional): maximum number of lines to return. Default
+  unlimited.
+
+For large files (>2000 lines), prefer offset+limit over reading the
+whole thing. The model context budget is finite; reading a 10k-line
+file in one call wastes budget that future selections could use.

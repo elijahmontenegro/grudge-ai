@@ -1,0 +1,27 @@
+Find files whose paths match a glob pattern. Returns the list of
+matching paths. On sandboxed threads paths are scoped to `/workspace`.
+
+USE for:
+- Discovering files by name or extension (`**/*.go`, `service/**/*.tsx`).
+- Mapping a directory's contents structurally.
+- Finding all files of a kind before grepping their content.
+
+DON'T use for:
+- Searching file contents → use Grep.
+- Reading a file once you have its path → use FileRead.
+
+Parameters:
+- `pattern` (string, required): glob pattern. Standard shell-style
+  globbing (`*`, `**`, `?`, `[...]`).
+- `path` (string, optional): directory to search relative to (or
+  absolute, sandbox-scoped). Defaults to the current working dir
+  for the thread.
+
+The pattern matches against paths relative to the search root.
+Use `**/` to recurse into subdirectories.
+
+Common mistakes:
+- Using Bash `find` instead of Glob (loses sandbox scoping and
+  produces less structured output).
+- Forgetting `**/` and missing files in subdirectories.
+- Searching for a pattern that needs content matching (use Grep).

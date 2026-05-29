@@ -1,0 +1,41 @@
+Prompt the user with one or more multiple-choice questions and wait
+for their answers. Use this only when you genuinely need a decision
+that can't be inferred from context and where the wrong assumption
+is unrecoverable.
+
+Strong preference: do NOT ask. Apply the `assumption_surface` schema
+instead — assume the principled default, state both the assumption
+and the principle behind it, and continue. The user can correct
+cheaply; you cannot undo a wasted clarification round.
+
+USE for:
+- Choices with no principled default (subjective preferences,
+  brand/naming, multi-option workflows the user owns).
+- Operations whose wrong direction is destructive or expensive to
+  recover from.
+
+DON'T use for:
+- Choices where a principled default exists (use it and name it).
+- Confirming a request you already understand.
+- Splitting a clearly-stated request into a chain of mini-questions.
+
+Input: `questions` — a non-null array of 1-4 question objects. Each
+question MUST have ALL FOUR fields populated:
+- `question` (string): the complete question, ending with a question mark.
+- `header` (string): short chip label ≤20 chars (e.g. "Coffee", "Library").
+- `options` (array of 2-4 {label, description}): distinct choices. Do
+  NOT include an "Other" option — the UI adds a free-text escape
+  automatically.
+- `multiSelect` (boolean): true when the user may pick multiple
+  options; usually false.
+
+Exact shape you must emit:
+
+{"questions":[{"header":"Coffee","question":"How do you take your coffee?","multiSelect":false,"options":[{"label":"Black","description":"No milk, no sugar."},{"label":"With milk","description":"Splash of milk."},{"label":"Sweetened","description":"Sugar or syrup added."}]}]}
+
+DO NOT pass `questions: null` or omit the `options`/`header` fields —
+the call will error and you must retry with the full structure.
+
+Result: `answers` — a map from each question's text to the user's
+chosen label(s). Multi-select answers are comma-joined. "Other"
+returns the user's typed text.

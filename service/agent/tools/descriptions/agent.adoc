@@ -1,0 +1,29 @@
+Spawn a subagent to handle a complex task autonomously in a forked
+thread. The subagent runs with its own RRC state, its own tool
+permissions, and its own context budget — separate from the calling
+thread.
+
+USE for:
+- Parallel sub-tasks that don't share state with the main thread.
+- Long-running investigations whose intermediate context would
+  pollute the main thread's RRC corpus.
+- Work that benefits from a fresh context window (analyzing a large
+  artifact, doing deep code search).
+
+DON'T use for:
+- Tasks you can do directly in the current thread (subagents add
+  latency and context fragmentation).
+- Trivial single-call work (the spawn overhead isn't worth it).
+- Coordination-heavy work where the main thread needs to see
+  intermediate state (use SendMessage to drive a subagent
+  conversationally if you need that).
+
+Parameters:
+- `task` (string, required): clear instruction the subagent receives
+  as its initial user message.
+- `description` (string, required): one-line summary shown in the UI
+  while the subagent runs.
+
+Returns the subagent's thread ID. Subagents run asynchronously; use
+SendMessage to drive their conversation or follow their output via
+the agent's progress stream.

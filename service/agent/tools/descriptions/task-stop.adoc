@@ -1,0 +1,12 @@
+Mark a running task as completed and stop tracking it.
+
+USE for:
+- Tasks that finished but you forgot to mark in TaskUpdate as
+  completed.
+- Aborting a task partway through that no longer applies.
+
+Parameters:
+- `task_id` (string, required): the task ID.
+
+Equivalent to TaskUpdate with status=completed; provided as a
+convenience for end-of-work cleanup.

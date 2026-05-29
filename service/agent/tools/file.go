@@ -20,7 +20,7 @@ import (
 
 func registerFileReadTool(c *buildCtx) error {
 	fileRead, err := functiontool.New(
-		functiontool.Config{Name: "FileRead", Description: "Read file contents. Supports offset and limit for large files. On sandboxed threads paths are scoped to the workspace (/workspace)."},
+		functiontool.Config{Name: "FileRead", Description: descriptionFor("FileRead")},
 		func(ctx tool.Context, args FileReadArgs) (FileReadResult, error) {
 			hostPath, err := c.resolvePath(args.Path)
 			if err != nil {
@@ -51,7 +51,7 @@ func registerFileReadTool(c *buildCtx) error {
 
 func registerWriteTools(c *buildCtx) error {
 	fileEdit, err := functiontool.New(
-		functiontool.Config{Name: "FileEdit", Description: "Replace old_string with new_string in the file at path. The old_string must be unique in the file. On sandboxed threads paths are scoped to the workspace."},
+		functiontool.Config{Name: "FileEdit", Description: descriptionFor("FileEdit")},
 		func(ctx tool.Context, args FileEditArgs) (FileEditResult, error) {
 			hostPath, err := c.resolvePath(args.Path)
 			if err != nil {
@@ -86,7 +86,7 @@ func registerWriteTools(c *buildCtx) error {
 	}
 
 	fileWrite, err := functiontool.New(
-		functiontool.Config{Name: "FileWrite", Description: "Write text content to a file, creating parent directories as needed. BOTH `path` AND `content` are required — a call with only `path` will be rejected. On sandboxed threads paths are scoped to the workspace (/workspace); use relative paths like 'novel/ch1.md' or absolute paths like '/workspace/novel/ch1.md'. For large files, emit the full content in a single call; do not split across multiple calls (truncation corrupts the file)."},
+		functiontool.Config{Name: "FileWrite", Description: descriptionFor("FileWrite")},
 		func(ctx tool.Context, args FileWriteArgs) (FileWriteResult, error) {
 			hostPath, err := c.resolvePath(args.Path)
 			if err != nil {
@@ -115,7 +115,7 @@ func registerWriteTools(c *buildCtx) error {
 	}
 
 	notebookEdit, err := functiontool.New(
-		functiontool.Config{Name: "NotebookEdit", Description: "Edit a cell in a Jupyter notebook (.ipynb). Replaces the source content of the specified cell. On sandboxed threads paths are scoped to the workspace."},
+		functiontool.Config{Name: "NotebookEdit", Description: descriptionFor("NotebookEdit")},
 		func(ctx tool.Context, args NotebookEditArgs) (NotebookEditResult, error) {
 			hostPath, err := c.resolvePath(args.Path)
 			if err != nil {

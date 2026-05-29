@@ -1,0 +1,32 @@
+Write text content to a file at `path`, creating parent directories
+as needed. BOTH `path` AND `content` are required — a call with only
+`path` will be rejected. On sandboxed threads, paths are scoped to
+`/workspace`; use relative paths (`novel/ch1.md`) or absolute paths
+starting with `/workspace/`.
+
+USE for:
+- Creating new files.
+- Wholesale replacement of an existing file's content (when surgical
+  edit isn't applicable).
+- Writing artifacts (plan.adoc, generated output, etc.).
+
+DON'T use for:
+- Surgical edits to an existing file → use FileEdit (smaller diff,
+  preserves surrounding content).
+- Appending to a file (this tool overwrites; use FileEdit to insert
+  before an end-marker, or use FileRead + FileWrite with concatenated
+  content if you must replace wholesale).
+
+Parameters:
+- `path` (string, required): destination file path.
+- `content` (string, required): the full content to write. Must be
+  the complete file contents, not a partial fragment.
+
+Critical: emit the FULL content in a single call. Do not split a
+large file across multiple FileWrite calls — each call replaces the
+file, so subsequent writes truncate prior writes. The result of
+splitting is a file that contains only the last call's content.
+This has corrupted real files in past sessions.
+
+Approval is required (the tool is write-side). Plan mode disables
+this tool except for writes to the plan directory.
