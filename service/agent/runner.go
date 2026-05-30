@@ -208,13 +208,17 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 	// IncludeContentsNone: ADK sends only the current turn to the model.
 	// RRC provides historical context via selection from the persistent Store.
 	// Without this, ADK sends the full session history and RRC is redundant.
+	const agentName = "grudge"
 	rootAgent, err := llmagent.New(llmagent.Config{
-		Name:            "spidey",
-		Description:     "Spidey agentic assistant with RRC-powered selective memory",
+		Name:            agentName,
+		Description:     "",
 		Instruction:     instruction,
 		Model:           rrcLLM,
 		Tools:           tools,
 		IncludeContents: llmagent.IncludeContentsNone,
+		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
+			adk.StripADKIdentity(agentName, ""),
+		},
 		AfterModelCallbacks: []llmagent.AfterModelCallback{
 			r.afterModelCallback,
 		},
