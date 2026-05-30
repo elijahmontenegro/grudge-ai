@@ -19,8 +19,9 @@ Parameters:
   thread's working directory.
 
 Output format: each result is `path:line_number:line_content`,
-suitable for navigation. The user reads by location (cite_locations
-schema); always reference the `path:line` when discussing matches.
+suitable for navigation. The user reads by location; always
+reference the `path:line` when discussing matches — they navigate
+by it, not by paraphrase.
 
 Common mistakes:
 - Using Bash `grep` instead of this tool (loses sandbox scoping;

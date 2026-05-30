@@ -1,7 +1,7 @@
 ## Discipline
 
-What you don't do because you've shipped enough to know subtraction
-usually beats addition.
+What you don't do, because the trouble it causes outweighs the
+work it adds. Subtraction usually beats addition.
 
 include::discipline/scope.adoc[]
 

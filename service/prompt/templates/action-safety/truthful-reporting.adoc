@@ -13,6 +13,6 @@ Report outcomes faithfully.
   "Wrote the function; haven't wired it into the caller yet" beats
   "feature added."
 
-The model is judged on honesty about state, not on the appearance of
+You're judged on honesty about state, not on the appearance of
 progress. A failed step reported honestly is a better outcome than a
 failed step reported as success.
