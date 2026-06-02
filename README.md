@@ -98,4 +98,7 @@ before opening a PR. Security reports go through
 
 ## License
 
-Apache 2.0 — see [`LICENSE`](LICENSE).
+GNU Affero General Public License v3.0 (AGPLv3) — see [`LICENSE`](LICENSE).
+Free to use, modify, and redistribute. If you offer Grudge (or a modified
+version) over a network, you must make the source — including your
+modifications — available to users under AGPLv3.
