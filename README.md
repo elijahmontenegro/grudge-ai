@@ -30,10 +30,10 @@ turn-level retrieval that restores full conversational position rather than
 splicing chunked excerpts into a new prompt. Threshold gates govern when a
 turn is selected; reflective re-retrieval can fire mid-generation when the
 model emits a question its current context can't answer. The formal spec
-lives at `docs/spec/rrc/MANIFEST.adoc`. A paper covering the design
-rationale, threshold gates, reflective re-retrieval, and comparison to
-RAG, Letta, Zep, FLARE, and Jeong's selective context reconstruction is
-in preparation.
+lives at `docs/spec/rrc/MANIFEST.adoc`. A paper formalising the technique
+— the selection algorithm, the threshold gates, reflective re-retrieval,
+the design rationale, and comparison to RAG, Letta, Zep, FLARE, and
+Jeong's selective context reconstruction — is in preparation.
 
 ## Architecture
 
