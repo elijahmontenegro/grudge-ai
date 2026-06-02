@@ -1,39 +1,37 @@
 # Grudge
 
-Grudge is an open-source LLM agent framework.
+[![CI](https://github.com/elijahmontenegro/grudge-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/elijahmontenegro/grudge-ai/actions/workflows/ci.yml)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/github/go-mod/go-version/elijahmontenegro/grudge-ai)](go.mod)
+
+Grudge is an open-source, local-first LLM agent framework.
+
+A single Go binary runs in the system tray and serves the agentic
+terminal to your browser at `grudge.localhost`. Electron without the
+Electron. No bundled Chromium. Pragmatic, extensible, light.
 
 <!-- Drop a screenshot at docs/assets/screenshot.png and uncomment: -->
 <!-- ![Grudge UI](docs/assets/screenshot.png) -->
 
 ## Memory
 
-Conversation history is stored as-is — every turn, including tool calls
-and tool results, in its original format.
+LLMs are stateless. To sustain a conversation, the orchestrator sends
+prior messages on every call. Sending the whole history runs into
+context-window limits and context rot.
 
-When a new turn arrives, prior turns are scored: a bi-encoder picks a
-candidate set by embedding similarity; a cross-encoder scores each
-candidate against the new turn. A turn is selected when its
-cross-encoder score clears three threshold gates — above a raw floor,
-above a z-score threshold relative to the candidate batch's mean, and
-the batch's own standard deviation must exceed a minimum (if the
-cross-encoder can't discriminate this batch, the round returns nothing).
+Grudge stores conversation history losslessly — every message,
+including tool calls and tool results, in its original format. On
+every turn, the orchestrator finds the prior messages the new message
+depends on and includes only those, restored as plain conversation
+turns indistinguishable from the new turn. The model receives a
+coherent, bounded input regardless of how long the stored history has
+grown. There's no separate "session"; the stored history is the
+conversation.
 
-Selected turns are prepended to the LLM input before the new turn, in
-the same conversation format they were stored in — same role tags,
-same content blocks, same position semantics. There's no
-`Here is some relevant context: …` wrapper and no separate context
-block; the input to the model is a conversation transcript that's
-shorter than the full history.
-
-This technique is documented as Retrieval-Restored Continuation (RRC) —
-turn-level retrieval that restores full conversational position rather than
-splicing chunked excerpts into a new prompt. Threshold gates govern when a
-turn is selected; reflective re-retrieval can fire mid-generation when the
-model emits a question its current context can't answer. The formal spec
-lives at `docs/spec/rrc/MANIFEST.adoc`. A paper formalising the technique
-— the selection algorithm, the threshold gates, reflective re-retrieval,
-the design rationale, and comparison to RAG, Letta, Zep, FLARE, and
-Jeong's selective context reconstruction — is in preparation.
+This technique is Retrieval-Restored Continuation (RRC). A paper
+formalising it is in preparation, with comparisons to RAG, Letta, Zep,
+FLARE, and Jeong's selective context reconstruction. How Grudge
+implements it lives at `docs/spec/rrc/MANIFEST.adoc`.
 
 ## Architecture
 
