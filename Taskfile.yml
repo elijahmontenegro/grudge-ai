@@ -44,6 +44,11 @@ tasks:
   verify:
     desc: Run every CI invariant — lint, dep-graph checks, gqlgen freshness, Go tests, web tests
     cmds:
+      # embed-sync first: lint and test type-check service/cmd/grudge/main.go,
+      # which has //go:embed all:dist — the dist directory must exist before
+      # go vet / go test runs or it fails "pattern all:dist: no matching files
+      # found." embed-sync (deps: web:build) is the canonical way to populate it.
+      - task: embed-sync
       - task: lint
       - task: verify:deps
       - task: gqlgen:check
