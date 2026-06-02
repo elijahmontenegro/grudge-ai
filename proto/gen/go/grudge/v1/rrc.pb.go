@@ -778,8 +778,8 @@ const file_grudge_v1_rrc_proto_rawDesc = "" +
 	"\x1cEXCLUSION_REASON_UNSPECIFIED\x10\x00\x12$\n" +
 	" EXCLUSION_REASON_BELOW_THRESHOLD\x10\x01\x12)\n" +
 	"%EXCLUSION_REASON_TRANSITIVE_REDUCTION\x10\x02\x12 \n" +
-	"\x1cEXCLUSION_REASON_DEPTH_LIMIT\x10\x03B\x8d\x01\n" +
-	"\rcom.grudge.v1B\bRrcProtoP\x01Z-github.com/emontenegr/grudge/gen/go/grudge/v1\xa2\x02\x03GXX\xaa\x02\tGrudge.V1\xca\x02\tGrudge\\V1\xe2\x02\x15Grudge\\V1\\GPBMetadata\xea\x02\n" +
+	"\x1cEXCLUSION_REASON_DEPTH_LIMIT\x10\x03B\x93\x01\n" +
+	"\rcom.grudge.v1B\bRrcProtoP\x01Z3github.com/elijahmontenegro/grudge/gen/go/grudge/v1\xa2\x02\x03GXX\xaa\x02\tGrudge.V1\xca\x02\tGrudge\\V1\xe2\x02\x15Grudge\\V1\\GPBMetadata\xea\x02\n" +
 	"Grudge::V1b\x06proto3"
 
 var (

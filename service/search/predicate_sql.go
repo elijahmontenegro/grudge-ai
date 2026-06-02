@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/emontenegr/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc"
 )
 
 // compilePredicate lowers an rrc.Predicate to a SQL WHERE clause and

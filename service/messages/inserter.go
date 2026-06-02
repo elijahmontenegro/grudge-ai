@@ -13,10 +13,10 @@
 package messages
 
 import (
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/rrc"
-	"github.com/emontenegr/grudge/rrc/chunk"
-	"github.com/emontenegr/grudge/service/storage"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
+	"github.com/elijahmontenegro/grudge/service/storage"
 )
 
 // Inserter persists a message and its chunks, then enqueues an embed

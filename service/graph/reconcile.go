@@ -3,7 +3,7 @@ package graph
 import (
 	"context"
 
-	"github.com/emontenegr/grudge/service/runtime"
+	"github.com/elijahmontenegro/grudge/service/runtime"
 )
 
 // ReconcileOnBoot is the thin graph-side entry point the boot

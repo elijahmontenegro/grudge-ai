@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emontenegr/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc"
 )
 
 func TestCompilePredicate(t *testing.T) {

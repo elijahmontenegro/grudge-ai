@@ -1,6 +1,6 @@
 package rrc
 
-import pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+import pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 
 // dag is the prerequisite DAG. Dual adjacency list — two indexes over the same
 // edge set. Backward: message → its prerequisites. Forward: message → its dependents.

@@ -3,10 +3,10 @@ package adk
 import (
 	"testing"
 
-	"github.com/emontenegr/grudge/core"
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/rrc/chunk"
-	"github.com/emontenegr/grudge/rrc/tiktoken"
+	"github.com/elijahmontenegro/grudge/core"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
+	"github.com/elijahmontenegro/grudge/rrc/tiktoken"
 )
 
 func init() {

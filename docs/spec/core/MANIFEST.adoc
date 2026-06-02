@@ -308,7 +308,7 @@ Syntax: {proto-syntax}.
 ----
 syntax = "proto3";
 package grudge.v1;
-option go_package = "github.com/emontenegr/grudge/proto/gen/go/grudge/v1";
+option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1";
 import "google/protobuf/timestamp.proto";
 
 enum Role {
@@ -367,7 +367,7 @@ enum SelectionScope {
 ----
 syntax = "proto3";
 package grudge.v1;
-option go_package = "github.com/emontenegr/grudge/proto/gen/go/grudge/v1";
+option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1";
 import "google/protobuf/timestamp.proto";
 import "grudge/v1/thread.proto";
 
@@ -455,7 +455,7 @@ message CarryForwardInput {
 ----
 syntax = "proto3";
 package grudge.v1;
-option go_package = "github.com/emontenegr/grudge/proto/gen/go/grudge/v1";
+option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1";
 import "google/protobuf/struct.proto";
 import "grudge/v1/thread.proto";
 

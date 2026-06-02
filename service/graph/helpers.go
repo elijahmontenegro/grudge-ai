@@ -3,7 +3,7 @@ package graph
 import (
 	"strings"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
 
 // protoRoleToDisplay maps proto roles to frontend-friendly names.

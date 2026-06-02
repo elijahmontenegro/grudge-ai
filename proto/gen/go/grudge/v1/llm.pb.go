@@ -710,8 +710,8 @@ const file_grudge_v1_llm_proto_rawDesc = "" +
 	"\x15TOOL_CHOICE_MODE_AUTO\x10\x01\x12\x19\n" +
 	"\x15TOOL_CHOICE_MODE_NONE\x10\x02\x12\x1d\n" +
 	"\x19TOOL_CHOICE_MODE_REQUIRED\x10\x03\x12\x1a\n" +
-	"\x16TOOL_CHOICE_MODE_NAMED\x10\x04B\x8d\x01\n" +
-	"\rcom.grudge.v1B\bLlmProtoP\x01Z-github.com/emontenegr/grudge/gen/go/grudge/v1\xa2\x02\x03GXX\xaa\x02\tGrudge.V1\xca\x02\tGrudge\\V1\xe2\x02\x15Grudge\\V1\\GPBMetadata\xea\x02\n" +
+	"\x16TOOL_CHOICE_MODE_NAMED\x10\x04B\x93\x01\n" +
+	"\rcom.grudge.v1B\bLlmProtoP\x01Z3github.com/elijahmontenegro/grudge/gen/go/grudge/v1\xa2\x02\x03GXX\xaa\x02\tGrudge.V1\xca\x02\tGrudge\\V1\xe2\x02\x15Grudge\\V1\\GPBMetadata\xea\x02\n" +
 	"Grudge::V1b\x06proto3"
 
 var (

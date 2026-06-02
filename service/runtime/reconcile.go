@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/emontenegr/grudge/service/agent"
-	"github.com/emontenegr/grudge/service/storage"
+	"github.com/elijahmontenegro/grudge/service/agent"
+	"github.com/elijahmontenegro/grudge/service/storage"
 )
 
 // ReconcileOnBoot normalizes agent_state rows that were left

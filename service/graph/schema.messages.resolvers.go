@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/rrc"
-	"github.com/emontenegr/grudge/service/internal/adoc"
-	"github.com/emontenegr/grudge/service/storage"
+	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/service/internal/adoc"
+	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

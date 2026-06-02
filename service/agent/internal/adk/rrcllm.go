@@ -8,12 +8,12 @@ import (
 	"log"
 	"math"
 
-	"github.com/emontenegr/grudge/core"
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/rrc"
-	"github.com/emontenegr/grudge/rrc/chunk"
-	"github.com/emontenegr/grudge/service/search"
-	"github.com/emontenegr/grudge/service/storage"
+	"github.com/elijahmontenegro/grudge/core"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
+	"github.com/elijahmontenegro/grudge/service/search"
+	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )

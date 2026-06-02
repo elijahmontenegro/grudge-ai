@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/emontenegr/grudge/core"
+	"github.com/elijahmontenegro/grudge/core"
 )
 
 // StatusError is the typed error returned when an upstream provider

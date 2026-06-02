@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/emontenegr/grudge/service/internal/adoc"
+	"github.com/elijahmontenegro/grudge/service/internal/adoc"
 )
 
 // Tool descriptions are authored content the model reads inline with

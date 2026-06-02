@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/emontenegr/grudge/core"
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/core"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
 
 // Codec implements core.Codec for the Anthropic Messages wire

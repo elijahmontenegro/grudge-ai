@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
 
 // Codec is the bidirectional mapping between one LLM wire format and

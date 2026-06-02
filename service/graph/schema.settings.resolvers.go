@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/emontenegr/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/config"
 )
 
 // UpdateSettings is the resolver for the updateSettings field.

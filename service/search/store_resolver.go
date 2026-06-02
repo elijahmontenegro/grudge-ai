@@ -22,9 +22,9 @@ import (
 	"fmt"
 	"sort"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/rrc"
-	"github.com/emontenegr/grudge/service/storage"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/service/storage"
 )
 
 // StoreResolver is the storage-backed implementation of rrc.Resolver

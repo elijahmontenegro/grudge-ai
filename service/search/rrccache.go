@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/core"
-	"github.com/emontenegr/grudge/rrc"
-	"github.com/emontenegr/grudge/service/storage"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/protobuf/proto"
 )
 

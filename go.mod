@@ -1,4 +1,4 @@
-module github.com/emontenegr/grudge
+module github.com/elijahmontenegro/grudge
 
 go 1.25.0
 

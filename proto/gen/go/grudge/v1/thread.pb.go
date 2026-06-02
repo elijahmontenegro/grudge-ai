@@ -874,8 +874,8 @@ const file_grudge_v1_thread_proto_rawDesc = "" +
 	"\x0eSelectionScope\x12\x1f\n" +
 	"\x1bSELECTION_SCOPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SELECTION_SCOPE_THREAD\x10\x01\x12\x1f\n" +
-	"\x1bSELECTION_SCOPE_ALL_THREADS\x10\x02B\x90\x01\n" +
-	"\rcom.grudge.v1B\vThreadProtoP\x01Z-github.com/emontenegr/grudge/gen/go/grudge/v1\xa2\x02\x03GXX\xaa\x02\tGrudge.V1\xca\x02\tGrudge\\V1\xe2\x02\x15Grudge\\V1\\GPBMetadata\xea\x02\n" +
+	"\x1bSELECTION_SCOPE_ALL_THREADS\x10\x02B\x96\x01\n" +
+	"\rcom.grudge.v1B\vThreadProtoP\x01Z3github.com/elijahmontenegro/grudge/gen/go/grudge/v1\xa2\x02\x03GXX\xaa\x02\tGrudge.V1\xca\x02\tGrudge\\V1\xe2\x02\x15Grudge\\V1\\GPBMetadata\xea\x02\n" +
 	"Grudge::V1b\x06proto3"
 
 var (

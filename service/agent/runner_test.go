@@ -7,10 +7,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/rrc/chunk"
-	"github.com/emontenegr/grudge/rrc/tiktoken"
-	"github.com/emontenegr/grudge/service/storage"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
+	"github.com/elijahmontenegro/grudge/rrc/tiktoken"
+	"github.com/elijahmontenegro/grudge/service/storage"
 
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"

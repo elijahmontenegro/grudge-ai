@@ -1,6 +1,6 @@
 package openai
 
-import "github.com/emontenegr/grudge/core"
+import "github.com/elijahmontenegro/grudge/core"
 
 func init() {
 	core.RegisterProvider("openai", func(cfg core.ProviderConfig) (any, error) {

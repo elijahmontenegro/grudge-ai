@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/emontenegr/grudge/core"
-	"github.com/emontenegr/grudge/core/internal/httpc"
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/core/internal/httpc"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
 
 // Config for the OpenAI provider. Configurable BaseURL supports any

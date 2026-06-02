@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc"
 )
 
 // Score is the resolver for the score field.

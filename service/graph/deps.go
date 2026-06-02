@@ -1,8 +1,8 @@
 package graph
 
 import (
-	"github.com/emontenegr/grudge/core/httpc/retry"
-	"github.com/emontenegr/grudge/service/runtime"
+	"github.com/elijahmontenegro/grudge/core/httpc/retry"
+	"github.com/elijahmontenegro/grudge/service/runtime"
 )
 
 // runtimeDeps assembles the runtime.Deps bundle for the runner

@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emontenegr/grudge/core"
+	"github.com/elijahmontenegro/grudge/core"
 )
 
 // Policy controls retry behavior.

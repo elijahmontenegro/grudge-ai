@@ -3,7 +3,7 @@ package rrc
 import (
 	"testing"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
 
 // fakeResolver — Resolver stub for rule tests. Given a list of

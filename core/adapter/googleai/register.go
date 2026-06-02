@@ -1,6 +1,6 @@
 package googleai
 
-import "github.com/emontenegr/grudge/core"
+import "github.com/elijahmontenegro/grudge/core"
 
 func init() {
 	core.RegisterProvider("googleai", func(cfg core.ProviderConfig) (any, error) {

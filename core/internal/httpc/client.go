@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emontenegr/grudge/core"
+	"github.com/elijahmontenegro/grudge/core"
 )
 
 const (

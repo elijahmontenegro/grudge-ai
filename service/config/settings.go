@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emontenegr/grudge/core"
-	"github.com/emontenegr/grudge/service/secrets"
+	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/service/secrets"
 )
 
 // Settings represents the service configuration from config.json.

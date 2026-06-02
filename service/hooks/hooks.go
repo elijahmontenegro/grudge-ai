@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emontenegr/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/config"
 )
 
 // Event types for lifecycle hooks.

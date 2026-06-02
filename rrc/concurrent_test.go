@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
 
 // TestAssemble_ConcurrentSameEngine — N concurrent Assemble calls on

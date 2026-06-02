@@ -5,8 +5,8 @@ import (
 	"errors"
 
 	"github.com/99designs/gqlgen/graphql"
-	"github.com/emontenegr/grudge/core"
-	"github.com/emontenegr/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 

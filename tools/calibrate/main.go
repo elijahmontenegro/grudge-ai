@@ -13,8 +13,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/emontenegr/grudge/core"
-	_ "github.com/emontenegr/grudge/core/adapter/zerank"
+	"github.com/elijahmontenegro/grudge/core"
+	_ "github.com/elijahmontenegro/grudge/core/adapter/zerank"
 )
 
 type triple struct {

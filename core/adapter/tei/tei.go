@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emontenegr/grudge/core"
-	"github.com/emontenegr/grudge/core/internal/httpc"
-	"github.com/emontenegr/grudge/core/httpc/retry"
+	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/core/internal/httpc"
+	"github.com/elijahmontenegro/grudge/core/httpc/retry"
 )
 
 // teiRetryPolicy is the retry shape for a single TEI HTTP call.

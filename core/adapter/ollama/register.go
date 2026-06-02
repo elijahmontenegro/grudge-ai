@@ -1,6 +1,6 @@
 package ollama
 
-import "github.com/emontenegr/grudge/core"
+import "github.com/elijahmontenegro/grudge/core"
 
 func init() {
 	core.RegisterProvider("ollama", func(cfg core.ProviderConfig) (any, error) {

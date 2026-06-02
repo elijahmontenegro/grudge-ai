@@ -3,7 +3,7 @@ package tei
 import (
 	"strings"
 
-	"github.com/emontenegr/grudge/core"
+	"github.com/elijahmontenegro/grudge/core"
 )
 
 // queryPrefixForModel returns the canonical query-side instruction prefix

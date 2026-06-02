@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package grudge.v1;
 
-option go_package = "github.com/emontenegr/grudge/gen/go/grudge/v1";
+option go_package = "github.com/elijahmontenegro/grudge/gen/go/grudge/v1";
 
 import "grudge/v1/thread.proto";
 

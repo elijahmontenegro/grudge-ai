@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
 
 type chatRequest struct {

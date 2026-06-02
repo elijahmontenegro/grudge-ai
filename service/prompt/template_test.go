@@ -15,7 +15,7 @@ var updateGoldens = flag.Bool("update", false, "rewrite golden files with curren
 // from system.adoc must produce the same output for the same fixture.
 func fixture(mode string) TemplateData {
 	return TemplateData{
-		UserName:    "emontenegr",
+		UserName:    "elijahmontenegro",
 		ThreadName:  "test",
 		Sandboxed:   false,
 		WorkingDirs: []string{"/test"},

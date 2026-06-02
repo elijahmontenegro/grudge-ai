@@ -28,13 +28,13 @@ import (
 	"os"
 	"sort"
 
-	"github.com/emontenegr/grudge/service/agent/tools"
-	"github.com/emontenegr/grudge/service/prompt"
+	"github.com/elijahmontenegro/grudge/service/agent/tools"
+	"github.com/elijahmontenegro/grudge/service/prompt"
 )
 
 func main() {
 	mode := flag.String("mode", "normal", "agent mode: normal, plan, autonomous")
-	userName := flag.String("user", "emontenegr", "user name for the User section")
+	userName := flag.String("user", "elijahmontenegro", "user name for the User section")
 	threadName := flag.String("thread", "promptdump", "thread name")
 	sandboxed := flag.Bool("sandboxed", false, "sandbox flag")
 	showPrompt := flag.Bool("prompt", true, "render the system prompt")

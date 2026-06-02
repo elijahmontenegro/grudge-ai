@@ -7,7 +7,7 @@ import "context"
 //
 // The interface duplicates core.Scorer intentionally. rrc/ is a
 // standalone library subpackage of grudge: consumers can
-// `go get github.com/emontenegr/grudge/rrc` without pulling all of
+// `go get github.com/elijahmontenegro/grudge/rrc` without pulling all of
 // core/. Depending on core.Scorer would force consumers to take
 // core's broader interface surface (Completer, Embedder, Codec,
 // Provider, retry policy) for one method. Go's structural typing

@@ -18,12 +18,12 @@ import (
 	"log"
 	"time"
 
-	"github.com/emontenegr/grudge/core"
-	"github.com/emontenegr/grudge/rrc"
-	"github.com/emontenegr/grudge/rrc/chunk"
-	"github.com/emontenegr/grudge/service/config"
-	"github.com/emontenegr/grudge/service/search"
-	"github.com/emontenegr/grudge/service/storage"
+	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
+	"github.com/elijahmontenegro/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/search"
+	"github.com/elijahmontenegro/grudge/service/storage"
 )
 
 // backfillChunks populates the chunks table for every message

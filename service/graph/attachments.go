@@ -22,7 +22,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/emontenegr/grudge/service/storage"
+	"github.com/elijahmontenegro/grudge/service/storage"
 
 	"github.com/google/uuid"
 )

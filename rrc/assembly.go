@@ -7,8 +7,8 @@ import (
 	"math"
 	"time"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/rrc/chunk"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
 
 // Assemble produces a wire-ready prompt for the Query message under

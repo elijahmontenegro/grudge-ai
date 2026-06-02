@@ -7,7 +7,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/emontenegr/grudge/service/internal/adoc"
+	"github.com/elijahmontenegro/grudge/service/internal/adoc"
 )
 
 // Templates are baked into the binary. The composition root

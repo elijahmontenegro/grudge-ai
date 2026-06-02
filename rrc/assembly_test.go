@@ -3,7 +3,7 @@ package rrc
 import (
 	"testing"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
 
 // hasTextBlock guards dynamical Radius reachback (Phase B.2). The

@@ -22,9 +22,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/emontenegr/grudge/core"
-	_ "github.com/emontenegr/grudge/core/adapter/tei"
-	_ "github.com/emontenegr/grudge/core/adapter/zerank"
+	"github.com/elijahmontenegro/grudge/core"
+	_ "github.com/elijahmontenegro/grudge/core/adapter/tei"
+	_ "github.com/elijahmontenegro/grudge/core/adapter/zerank"
 )
 
 func main() {

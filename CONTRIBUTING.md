@@ -9,7 +9,7 @@ how to develop, test, and submit changes. For design rationale, see
 Requires Go 1.25+, Node 20+, Docker, and [go-task](https://taskfile.dev).
 
 ```bash
-git clone https://github.com/emontenegr/grudge-ai.git
+git clone https://github.com/elijahmontenegro/grudge-ai.git
 cd grudge-ai
 task substrate:up   # start TEI + vLLM + SearXNG containers
 task build          # build the web bundle + the Go binary

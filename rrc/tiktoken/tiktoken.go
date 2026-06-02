@@ -18,7 +18,7 @@ import (
 
 	"github.com/pkoukk/tiktoken-go"
 
-	"github.com/emontenegr/grudge/rrc/chunk"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
 
 const encoding = "cl100k_base"

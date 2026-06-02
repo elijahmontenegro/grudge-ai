@@ -1,6 +1,6 @@
 package anthropic
 
-import "github.com/emontenegr/grudge/core"
+import "github.com/elijahmontenegro/grudge/core"
 
 func init() {
 	core.RegisterProvider("anthropic", func(cfg core.ProviderConfig) (any, error) {

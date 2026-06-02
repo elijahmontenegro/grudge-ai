@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/service/agent/tools"
-	"github.com/emontenegr/grudge/service/hooks"
-	"github.com/emontenegr/grudge/service/storage"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/service/agent/tools"
+	"github.com/elijahmontenegro/grudge/service/hooks"
+	"github.com/elijahmontenegro/grudge/service/storage"
 )
 
 // toolAgent implements tools.Agent by closing over the kernel

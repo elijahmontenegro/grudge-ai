@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
-	"github.com/emontenegr/grudge/rrc/chunk"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
 
 // charEstimator is a deterministic 4-chars-per-token estimator. The
