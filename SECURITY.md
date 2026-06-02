@@ -39,7 +39,7 @@ What Grudge does **not** protect against:
 
 **Please don't file security issues as public GitHub issues.**
 
-Use GitHub's [private security advisories](https://github.com/emontenegr/grudge/security/advisories/new)
+Use GitHub's [private security advisories](https://github.com/emontenegr/grudge-ai/security/advisories/new)
 to report. Include a description, reproduction, and impact. We'll acknowledge
 within 7 days.
 

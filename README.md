@@ -25,11 +25,12 @@ same content blocks, same position semantics. There's no
 block; the input to the model is a conversation transcript that's
 shorter than the full history.
 
-This technique is documented as Retrieval-Restored Continuation (RRC):
-[docs/rrc-paper.md](docs/rrc-paper.md). The paper covers the design
-rationale, the threshold gates, reflective re-retrieval mid-generation,
-and comparison to RAG, Letta, Zep, FLARE, and Jeong's selective
-context reconstruction.
+This technique is documented as Retrieval-Restored Continuation (RRC) —
+turn-level retrieval that restores full conversational position rather than
+splicing chunked excerpts into a new prompt. Threshold gates govern when a
+turn is selected; reflective re-retrieval can fire mid-generation when the
+model emits a question its current context can't answer. The formal
+treatment lives in the AsciiDoc spec (`docs/spec/rrc/MANIFEST.adoc`).
 
 ## Architecture
 
