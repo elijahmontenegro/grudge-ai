@@ -1,5 +1,5 @@
-= Spidey Service
-:project-name: Spidey
+= Grudge Service
+:project-name: Grudge
 :module-name: Service
 :rrc-full: Retrieval-Restored Continuation
 :lang: Go 1.26.1
@@ -75,7 +75,7 @@ A permission state transition. The service switches the agent to read-only mode:
 
 1. **Enter:** `EnterPlanMode` tool call. Service transitions permission state to `plan`. Write tools disabled. Plan mode prompt section included. Agent explores using read-only tools.
 2. **Explore:** Agent reads code, searches for patterns, identifies critical files. Multiple turns of exploration before designing.
-3. **Write plan:** Agent creates a plan directory -- `$XDG_DATA_HOME/spidey/plans/{slug}/` with `plan.adoc` as the entry point. Slug generated per plan (human-readable, unique per thread). The agent writes the plan and supporting artifacts (research notes, code analysis, architectural findings from the exploration phase). AsciiDoc `include::` directives compose artifacts into the plan. The agent builds the directory; the service creates it on first write.
+3. **Write plan:** Agent creates a plan directory -- `$XDG_DATA_HOME/grudge/plans/{slug}/` with `plan.adoc` as the entry point. Slug generated per plan (human-readable, unique per thread). The agent writes the plan and supporting artifacts (research notes, code analysis, architectural findings from the exploration phase). AsciiDoc `include::` directives compose artifacts into the plan. The agent builds the directory; the service creates it on first write.
 4. **Exit:** `ExitPlanMode` tool call. Service compiles the plan directory (resolves includes) and surfaces it to the user in the web UI for review. User approves, optionally edits, or rejects.
 5. **Post-approval:** Service restores previous permission state (write tools re-enabled). Plan content enters the thread as a message (available for RRC selection). Plan file persists on disk. Plan content injected as per-turn prompt section -- the agent sees the plan on every subsequent request.
 
@@ -159,11 +159,11 @@ The service sends the full selection to the LLM. If the model returns a context-
 
 ==== Platform Paths (XDG Base Directory Specification)
 
-Spidey follows XDG for all platform paths:
+Grudge follows XDG for all platform paths:
 
-- **Config:** `$XDG_CONFIG_HOME/spidey/` (settings, provider config, permissions)
-- **Data:** `$XDG_DATA_HOME/spidey/` (SQLite database, threads, plans, skills)
-- **Cache:** `$XDG_CACHE_HOME/spidey/` (memoized prompt sections, temporary artifacts)
+- **Config:** `$XDG_CONFIG_HOME/grudge/` (settings, provider config, permissions)
+- **Data:** `$XDG_DATA_HOME/grudge/` (SQLite database, threads, plans, skills)
+- **Cache:** `$XDG_CACHE_HOME/grudge/` (memoized prompt sections, temporary artifacts)
 
 ==== Prompt Templates (PEaC -- Prompt Engineering as Code)
 
@@ -178,7 +178,7 @@ Stable sections (memoized, recomputed on config change or thread switch):
 - User identity: full name, preferences (from onboarding)
 - System: OS, available tools
 - Thread context: mounted directories, thread name
-- SPIDEY.md: project-level instructions from mounted directories
+- GRUDGE.md: project-level instructions from mounted directories
 
 Per-turn sections (recomputed each request):
 
@@ -192,11 +192,11 @@ Mode-conditional sections (included based on permission state):
 
 Templates are not user-facing. They are engineering artifacts maintained in the codebase.
 
-**Design principle: don't put discoverable information in the prompt.** The system prompt contains only what the model cannot figure out on its own. User identity, thread name, mounted directories, SPIDEY.md instructions, active plan content -- these are non-discoverable. Git status, file trees, directory listings, file contents -- the model discovers these through tools. The prompt is lean.
+**Design principle: don't put discoverable information in the prompt.** The system prompt contains only what the model cannot figure out on its own. User identity, thread name, mounted directories, GRUDGE.md instructions, active plan content -- these are non-discoverable. Git status, file trees, directory listings, file contents -- the model discovers these through tools. The prompt is lean.
 
-==== SPIDEY.md
+==== GRUDGE.md
 
-Any mounted directory can contain a `SPIDEY.md` file. The template system picks it up automatically and injects its content into the system prompt. Project-level instructions without configuration. Multiple mounted directories can each have their own `SPIDEY.md` — all are injected. This is the abstraction for project-specific prompt injection: drop a file, it works.
+Any mounted directory can contain a `GRUDGE.md` file. The template system picks it up automatically and injects its content into the system prompt. Project-level instructions without configuration. Multiple mounted directories can each have their own `GRUDGE.md` — all are injected. This is the abstraction for project-specific prompt injection: drop a file, it works.
 
 ==== User Profile
 
@@ -208,8 +208,8 @@ Markdown files with YAML frontmatter. User-extensible capabilities — domain-sp
 
 Loaded from (priority order):
 
-1. User (`$XDG_DATA_HOME/spidey/skills/`)
-2. Project (`.spidey/skills/` in mounted directory)
+1. User (`$XDG_DATA_HOME/grudge/skills/`)
+2. Project (`.grudge/skills/` in mounted directory)
 
 No bundled skills. Users create their own.
 
@@ -230,11 +230,11 @@ Events:
 
 A hook can: block a tool call (agent sees denial), modify tool input, inject context, or run silently.
 
-Configured in settings (`$XDG_CONFIG_HOME/spidey/settings.json`), per-thread or global. Trust-gated — hooks only execute after workspace trust is accepted.
+Configured in settings (`$XDG_CONFIG_HOME/grudge/settings.json`), per-thread or global. Trust-gated — hooks only execute after workspace trust is accepted.
 
 ==== Plans
 
-Plans are living AsciiDoc artifact directories, not messages. Per-plan: `$XDG_DATA_HOME/spidey/plans/{slug}/` with `plan.adoc` as entry point. Slug generated per plan (human-readable word slug, unique per thread). The directory contains the plan and supporting artifacts from the exploration phase, composed via AsciiDoc `include::` directives. See Plan Mode (above) for the full lifecycle and RRC integration.
+Plans are living AsciiDoc artifact directories, not messages. Per-plan: `$XDG_DATA_HOME/grudge/plans/{slug}/` with `plan.adoc` as entry point. Slug generated per plan (human-readable word slug, unique per thread). The directory contains the plan and supporting artifacts from the exploration phase, composed via AsciiDoc `include::` directives. See Plan Mode (above) for the full lifecycle and RRC integration.
 
 ==== Thread Workspaces
 
@@ -291,9 +291,9 @@ All three model roles must be configured. The system does not start without them
 
 Independent of either request flow:
 
-- **System tray** -- Cross-platform via {tray-lib}. Tray icon (spider), lifecycle management, status indicators. On launch: service starts, tray icon appears, browser opens automatically to `spidey.localhost:{port}`. Context menu: Open Spidey, Settings, Quit Spidey. Double-click opens browser.
-- **Local DNS** -- The service binds to `spidey.localhost:{port}` (RFC 6761 reserves `.localhost` for loopback; modern browsers resolve it natively). Port {port} avoids elevated privileges required by port 80. No DNS configuration needed.
-- **Static asset serving** -- Serves the web UI at `spidey.localhost:{port}`. The browser opens automatically on launch.
+- **System tray** -- Cross-platform via {tray-lib}. Tray icon (spider), lifecycle management, status indicators. On launch: service starts, tray icon appears, browser opens automatically to `grudge.localhost:{port}`. Context menu: Open Grudge, Settings, Quit Grudge. Double-click opens browser.
+- **Local DNS** -- The service binds to `grudge.localhost:{port}` (RFC 6761 reserves `.localhost` for loopback; modern browsers resolve it natively). Port {port} avoids elevated privileges required by port 80. No DNS configuration needed.
+- **Static asset serving** -- Serves the web UI at `grudge.localhost:{port}`. The browser opens automatically on launch.
 
 === Stack
 
@@ -315,7 +315,7 @@ Independent of either request flow:
 
 *Container:* Docker Engine API v1.53
 
-*Depends on:* `proto/gen/go/spidey/v1` (proto types), `spec/core` (LLM/scorer interfaces, provider adapters), `spec/rrc` (RRC engine), {agent-framework}
+*Depends on:* `proto/gen/go/grudge/v1` (proto types), `spec/core` (LLM/scorer interfaces, provider adapters), `spec/rrc` (RRC engine), {agent-framework}
 
 === Scope
 
@@ -390,7 +390,7 @@ On entry: plan mode prompt section included (mode-conditional section in templat
 
 ==== ExitPlanMode
 
-Compiles the plan directory (`$XDG_DATA_HOME/spidey/plans/{slug}/plan.adoc`, resolving includes). Surfaces compiled plan to user in web UI for review. User approves (optionally edits) or rejects.
+Compiles the plan directory (`$XDG_DATA_HOME/grudge/plans/{slug}/plan.adoc`, resolving includes). Surfaces compiled plan to user in web UI for review. User approves (optionally edits) or rejects.
 
 On approval: restores previous permission state. Plan content enters thread as a corpus message (available for RRC selection). Plan file persists on disk. Plan injected as per-turn prompt section. If plan is empty: user approved exiting plan mode without a plan (valid -- the exploration itself was the value).
 
@@ -403,7 +403,7 @@ In plan mode, only read-category tools + AskUserQuestion are available. All writ
 ----
 service/
 ├── go.mod
-├── cmd/spidey/
+├── cmd/grudge/
 │   └── main.go              # Entrypoint: tray, server, lifecycle
 ├── proxy/
 │   ├── handler.go           # HTTP handler, format detection, stream passthrough
@@ -414,7 +414,7 @@ service/
 │   ├── autonomous.go        # Autonomous loop: override stop, empty message, timer
 │   └── subagent.go          # Fork/merge lifecycle, ParallelAgent coordination
 ├── adapter/
-│   └── genai.go             # ADK genai <-> Spidey proto type conversion
+│   └── genai.go             # ADK genai <-> Grudge proto type conversion
 ├── storage/
 │   ├── db.go                # SQLite connection, migrations, WAL config
 │   ├── threads.go           # Thread CRUD
@@ -451,7 +451,7 @@ service/
 
 === Secrets
 
-API keys stored in OS credential store via `zalando/go-keyring v0.2.6` (macOS Keychain, Linux Secret Service, Windows Credential Manager). Non-secret configuration (endpoints, model names, preferences) in `$XDG_CONFIG_HOME/spidey/config.json`.
+API keys stored in OS credential store via `zalando/go-keyring v0.2.6` (macOS Keychain, Linux Secret Service, Windows Credential Manager). Non-secret configuration (endpoints, model names, preferences) in `$XDG_CONFIG_HOME/grudge/config.json`.
 
 === Proxy Routes
 
@@ -463,7 +463,7 @@ Format detected from request body structure. Response streamed in same format as
 
 === {api-protocol} Schema
 
-The {api-protocol} schema is authored as API surface design. Types reference proto-generated Go types via gqlgen model binding (`gqlgen.yml` maps GraphQL types to generated proto Go types in `proto/gen/go/spidey/v1/`).
+The {api-protocol} schema is authored as API surface design. Types reference proto-generated Go types via gqlgen model binding (`gqlgen.yml` maps GraphQL types to generated proto Go types in `proto/gen/go/grudge/v1/`).
 
 ==== Queries
 
@@ -592,7 +592,7 @@ input SettingsInput {
 
 === Persistence
 
-Single embedded database at `$XDG_DATA_HOME/spidey/spidey.db`. WAL mode. Single connection pool.
+Single embedded database at `$XDG_DATA_HOME/grudge/grudge.db`. WAL mode. Single connection pool.
 
 ==== Proto-Mapped Tables
 
@@ -676,7 +676,7 @@ arguments:          # skill arguments
 
 === Hook Configuration Schema
 
-Configured in `$XDG_CONFIG_HOME/spidey/settings.json` under `hooks`:
+Configured in `$XDG_CONFIG_HOME/grudge/settings.json` under `hooks`:
 
 [source,json]
 ----
@@ -696,7 +696,7 @@ Fields: `event` (enum: PreToolUse, PostToolUse, ThreadStart, ThreadEnd, PreCarry
 
 === Settings Schema
 
-`$XDG_CONFIG_HOME/spidey/config.json`:
+`$XDG_CONFIG_HOME/grudge/config.json`:
 
 [source,json]
 ----

@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/emontenegr/spidey/core/httpc/retry"
+	"github.com/emontenegr/grudge/core/httpc/retry"
 )
 
 // fakePubsub records every Publish* call. Used by Registry.Stop

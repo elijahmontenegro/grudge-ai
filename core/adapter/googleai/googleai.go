@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/core/internal/httpc"
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
+	"github.com/emontenegr/grudge/core"
+	"github.com/emontenegr/grudge/core/internal/httpc"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
 )
 
 const baseURL = "https://generativelanguage.googleapis.com/v1"

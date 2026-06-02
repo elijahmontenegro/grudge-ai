@@ -1,11 +1,11 @@
 # vllm
 
-[vLLM](https://github.com/vllm-project/vllm) serving [`zeroentropy/zerank-1-small`](https://huggingface.co/zeroentropy/zerank-1-small) over the OpenAI-compatible API. Used as Spidey's RRC reranker stage — a cross-encoder repurposed from a 1.7B Qwen3-based causal LM via the "Yes" token logprob recipe.
+[vLLM](https://github.com/vllm-project/vllm) serving [`zeroentropy/zerank-1-small`](https://huggingface.co/zeroentropy/zerank-1-small) over the OpenAI-compatible API. Used as Grudge's RRC reranker stage — a cross-encoder repurposed from a 1.7B Qwen3-based causal LM via the "Yes" token logprob recipe.
 
 ## Build
 
 ```sh
-docker build -t spidey-vllm containers/vllm
+docker build -t grudge-vllm containers/vllm
 ```
 
 A thin wrapper over `vllm/vllm-openai:latest` that pins the model and serving args. Weights are downloaded on first start; vLLM does not cache them into the image. Use `docker compose build vllm` from the repo root to keep build context aligned with the rest of the substrate.
@@ -17,7 +17,7 @@ A thin wrapper over `vllm/vllm-openai:latest` that pins the model and serving ar
 ```sh
 docker run --gpus all -p 8000:8000 \
   -v ${HF_HOME:-$HOME/.cache/huggingface}:/root/.cache/huggingface \
-  spidey-vllm
+  grudge-vllm
 ```
 
 ## Serving args

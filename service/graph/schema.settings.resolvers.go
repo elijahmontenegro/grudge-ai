@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/emontenegr/spidey/service/config"
+	"github.com/emontenegr/grudge/service/config"
 )
 
 // UpdateSettings is the resolver for the updateSettings field.

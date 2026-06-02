@@ -7,7 +7,7 @@ package secrets
 
 import "github.com/zalando/go-keyring"
 
-const keyringService = "spidey"
+const keyringService = "grudge"
 
 // Store reads and writes secrets keyed by name. Backed by the OS
 // keyring in production; tests substitute MemoryStore.
@@ -19,7 +19,7 @@ type Store interface {
 
 // keyringStore is the OS-keyring implementation. Methods delegate to
 // github.com/zalando/go-keyring under a single service prefix so all
-// of spidey's secrets live in one credential-store namespace.
+// of grudge's secrets live in one credential-store namespace.
 type keyringStore struct{}
 
 // NewKeyringStore returns a Store backed by the OS credential store.

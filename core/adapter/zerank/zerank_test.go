@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/emontenegr/spidey/core"
+	"github.com/emontenegr/grudge/core"
 )
 
 // TestScoreExtractsBinaryLogitAndAppliesSigmoid verifies the corrected

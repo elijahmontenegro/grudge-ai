@@ -28,8 +28,8 @@ import (
 	"os"
 	"sort"
 
-	"github.com/emontenegr/spidey/service/agent/tools"
-	"github.com/emontenegr/spidey/service/prompt"
+	"github.com/emontenegr/grudge/service/agent/tools"
+	"github.com/emontenegr/grudge/service/prompt"
 )
 
 func main() {
@@ -60,7 +60,7 @@ func main() {
 			ThreadName:  *threadName,
 			Sandboxed:   *sandboxed,
 			WorkingDirs: []string{"/example/working/dir"},
-			SpideyMD:    []string{"## Example project instructions\n\nMounted SPIDEY.md content lands here."},
+			GrudgeMD:    []string{"## Example project instructions\n\nMounted GRUDGE.md content lands here."},
 			PlanContent: "",
 			PlanDir:     "/example/plan/dir",
 			CurrentTime: "2026-05-29T00:00:00Z (mock)",

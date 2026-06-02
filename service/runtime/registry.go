@@ -13,7 +13,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/emontenegr/spidey/service/agent"
+	"github.com/emontenegr/grudge/service/agent"
 )
 
 // Entry is a live runner with its lifecycle handles.

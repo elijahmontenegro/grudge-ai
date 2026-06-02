@@ -6,12 +6,12 @@ import (
 	"strings"
 )
 
-// LoadSpideyMD reads SPIDEY.md files from mounted working directories.
-// Any mounted directory can contain a SPIDEY.md file — all are collected.
-func LoadSpideyMD(workingDirs []string) []string {
+// LoadGrudgeMD reads GRUDGE.md files from mounted working directories.
+// Any mounted directory can contain a GRUDGE.md file — all are collected.
+func LoadGrudgeMD(workingDirs []string) []string {
 	var contents []string
 	for _, dir := range workingDirs {
-		path := filepath.Join(dir, "SPIDEY.md")
+		path := filepath.Join(dir, "GRUDGE.md")
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue

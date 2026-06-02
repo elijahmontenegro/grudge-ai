@@ -6,4 +6,4 @@ search:
     - json
 
 server:
-  secret_key: "spidey-dev-key"
+  secret_key: "grudge-dev-key"

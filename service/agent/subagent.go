@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
 )
 
 // SpawnSubagent creates an ephemeral thread fork for a subtask.

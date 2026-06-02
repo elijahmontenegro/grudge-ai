@@ -3,8 +3,8 @@ package vllm
 import (
 	"fmt"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/core/adapter/openai"
+	"github.com/emontenegr/grudge/core"
+	"github.com/emontenegr/grudge/core/adapter/openai"
 )
 
 // Config for the vLLM provider. vLLM exposes an OpenAI-compatible API.

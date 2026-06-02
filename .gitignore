@@ -17,10 +17,10 @@ web/node_modules/
 node_modules/
 
 # Frontend build output. web/dist is the Vite output; the
-# service/cmd/spidey/dist copy is the //go:embed source synced by the
+# service/cmd/grudge/dist copy is the //go:embed source synced by the
 # Taskfile's embed-sync task. Both are build artifacts.
 web/dist/
-service/cmd/spidey/dist/
+service/cmd/grudge/dist/
 
 # Local backups (e.g. novel-backup-* dirs from autonomous-run safety copies).
 novel-backup-*/

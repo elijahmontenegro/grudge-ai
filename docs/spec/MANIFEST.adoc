@@ -1,5 +1,5 @@
-= Spidey
-:project-name: Spidey
+= Grudge
+:project-name: Grudge
 :project-paradigm: RRC-Native Provider-Agnostic Agentic Framework
 // RRC
 :rrc-full: Retrieval-Restored Continuation
@@ -31,7 +31,7 @@
 
 2. **RRC Engine** (`spec/rrc`) -- A Go library implementing the {rrc-full} algorithm. Prerequisite detection, selection scoring, payload assembly, native format restoration, warm carry-forward. Stateful when the service provides persistent data structures (agent path), stateless when called per-request (proxy path). No HTTP, no UI, no opinions about deployment. Depends on proto types only -- not on core. Defines its own consumer interfaces (Scorer, Completer). Imported by the service.
 
-3. **Service** (`spec/service`) -- The application. A system tray process that runs the RRC engine as an LLM proxy, handles agent orchestration via {agent-framework}, manages thread storage, exposes a {api-protocol} API, and serves the web UI on `spidey.localhost:8420`. One binary. The user opens their browser.
+3. **Service** (`spec/service`) -- The application. A system tray process that runs the RRC engine as an LLM proxy, handles agent orchestration via {agent-framework}, manages thread storage, exposes a {api-protocol} API, and serves the web UI on `grudge.localhost:8420`. One binary. The user opens their browser.
 
 4. **Web UI** (`spec/web`) -- A {ui-framework} application providing the agentic interface -- not a chat clone. Full RRC introspection: what was selected, excluded, prerequisite scores, prompt derivation. Agent state, tool visualization, execution traces. Served by the service on localhost; the user opens a browser tab. UX is a first-class spec concern.
 
@@ -88,14 +88,14 @@ The development environment uses {dev-lm-runtime} for local language model servi
 === Repository Structure
 
 ----
-spidey/
+grudge/
 ├── proto/                     # Truth types + generated output
-│   ├── spidey/v1/            #   Canonical .proto sources
+│   ├── grudge/v1/            #   Canonical .proto sources
 │   │   ├── thread.proto      #     Message, Role, ContentBlock, Thread, SelectionScope
 │   │   ├── rrc.proto         #     Edge, QUD, QUDGraph, SelectionResult
 │   │   ├── (removed — Scorer is Go-only)
 │   │   └── llm.proto         #     LLMMessage, CompletionRequest/Response, StreamChunk
-│   └── gen/go/spidey/v1/     #   Generated Go types (checked in)
+│   └── gen/go/grudge/v1/     #   Generated Go types (checked in)
 ├── core/                      # Provider-agnostic interfaces + adapters
 │   ├── completer.go          #   Completer interface
 │   ├── embedder.go           #   Embedder interface
@@ -117,7 +117,7 @@ spidey/
 │   ├── chunk/                 #   Chunking + token estimator
 │   └── tiktoken/              #   Tokenizer (opt-in subpackage)
 ├── service/                   # Application binary
-│   ├── cmd/{spidey,tickstat}/ #   Shipped binaries
+│   ├── cmd/{grudge,tickstat}/ #   Shipped binaries
 │   ├── agent/                 #   ADK runner, RRC-as-LLM adapter, tools, autonomous
 │   ├── storage/               #   SQLite: threads, messages, edges, scores, paths.go
 │   ├── kernel/                #   Bootstrap + runtime state (split across kernel/plans/selections/approvals/embed.go)
@@ -153,7 +153,7 @@ spidey/
 - System tray service: RRC proxy for third-party clients, agent orchestration for native client, thread storage, {api-protocol} API
 - Web UI: agentic interface with RRC introspection, served on localhost
 - Code generation pipeline: proto -> Go, GraphQL schema -> TypeScript
-- Single Go module rooted at the repo. `core/`, `rrc/`, `service/`, and `proto/gen/go/spidey/v1/` are packages, not independent modules.
+- Single Go module rooted at the repo. `core/`, `rrc/`, `service/`, and `proto/gen/go/grudge/v1/` are packages, not independent modules.
 - Concurrency model specified in `spec/service` (RRC engine not goroutine-safe, service serializes access, RWMutex on global DAG/score cache, SQLite WAL mode)
 
 ==== Out of Scope (project-wide)

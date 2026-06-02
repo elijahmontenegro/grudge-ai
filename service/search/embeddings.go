@@ -5,8 +5,8 @@ import (
 	"math"
 	"sort"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/core"
+	"github.com/emontenegr/grudge/service/storage"
 )
 
 // Searcher runs user-facing semantic search over chunk embeddings.

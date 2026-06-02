@@ -6,7 +6,7 @@ interface ProvidersProps {
   setProviders: (next: ProvidersMap) => void
 }
 
-/** The four provider roles Spidey speaks to. Editing one preserves
+/** The four provider roles Grudge speaks to. Editing one preserves
  *  the rest because UpdateSettings.Providers is a full replace —
  *  the shell merges every role into the same map before save. */
 export function Providers({ providers, setProviders }: ProvidersProps) {

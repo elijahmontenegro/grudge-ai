@@ -191,10 +191,10 @@ export const IconSpinner = (p: IconProps) => (
   />
 )
 
-// Spidey mark — a geometric web. Six nodes around a center, one accent node,
+// Grudge mark — a geometric web. Six nodes around a center, one accent node,
 // lightweight threads. Sized by the size prop; uses currentColor for the
 // threads and accent prop for the highlighted node.
-export function Spidey({ size = 18, accent = 'var(--accent)' }: { size?: number; accent?: string }) {
+export function Grudge({ size = 18, accent = 'var(--accent)' }: { size?: number; accent?: string }) {
   const r = 7
   const cx = 10,
     cy = 10

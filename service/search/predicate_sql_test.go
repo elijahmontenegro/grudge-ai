@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/emontenegr/spidey/rrc"
+	"github.com/emontenegr/grudge/rrc"
 )
 
 func TestCompilePredicate(t *testing.T) {

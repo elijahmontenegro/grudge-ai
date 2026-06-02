@@ -1,6 +1,6 @@
 package zerank
 
-import "github.com/emontenegr/spidey/core"
+import "github.com/emontenegr/grudge/core"
 
 func init() {
 	core.RegisterProvider("zerank", func(cfg core.ProviderConfig) (any, error) {

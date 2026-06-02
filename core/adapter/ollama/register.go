@@ -1,6 +1,6 @@
 package ollama
 
-import "github.com/emontenegr/spidey/core"
+import "github.com/emontenegr/grudge/core"
 
 func init() {
 	core.RegisterProvider("ollama", func(cfg core.ProviderConfig) (any, error) {

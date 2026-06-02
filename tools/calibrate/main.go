@@ -13,8 +13,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	_ "github.com/emontenegr/spidey/core/adapter/zerank"
+	"github.com/emontenegr/grudge/core"
+	_ "github.com/emontenegr/grudge/core/adapter/zerank"
 )
 
 type triple struct {

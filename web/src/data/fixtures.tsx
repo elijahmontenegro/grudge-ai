@@ -23,5 +23,5 @@ export const USER: User = {
   name: 'John Doe',
   handle: 'john',
   initials: 'JD',
-  host: 'spidey.localhost:8420',
+  host: 'grudge.localhost:8420',
 }

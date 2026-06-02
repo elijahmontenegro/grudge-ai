@@ -60,7 +60,7 @@ interface ComposerProps {
   onSandboxedChange?: (v: boolean) => void
 }
 
-const DRAFT_PREFIX = 'spidey.draft:'
+const DRAFT_PREFIX = 'grudge.draft:'
 
 const stringCodec = {
   serialize: (v: string) => v,

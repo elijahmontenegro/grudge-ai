@@ -133,7 +133,7 @@ button { cursor: pointer; }
 }
 .sb-head-spacer { flex: 1; }
 /* Brand = icon + wordmark, hugging the right edge so the flipped
-   layout is: [collapse-btn] ⋯ [spidey]. No flex-grow so the hover
+   layout is: [collapse-btn] ⋯ [grudge]. No flex-grow so the hover
    background wraps only the icon+text, not the whole leftover row. */
 .sb-brand {
   display: inline-flex;
@@ -678,7 +678,7 @@ button { cursor: pointer; }
   min-width: 52px;
   align-items: center;
   /* Top inset = (44 − 32) / 2 so the first rail button's center lands
-     on the same horizontal line as the topbar's "spidey / …"
+     on the same horizontal line as the topbar's "grudge / …"
      breadcrumb text. 44 is the topbar height, 32 is the button size. */
   padding: 6px 0 10px;
   gap: 4px;

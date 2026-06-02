@@ -9,8 +9,8 @@ import (
 	"log"
 	"sync"
 
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/service/storage"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/service/storage"
 )
 
 // Tracker keeps the in-memory selection introspection state and

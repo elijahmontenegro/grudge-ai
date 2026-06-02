@@ -22,9 +22,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	_ "github.com/emontenegr/spidey/core/adapter/tei"
-	_ "github.com/emontenegr/spidey/core/adapter/zerank"
+	"github.com/emontenegr/grudge/core"
+	_ "github.com/emontenegr/grudge/core/adapter/tei"
+	_ "github.com/emontenegr/grudge/core/adapter/zerank"
 )
 
 func main() {

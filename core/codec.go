@@ -3,11 +3,11 @@ package core
 import (
 	"context"
 
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
 )
 
 // Codec is the bidirectional mapping between one LLM wire format and
-// spidey's proto truth types. Every adapter that participates in the
+// grudge's proto truth types. Every adapter that participates in the
 // proxy path implements Codec. Adding a new protocol = new
 // implementation, registered via core.RegisterCodec.
 //
@@ -16,7 +16,7 @@ import (
 // it, runs RRC, calls EncodeResponse / EncodeChunk to send back in
 // the same wire format. The inverse pair (EncodeRequest /
 // DecodeResponse / DecodeChunk) supports the outbound direction
-// where spidey itself talks to an upstream model server.
+// where grudge itself talks to an upstream model server.
 //
 // Implementations should be stateless after construction.
 type Codec interface {

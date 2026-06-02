@@ -7,11 +7,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/service/config"
-	"github.com/emontenegr/spidey/service/search"
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/core"
+	"github.com/emontenegr/grudge/rrc"
+	"github.com/emontenegr/grudge/service/config"
+	"github.com/emontenegr/grudge/service/search"
+	"github.com/emontenegr/grudge/service/storage"
 )
 
 // Holder owns the atomic engine + embed-queue pointers and

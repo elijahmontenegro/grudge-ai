@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/emontenegr/spidey/service/sandbox"
+	"github.com/emontenegr/grudge/service/sandbox"
 	"google.golang.org/adk/tool"
 )
 
@@ -84,7 +84,7 @@ type ToolDeps struct {
 	SearchURL string // e.g. "http://localhost:8888" — empty if not configured
 	// Agent/plan mode dependencies
 	ThreadID string
-	PlanDir  string // $XDG_DATA_HOME/spidey/plans/
+	PlanDir  string // $XDG_DATA_HOME/grudge/plans/
 	// Configured permissions — overrides DefaultPermission when set
 	Permissions map[string]string
 }

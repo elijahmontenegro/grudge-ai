@@ -11,7 +11,7 @@ import (
 	"fyne.io/systray"
 )
 
-const spideyURL = "http://spidey.localhost:8420"
+const grudgeURL = "http://grudge.localhost:8420"
 
 // Run starts the system tray. Blocks until quit is selected.
 // Call from a goroutine — the main thread runs the HTTP server.
@@ -25,21 +25,21 @@ func Run(onQuit func()) {
 
 func onReady() {
 	systray.SetIcon(spiderIcon())
-	systray.SetTitle("Spidey")
-	systray.SetTooltip("Spidey — RRC-Native Agentic Framework")
+	systray.SetTitle("Grudge")
+	systray.SetTooltip("Grudge — RRC-Native Agentic Framework")
 
-	mOpen := systray.AddMenuItem("Open Spidey", "Open in browser")
+	mOpen := systray.AddMenuItem("Open Grudge", "Open in browser")
 	mSettings := systray.AddMenuItem("Settings", "Configure providers")
 	systray.AddSeparator()
-	mQuit := systray.AddMenuItem("Quit Spidey", "Stop the service")
+	mQuit := systray.AddMenuItem("Quit Grudge", "Stop the service")
 
 	go func() {
 		for {
 			select {
 			case <-mOpen.ClickedCh:
-				OpenBrowser(spideyURL)
+				OpenBrowser(grudgeURL)
 			case <-mSettings.ClickedCh:
-				OpenBrowser(spideyURL + "/settings")
+				OpenBrowser(grudgeURL + "/settings")
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 				return

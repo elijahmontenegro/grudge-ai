@@ -193,7 +193,7 @@ export function ThreadSidebar({
           title="Home"
           type="button"
         >
-          <span className="sb-brand-text">spidey</span>
+          <span className="sb-brand-text">grudge</span>
         </button>
       </div>
 

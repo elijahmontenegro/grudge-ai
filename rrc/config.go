@@ -1,6 +1,6 @@
 package rrc
 
-import "github.com/emontenegr/spidey/rrc/chunk"
+import "github.com/emontenegr/grudge/rrc/chunk"
 
 // EngineConfig holds tunable parameters for the RRC engine.
 //

@@ -21,10 +21,10 @@ import (
 	"regexp"
 )
 
-// Image is the tag of the sandbox image the Spidey service expects.
+// Image is the tag of the sandbox image the Grudge service expects.
 // Matches the `image:` field of the `sandbox` service in docker-compose.yml
 // and the tag produced by `docker compose build sandbox`.
-const Image = "spidey-sandbox:latest"
+const Image = "grudge-sandbox:latest"
 
 // BuildCommand is the one-liner users run to produce the image. Embedded
 // in error messages so remediation is always one copy-paste away.
@@ -62,7 +62,7 @@ func New(workspace string) *Sandbox {
 // ("start Docker Desktop" vs "build the image").
 var ErrDockerUnavailable = errors.New("docker daemon unavailable — start Docker Desktop or the docker service")
 
-// ErrImageMissing is returned when the daemon is up but spidey-sandbox is
+// ErrImageMissing is returned when the daemon is up but grudge-sandbox is
 // not present locally. Build it via the command in BuildCommand.
 var ErrImageMissing = fmt.Errorf("sandbox image %s not found locally — run `%s`", Image, BuildCommand)
 
@@ -71,7 +71,7 @@ var ErrImageMissing = fmt.Errorf("sandbox image %s not found locally — run `%s
 // the "am I ready?" check the UI can surface.
 //
 // Fail-fast: we do NOT attempt to pull the image — there is no public
-// registry for spidey-sandbox and a pull would produce a confusing
+// registry for grudge-sandbox and a pull would produce a confusing
 // "pull access denied" error. The user must build it.
 func CheckReady() error {
 	if err := dockerAvailable(); err != nil {

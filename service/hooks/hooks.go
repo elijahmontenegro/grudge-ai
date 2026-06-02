@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emontenegr/spidey/service/config"
+	"github.com/emontenegr/grudge/service/config"
 )
 
 // Event types for lifecycle hooks.

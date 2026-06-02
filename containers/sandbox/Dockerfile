@@ -1,4 +1,4 @@
-# spidey-sandbox:latest — execution environment for agent tool calls.
+# grudge-sandbox:latest — execution environment for agent tool calls.
 #
 # Threads with sandboxed=true run every Bash tool call inside this image
 # instead of on the host. The host project directory is bind-mounted to
@@ -6,7 +6,7 @@
 # filesystem except through that mount.
 #
 # Build: docker compose build sandbox
-#        (or `docker build -t spidey-sandbox:latest containers/sandbox`)
+#        (or `docker build -t grudge-sandbox:latest containers/sandbox`)
 #
 # This is not a security boundary against hostile code — it's a workspace
 # fence. Shared kernel, standard container isolation. See SANDBOX.md.

@@ -7,7 +7,7 @@ import { useLocalStorage } from '@/primitives/useLocalStorage'
 import type { Artifact, ArtifactOp } from '@/domain/types'
 import type { ThreadMessage } from '@/hooks/useThreadMessages'
 
-const WIDTH_STORAGE_KEY = 'spidey.artifactsWidth'
+const WIDTH_STORAGE_KEY = 'grudge.artifactsWidth'
 const DEFAULT_WIDTH = 720
 const MIN_WIDTH = 320
 const MAX_WIDTH = 1200

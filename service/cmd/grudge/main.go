@@ -22,30 +22,30 @@ import (
 	// Blank-imported for side-effect registration with core.NewProvider.
 	// Importing core alone gives an empty registry; each adapter
 	// package wires itself in init() in core/adapter/X/register.go.
-	_ "github.com/emontenegr/spidey/core/adapter/anthropic"
-	_ "github.com/emontenegr/spidey/core/adapter/googleai"
-	_ "github.com/emontenegr/spidey/core/adapter/ollama"
-	_ "github.com/emontenegr/spidey/core/adapter/openai"
-	_ "github.com/emontenegr/spidey/core/adapter/tei"
-	_ "github.com/emontenegr/spidey/core/adapter/vllm"
-	_ "github.com/emontenegr/spidey/core/adapter/zerank"
-	"github.com/emontenegr/spidey/rrc/chunk"
-	"github.com/emontenegr/spidey/rrc/tiktoken"
-	"github.com/emontenegr/spidey/service/agent"
-	"github.com/emontenegr/spidey/service/approvals"
-	"github.com/emontenegr/spidey/service/config"
-	"github.com/emontenegr/spidey/service/graph"
-	"github.com/emontenegr/spidey/service/hooks"
-	"github.com/emontenegr/spidey/service/messages"
-	"github.com/emontenegr/spidey/service/plans"
-	"github.com/emontenegr/spidey/service/prompt"
-	srvruntime "github.com/emontenegr/spidey/service/runtime"
-	"github.com/emontenegr/spidey/service/sandbox"
-	"github.com/emontenegr/spidey/service/selections"
-	"github.com/emontenegr/spidey/service/skills"
-	"github.com/emontenegr/spidey/service/storage"
-	"github.com/emontenegr/spidey/service/substrate"
-	"github.com/emontenegr/spidey/service/tray"
+	_ "github.com/emontenegr/grudge/core/adapter/anthropic"
+	_ "github.com/emontenegr/grudge/core/adapter/googleai"
+	_ "github.com/emontenegr/grudge/core/adapter/ollama"
+	_ "github.com/emontenegr/grudge/core/adapter/openai"
+	_ "github.com/emontenegr/grudge/core/adapter/tei"
+	_ "github.com/emontenegr/grudge/core/adapter/vllm"
+	_ "github.com/emontenegr/grudge/core/adapter/zerank"
+	"github.com/emontenegr/grudge/rrc/chunk"
+	"github.com/emontenegr/grudge/rrc/tiktoken"
+	"github.com/emontenegr/grudge/service/agent"
+	"github.com/emontenegr/grudge/service/approvals"
+	"github.com/emontenegr/grudge/service/config"
+	"github.com/emontenegr/grudge/service/graph"
+	"github.com/emontenegr/grudge/service/hooks"
+	"github.com/emontenegr/grudge/service/messages"
+	"github.com/emontenegr/grudge/service/plans"
+	"github.com/emontenegr/grudge/service/prompt"
+	srvruntime "github.com/emontenegr/grudge/service/runtime"
+	"github.com/emontenegr/grudge/service/sandbox"
+	"github.com/emontenegr/grudge/service/selections"
+	"github.com/emontenegr/grudge/service/skills"
+	"github.com/emontenegr/grudge/service/storage"
+	"github.com/emontenegr/grudge/service/substrate"
+	"github.com/emontenegr/grudge/service/tray"
 )
 
 // Embedded web bundle. The Taskfile's embed-sync task copies the
@@ -256,14 +256,14 @@ func main() {
 	} else {
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
-			w.Write([]byte(`<!doctype html><html><body><h1>Spidey</h1><p>Web UI not built into binary. Run <code>task embed-sync</code> then rebuild.</p></body></html>`))
+			w.Write([]byte(`<!doctype html><html><body><h1>Grudge</h1><p>Web UI not built into binary. Run <code>task embed-sync</code> then rebuild.</p></body></html>`))
 		})
 	}
 
-	// Bind to 127.0.0.1:8420 — browsers resolve spidey.localhost per RFC 6761,
+	// Bind to 127.0.0.1:8420 — browsers resolve grudge.localhost per RFC 6761,
 	// but the OS-level resolver on Windows doesn't handle *.localhost subdomains.
 	bindAddr := "127.0.0.1:8420"
-	publicURL := "http://spidey.localhost:8420"
+	publicURL := "http://grudge.localhost:8420"
 	srv := &http.Server{Addr: bindAddr, Handler: mux}
 
 	go func() {
@@ -276,7 +276,7 @@ func main() {
 	// Start system tray in background — provides Open/Settings/Quit menu
 	go tray.Run(cancel)
 
-	log.Printf("Spidey listening on %s (%s)", publicURL, bindAddr)
+	log.Printf("Grudge listening on %s (%s)", publicURL, bindAddr)
 	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("server: %v", err)
 	}

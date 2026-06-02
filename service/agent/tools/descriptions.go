@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/emontenegr/spidey/service/internal/adoc"
+	"github.com/emontenegr/grudge/service/internal/adoc"
 )
 
 // Tool descriptions are authored content the model reads inline with

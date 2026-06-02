@@ -1,6 +1,6 @@
 package openai
 
-import "github.com/emontenegr/spidey/core"
+import "github.com/emontenegr/grudge/core"
 
 func init() {
 	core.RegisterProvider("openai", func(cfg core.ProviderConfig) (any, error) {

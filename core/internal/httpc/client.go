@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
+	"github.com/emontenegr/grudge/core"
 )
 
 const (

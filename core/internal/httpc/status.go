@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/emontenegr/spidey/core"
+	"github.com/emontenegr/grudge/core"
 )
 
 // StatusError is the typed error returned when an upstream provider

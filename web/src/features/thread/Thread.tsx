@@ -166,7 +166,7 @@ export function ThreadPage({
           {error}
         </p>
         <p className="empty-thread-hint">
-          Start the Spidey service — it exposes /graphql at the same host that serves this app.
+          Start the Grudge service — it exposes /graphql at the same host that serves this app.
         </p>
       </div>
     )

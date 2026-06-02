@@ -69,7 +69,7 @@ export default function App() {
   // Single object keeps the persisted UI surface in one localStorage key
   // — six per-key effects firing on every UI tick would be wasteful for
   // state that only changes on explicit user action.
-  const [ui, setUi] = useLocalStorage<PersistedUI>('spidey.ui', DEFAULT_UI)
+  const [ui, setUi] = useLocalStorage<PersistedUI>('grudge.ui', DEFAULT_UI)
   const setSidebarCollapsed = useCallback(
     (next: boolean | ((prev: boolean) => boolean)) =>
       setUi((p) => ({
@@ -145,7 +145,7 @@ export default function App() {
     [navigate],
   )
 
-  // "New" and the spidey brand ("Home") resolve to the same place —
+  // "New" and the grudge brand ("Home") resolve to the same place —
   // Home IS the new-thread composer. "New" additionally stamps a
   // `freshAt` into location state so Home can reset its draft and
   // replay its entrance animation even when already on "/" (a plain
@@ -165,11 +165,11 @@ export default function App() {
   // Browser tab title reflects where the user is — helps with multi-window /
   // back-button navigation.
   useEffect(() => {
-    let title = 'Spidey'
+    let title = 'Grudge'
     const active = threadId ? threads.find((t) => t.id === threadId) : undefined
-    if (view === 'thread' && active) title = `${active.name} · Spidey`
-    else if (view === 'settings') title = 'Settings · Spidey'
-    else if (view === 'firstrun') title = 'First run · Spidey'
+    if (view === 'thread' && active) title = `${active.name} · Grudge`
+    else if (view === 'settings') title = 'Settings · Grudge'
+    else if (view === 'firstrun') title = 'First run · Grudge'
     document.title = title
   }, [view, threadId, threads])
 

@@ -10,8 +10,8 @@ import (
 	"context"
 	"iter"
 
-	"github.com/emontenegr/spidey/core"
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
+	"github.com/emontenegr/grudge/core"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
 )
 
 // Completer wraps any core.Completer with the retry policy.

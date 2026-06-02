@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -367,7 +367,7 @@ func TestOpen_CreatesDB(t *testing.T) {
 	defer db.Close()
 
 	// File should exist
-	if _, err := os.Stat(filepath.Join(dir, "spidey.db")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "grudge.db")); os.IsNotExist(err) {
 		t.Fatal("database file should exist")
 	}
 }

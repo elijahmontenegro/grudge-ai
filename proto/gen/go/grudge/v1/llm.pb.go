@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: spidey/v1/llm.proto
+// source: grudge/v1/llm.proto
 
 package v1
 
@@ -63,11 +63,11 @@ func (x ToolChoiceMode) String() string {
 }
 
 func (ToolChoiceMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_spidey_v1_llm_proto_enumTypes[0].Descriptor()
+	return file_grudge_v1_llm_proto_enumTypes[0].Descriptor()
 }
 
 func (ToolChoiceMode) Type() protoreflect.EnumType {
-	return &file_spidey_v1_llm_proto_enumTypes[0]
+	return &file_grudge_v1_llm_proto_enumTypes[0]
 }
 
 func (x ToolChoiceMode) Number() protoreflect.EnumNumber {
@@ -76,12 +76,12 @@ func (x ToolChoiceMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ToolChoiceMode.Descriptor instead.
 func (ToolChoiceMode) EnumDescriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{0}
+	return file_grudge_v1_llm_proto_rawDescGZIP(), []int{0}
 }
 
 type LLMMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Role          Role                   `protobuf:"varint,1,opt,name=role,proto3,enum=spidey.v1.Role" json:"role,omitempty"`
+	Role          Role                   `protobuf:"varint,1,opt,name=role,proto3,enum=grudge.v1.Role" json:"role,omitempty"`
 	Content       []*ContentBlock        `protobuf:"bytes,2,rep,name=content,proto3" json:"content,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -89,7 +89,7 @@ type LLMMessage struct {
 
 func (x *LLMMessage) Reset() {
 	*x = LLMMessage{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[0]
+	mi := &file_grudge_v1_llm_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -101,7 +101,7 @@ func (x *LLMMessage) String() string {
 func (*LLMMessage) ProtoMessage() {}
 
 func (x *LLMMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[0]
+	mi := &file_grudge_v1_llm_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -114,7 +114,7 @@ func (x *LLMMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LLMMessage.ProtoReflect.Descriptor instead.
 func (*LLMMessage) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{0}
+	return file_grudge_v1_llm_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *LLMMessage) GetRole() Role {
@@ -144,7 +144,7 @@ type ToolDeclaration struct {
 
 func (x *ToolDeclaration) Reset() {
 	*x = ToolDeclaration{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[1]
+	mi := &file_grudge_v1_llm_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -156,7 +156,7 @@ func (x *ToolDeclaration) String() string {
 func (*ToolDeclaration) ProtoMessage() {}
 
 func (x *ToolDeclaration) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[1]
+	mi := &file_grudge_v1_llm_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -169,7 +169,7 @@ func (x *ToolDeclaration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolDeclaration.ProtoReflect.Descriptor instead.
 func (*ToolDeclaration) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{1}
+	return file_grudge_v1_llm_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ToolDeclaration) GetName() string {
@@ -197,7 +197,7 @@ func (x *ToolDeclaration) GetParametersJson() string {
 // only consulted when mode == TOOL_CHOICE_MODE_NAMED.
 type ToolChoice struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mode          ToolChoiceMode         `protobuf:"varint,1,opt,name=mode,proto3,enum=spidey.v1.ToolChoiceMode" json:"mode,omitempty"`
+	Mode          ToolChoiceMode         `protobuf:"varint,1,opt,name=mode,proto3,enum=grudge.v1.ToolChoiceMode" json:"mode,omitempty"`
 	NamedTool     string                 `protobuf:"bytes,2,opt,name=named_tool,json=namedTool,proto3" json:"named_tool,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -205,7 +205,7 @@ type ToolChoice struct {
 
 func (x *ToolChoice) Reset() {
 	*x = ToolChoice{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[2]
+	mi := &file_grudge_v1_llm_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -217,7 +217,7 @@ func (x *ToolChoice) String() string {
 func (*ToolChoice) ProtoMessage() {}
 
 func (x *ToolChoice) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[2]
+	mi := &file_grudge_v1_llm_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -230,7 +230,7 @@ func (x *ToolChoice) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolChoice.ProtoReflect.Descriptor instead.
 func (*ToolChoice) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{2}
+	return file_grudge_v1_llm_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ToolChoice) GetMode() ToolChoiceMode {
@@ -266,7 +266,7 @@ type CompletionRequest struct {
 
 func (x *CompletionRequest) Reset() {
 	*x = CompletionRequest{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[3]
+	mi := &file_grudge_v1_llm_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -278,7 +278,7 @@ func (x *CompletionRequest) String() string {
 func (*CompletionRequest) ProtoMessage() {}
 
 func (x *CompletionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[3]
+	mi := &file_grudge_v1_llm_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -291,7 +291,7 @@ func (x *CompletionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompletionRequest.ProtoReflect.Descriptor instead.
 func (*CompletionRequest) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{3}
+	return file_grudge_v1_llm_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *CompletionRequest) GetMessages() []*LLMMessage {
@@ -373,7 +373,7 @@ type CompletionResponse struct {
 
 func (x *CompletionResponse) Reset() {
 	*x = CompletionResponse{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[4]
+	mi := &file_grudge_v1_llm_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -385,7 +385,7 @@ func (x *CompletionResponse) String() string {
 func (*CompletionResponse) ProtoMessage() {}
 
 func (x *CompletionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[4]
+	mi := &file_grudge_v1_llm_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -398,7 +398,7 @@ func (x *CompletionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompletionResponse.ProtoReflect.Descriptor instead.
 func (*CompletionResponse) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{4}
+	return file_grudge_v1_llm_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CompletionResponse) GetId() string {
@@ -446,7 +446,7 @@ type Usage struct {
 
 func (x *Usage) Reset() {
 	*x = Usage{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[5]
+	mi := &file_grudge_v1_llm_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -458,7 +458,7 @@ func (x *Usage) String() string {
 func (*Usage) ProtoMessage() {}
 
 func (x *Usage) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[5]
+	mi := &file_grudge_v1_llm_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -471,7 +471,7 @@ func (x *Usage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Usage.ProtoReflect.Descriptor instead.
 func (*Usage) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{5}
+	return file_grudge_v1_llm_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Usage) GetPromptTokens() int32 {
@@ -514,7 +514,7 @@ type StreamChunk struct {
 
 func (x *StreamChunk) Reset() {
 	*x = StreamChunk{}
-	mi := &file_spidey_v1_llm_proto_msgTypes[6]
+	mi := &file_grudge_v1_llm_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -526,7 +526,7 @@ func (x *StreamChunk) String() string {
 func (*StreamChunk) ProtoMessage() {}
 
 func (x *StreamChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_llm_proto_msgTypes[6]
+	mi := &file_grudge_v1_llm_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -539,7 +539,7 @@ func (x *StreamChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamChunk.ProtoReflect.Descriptor instead.
 func (*StreamChunk) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_llm_proto_rawDescGZIP(), []int{6}
+	return file_grudge_v1_llm_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *StreamChunk) GetDelta() isStreamChunk_Delta {
@@ -648,26 +648,26 @@ func (*StreamChunk_ToolCall) isStreamChunk_Delta() {}
 
 func (*StreamChunk_ToolResult) isStreamChunk_Delta() {}
 
-var File_spidey_v1_llm_proto protoreflect.FileDescriptor
+var File_grudge_v1_llm_proto protoreflect.FileDescriptor
 
-const file_spidey_v1_llm_proto_rawDesc = "" +
+const file_grudge_v1_llm_proto_rawDesc = "" +
 	"\n" +
-	"\x13spidey/v1/llm.proto\x12\tspidey.v1\x1a\x16spidey/v1/thread.proto\"d\n" +
+	"\x13grudge/v1/llm.proto\x12\tgrudge.v1\x1a\x16grudge/v1/thread.proto\"d\n" +
 	"\n" +
 	"LLMMessage\x12#\n" +
-	"\x04role\x18\x01 \x01(\x0e2\x0f.spidey.v1.RoleR\x04role\x121\n" +
-	"\acontent\x18\x02 \x03(\v2\x17.spidey.v1.ContentBlockR\acontent\"p\n" +
+	"\x04role\x18\x01 \x01(\x0e2\x0f.grudge.v1.RoleR\x04role\x121\n" +
+	"\acontent\x18\x02 \x03(\v2\x17.grudge.v1.ContentBlockR\acontent\"p\n" +
 	"\x0fToolDeclaration\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12'\n" +
 	"\x0fparameters_json\x18\x03 \x01(\tR\x0eparametersJson\"Z\n" +
 	"\n" +
 	"ToolChoice\x12-\n" +
-	"\x04mode\x18\x01 \x01(\x0e2\x19.spidey.v1.ToolChoiceModeR\x04mode\x12\x1d\n" +
+	"\x04mode\x18\x01 \x01(\x0e2\x19.grudge.v1.ToolChoiceModeR\x04mode\x12\x1d\n" +
 	"\n" +
 	"named_tool\x18\x02 \x01(\tR\tnamedTool\"\x80\x03\n" +
 	"\x11CompletionRequest\x121\n" +
-	"\bmessages\x18\x01 \x03(\v2\x15.spidey.v1.LLMMessageR\bmessages\x12\x14\n" +
+	"\bmessages\x18\x01 \x03(\v2\x15.grudge.v1.LLMMessageR\bmessages\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\"\n" +
 	"\n" +
 	"max_tokens\x18\x03 \x01(\x05H\x00R\tmaxTokens\x88\x01\x01\x12%\n" +
@@ -675,30 +675,30 @@ const file_spidey_v1_llm_proto_rawDesc = "" +
 	"\x05top_p\x18\x05 \x01(\x02H\x02R\x04topP\x88\x01\x01\x12\x12\n" +
 	"\x04stop\x18\x06 \x03(\tR\x04stop\x12\x16\n" +
 	"\x06stream\x18\a \x01(\bR\x06stream\x120\n" +
-	"\x05tools\x18\t \x03(\v2\x1a.spidey.v1.ToolDeclarationR\x05tools\x126\n" +
+	"\x05tools\x18\t \x03(\v2\x1a.grudge.v1.ToolDeclarationR\x05tools\x126\n" +
 	"\vtool_choice\x18\n" +
-	" \x01(\v2\x15.spidey.v1.ToolChoiceR\n" +
+	" \x01(\v2\x15.grudge.v1.ToolChoiceR\n" +
 	"toolChoiceB\r\n" +
 	"\v_max_tokensB\x0e\n" +
 	"\f_temperatureB\b\n" +
 	"\x06_top_p\"\xb8\x01\n" +
 	"\x12CompletionResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12/\n" +
-	"\amessage\x18\x02 \x01(\v2\x15.spidey.v1.LLMMessageR\amessage\x12&\n" +
-	"\x05usage\x18\x03 \x01(\v2\x10.spidey.v1.UsageR\x05usage\x12\x14\n" +
+	"\amessage\x18\x02 \x01(\v2\x15.grudge.v1.LLMMessageR\amessage\x12&\n" +
+	"\x05usage\x18\x03 \x01(\v2\x10.grudge.v1.UsageR\x05usage\x12\x14\n" +
 	"\x05model\x18\x04 \x01(\tR\x05model\x12#\n" +
 	"\rfinish_reason\x18\x05 \x01(\tR\ffinishReason\"Y\n" +
 	"\x05Usage\x12#\n" +
 	"\rprompt_tokens\x18\x01 \x01(\x05R\fpromptTokens\x12+\n" +
 	"\x11completion_tokens\x18\x02 \x01(\x05R\x10completionTokens\"\xb2\x03\n" +
 	"\vStreamChunk\x12,\n" +
-	"\x04text\x18\x01 \x01(\v2\x16.spidey.v1.TextContentH\x00R\x04text\x128\n" +
-	"\bthinking\x18\x02 \x01(\v2\x1a.spidey.v1.ThinkingContentH\x00R\bthinking\x129\n" +
-	"\ttool_call\x18\x03 \x01(\v2\x1a.spidey.v1.ToolCallContentH\x00R\btoolCall\x12?\n" +
-	"\vtool_result\x18\a \x01(\v2\x1c.spidey.v1.ToolResultContentH\x00R\n" +
+	"\x04text\x18\x01 \x01(\v2\x16.grudge.v1.TextContentH\x00R\x04text\x128\n" +
+	"\bthinking\x18\x02 \x01(\v2\x1a.grudge.v1.ThinkingContentH\x00R\bthinking\x129\n" +
+	"\ttool_call\x18\x03 \x01(\v2\x1a.grudge.v1.ToolCallContentH\x00R\btoolCall\x12?\n" +
+	"\vtool_result\x18\a \x01(\v2\x1c.grudge.v1.ToolResultContentH\x00R\n" +
 	"toolResult\x12\x12\n" +
 	"\x04done\x18\x04 \x01(\bR\x04done\x12+\n" +
-	"\x05usage\x18\x05 \x01(\v2\x10.spidey.v1.UsageH\x01R\x05usage\x88\x01\x01\x12\x19\n" +
+	"\x05usage\x18\x05 \x01(\v2\x10.grudge.v1.UsageH\x01R\x05usage\x88\x01\x01\x12\x19\n" +
 	"\x05error\x18\x06 \x01(\tH\x02R\x05error\x88\x01\x01\x12#\n" +
 	"\rfinish_reason\x18\b \x01(\tR\ffinishReason\x12!\n" +
 	"\fchoice_index\x18\t \x01(\x05R\vchoiceIndexB\a\n" +
@@ -711,53 +711,53 @@ const file_spidey_v1_llm_proto_rawDesc = "" +
 	"\x15TOOL_CHOICE_MODE_NONE\x10\x02\x12\x1d\n" +
 	"\x19TOOL_CHOICE_MODE_REQUIRED\x10\x03\x12\x1a\n" +
 	"\x16TOOL_CHOICE_MODE_NAMED\x10\x04B\x8d\x01\n" +
-	"\rcom.spidey.v1B\bLlmProtoP\x01Z-github.com/emontenegr/spidey/gen/go/spidey/v1\xa2\x02\x03SXX\xaa\x02\tSpidey.V1\xca\x02\tSpidey\\V1\xe2\x02\x15Spidey\\V1\\GPBMetadata\xea\x02\n" +
-	"Spidey::V1b\x06proto3"
+	"\rcom.grudge.v1B\bLlmProtoP\x01Z-github.com/emontenegr/grudge/gen/go/grudge/v1\xa2\x02\x03GXX\xaa\x02\tGrudge.V1\xca\x02\tGrudge\\V1\xe2\x02\x15Grudge\\V1\\GPBMetadata\xea\x02\n" +
+	"Grudge::V1b\x06proto3"
 
 var (
-	file_spidey_v1_llm_proto_rawDescOnce sync.Once
-	file_spidey_v1_llm_proto_rawDescData []byte
+	file_grudge_v1_llm_proto_rawDescOnce sync.Once
+	file_grudge_v1_llm_proto_rawDescData []byte
 )
 
-func file_spidey_v1_llm_proto_rawDescGZIP() []byte {
-	file_spidey_v1_llm_proto_rawDescOnce.Do(func() {
-		file_spidey_v1_llm_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_spidey_v1_llm_proto_rawDesc), len(file_spidey_v1_llm_proto_rawDesc)))
+func file_grudge_v1_llm_proto_rawDescGZIP() []byte {
+	file_grudge_v1_llm_proto_rawDescOnce.Do(func() {
+		file_grudge_v1_llm_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_grudge_v1_llm_proto_rawDesc), len(file_grudge_v1_llm_proto_rawDesc)))
 	})
-	return file_spidey_v1_llm_proto_rawDescData
+	return file_grudge_v1_llm_proto_rawDescData
 }
 
-var file_spidey_v1_llm_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_spidey_v1_llm_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
-var file_spidey_v1_llm_proto_goTypes = []any{
-	(ToolChoiceMode)(0),        // 0: spidey.v1.ToolChoiceMode
-	(*LLMMessage)(nil),         // 1: spidey.v1.LLMMessage
-	(*ToolDeclaration)(nil),    // 2: spidey.v1.ToolDeclaration
-	(*ToolChoice)(nil),         // 3: spidey.v1.ToolChoice
-	(*CompletionRequest)(nil),  // 4: spidey.v1.CompletionRequest
-	(*CompletionResponse)(nil), // 5: spidey.v1.CompletionResponse
-	(*Usage)(nil),              // 6: spidey.v1.Usage
-	(*StreamChunk)(nil),        // 7: spidey.v1.StreamChunk
-	(Role)(0),                  // 8: spidey.v1.Role
-	(*ContentBlock)(nil),       // 9: spidey.v1.ContentBlock
-	(*TextContent)(nil),        // 10: spidey.v1.TextContent
-	(*ThinkingContent)(nil),    // 11: spidey.v1.ThinkingContent
-	(*ToolCallContent)(nil),    // 12: spidey.v1.ToolCallContent
-	(*ToolResultContent)(nil),  // 13: spidey.v1.ToolResultContent
+var file_grudge_v1_llm_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_grudge_v1_llm_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_grudge_v1_llm_proto_goTypes = []any{
+	(ToolChoiceMode)(0),        // 0: grudge.v1.ToolChoiceMode
+	(*LLMMessage)(nil),         // 1: grudge.v1.LLMMessage
+	(*ToolDeclaration)(nil),    // 2: grudge.v1.ToolDeclaration
+	(*ToolChoice)(nil),         // 3: grudge.v1.ToolChoice
+	(*CompletionRequest)(nil),  // 4: grudge.v1.CompletionRequest
+	(*CompletionResponse)(nil), // 5: grudge.v1.CompletionResponse
+	(*Usage)(nil),              // 6: grudge.v1.Usage
+	(*StreamChunk)(nil),        // 7: grudge.v1.StreamChunk
+	(Role)(0),                  // 8: grudge.v1.Role
+	(*ContentBlock)(nil),       // 9: grudge.v1.ContentBlock
+	(*TextContent)(nil),        // 10: grudge.v1.TextContent
+	(*ThinkingContent)(nil),    // 11: grudge.v1.ThinkingContent
+	(*ToolCallContent)(nil),    // 12: grudge.v1.ToolCallContent
+	(*ToolResultContent)(nil),  // 13: grudge.v1.ToolResultContent
 }
-var file_spidey_v1_llm_proto_depIdxs = []int32{
-	8,  // 0: spidey.v1.LLMMessage.role:type_name -> spidey.v1.Role
-	9,  // 1: spidey.v1.LLMMessage.content:type_name -> spidey.v1.ContentBlock
-	0,  // 2: spidey.v1.ToolChoice.mode:type_name -> spidey.v1.ToolChoiceMode
-	1,  // 3: spidey.v1.CompletionRequest.messages:type_name -> spidey.v1.LLMMessage
-	2,  // 4: spidey.v1.CompletionRequest.tools:type_name -> spidey.v1.ToolDeclaration
-	3,  // 5: spidey.v1.CompletionRequest.tool_choice:type_name -> spidey.v1.ToolChoice
-	1,  // 6: spidey.v1.CompletionResponse.message:type_name -> spidey.v1.LLMMessage
-	6,  // 7: spidey.v1.CompletionResponse.usage:type_name -> spidey.v1.Usage
-	10, // 8: spidey.v1.StreamChunk.text:type_name -> spidey.v1.TextContent
-	11, // 9: spidey.v1.StreamChunk.thinking:type_name -> spidey.v1.ThinkingContent
-	12, // 10: spidey.v1.StreamChunk.tool_call:type_name -> spidey.v1.ToolCallContent
-	13, // 11: spidey.v1.StreamChunk.tool_result:type_name -> spidey.v1.ToolResultContent
-	6,  // 12: spidey.v1.StreamChunk.usage:type_name -> spidey.v1.Usage
+var file_grudge_v1_llm_proto_depIdxs = []int32{
+	8,  // 0: grudge.v1.LLMMessage.role:type_name -> grudge.v1.Role
+	9,  // 1: grudge.v1.LLMMessage.content:type_name -> grudge.v1.ContentBlock
+	0,  // 2: grudge.v1.ToolChoice.mode:type_name -> grudge.v1.ToolChoiceMode
+	1,  // 3: grudge.v1.CompletionRequest.messages:type_name -> grudge.v1.LLMMessage
+	2,  // 4: grudge.v1.CompletionRequest.tools:type_name -> grudge.v1.ToolDeclaration
+	3,  // 5: grudge.v1.CompletionRequest.tool_choice:type_name -> grudge.v1.ToolChoice
+	1,  // 6: grudge.v1.CompletionResponse.message:type_name -> grudge.v1.LLMMessage
+	6,  // 7: grudge.v1.CompletionResponse.usage:type_name -> grudge.v1.Usage
+	10, // 8: grudge.v1.StreamChunk.text:type_name -> grudge.v1.TextContent
+	11, // 9: grudge.v1.StreamChunk.thinking:type_name -> grudge.v1.ThinkingContent
+	12, // 10: grudge.v1.StreamChunk.tool_call:type_name -> grudge.v1.ToolCallContent
+	13, // 11: grudge.v1.StreamChunk.tool_result:type_name -> grudge.v1.ToolResultContent
+	6,  // 12: grudge.v1.StreamChunk.usage:type_name -> grudge.v1.Usage
 	13, // [13:13] is the sub-list for method output_type
 	13, // [13:13] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
@@ -765,14 +765,14 @@ var file_spidey_v1_llm_proto_depIdxs = []int32{
 	0,  // [0:13] is the sub-list for field type_name
 }
 
-func init() { file_spidey_v1_llm_proto_init() }
-func file_spidey_v1_llm_proto_init() {
-	if File_spidey_v1_llm_proto != nil {
+func init() { file_grudge_v1_llm_proto_init() }
+func file_grudge_v1_llm_proto_init() {
+	if File_grudge_v1_llm_proto != nil {
 		return
 	}
-	file_spidey_v1_thread_proto_init()
-	file_spidey_v1_llm_proto_msgTypes[3].OneofWrappers = []any{}
-	file_spidey_v1_llm_proto_msgTypes[6].OneofWrappers = []any{
+	file_grudge_v1_thread_proto_init()
+	file_grudge_v1_llm_proto_msgTypes[3].OneofWrappers = []any{}
+	file_grudge_v1_llm_proto_msgTypes[6].OneofWrappers = []any{
 		(*StreamChunk_Text)(nil),
 		(*StreamChunk_Thinking)(nil),
 		(*StreamChunk_ToolCall)(nil),
@@ -782,18 +782,18 @@ func file_spidey_v1_llm_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_spidey_v1_llm_proto_rawDesc), len(file_spidey_v1_llm_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_grudge_v1_llm_proto_rawDesc), len(file_grudge_v1_llm_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_spidey_v1_llm_proto_goTypes,
-		DependencyIndexes: file_spidey_v1_llm_proto_depIdxs,
-		EnumInfos:         file_spidey_v1_llm_proto_enumTypes,
-		MessageInfos:      file_spidey_v1_llm_proto_msgTypes,
+		GoTypes:           file_grudge_v1_llm_proto_goTypes,
+		DependencyIndexes: file_grudge_v1_llm_proto_depIdxs,
+		EnumInfos:         file_grudge_v1_llm_proto_enumTypes,
+		MessageInfos:      file_grudge_v1_llm_proto_msgTypes,
 	}.Build()
-	File_spidey_v1_llm_proto = out.File
-	file_spidey_v1_llm_proto_goTypes = nil
-	file_spidey_v1_llm_proto_depIdxs = nil
+	File_grudge_v1_llm_proto = out.File
+	file_grudge_v1_llm_proto_goTypes = nil
+	file_grudge_v1_llm_proto_depIdxs = nil
 }

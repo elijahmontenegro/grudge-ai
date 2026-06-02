@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/service/secrets"
+	"github.com/emontenegr/grudge/core"
+	"github.com/emontenegr/grudge/service/secrets"
 )
 
 // Settings represents the service configuration from config.json.
@@ -100,9 +100,9 @@ type HookConfig struct {
 
 // Paths holds resolved XDG base directories.
 type Paths struct {
-	ConfigDir string // $XDG_CONFIG_HOME/spidey/
-	DataDir   string // $XDG_DATA_HOME/spidey/
-	CacheDir  string // $XDG_CACHE_HOME/spidey/
+	ConfigDir string // $XDG_CONFIG_HOME/grudge/
+	DataDir   string // $XDG_DATA_HOME/grudge/
+	CacheDir  string // $XDG_CACHE_HOME/grudge/
 }
 
 // Config is the full runtime configuration.
@@ -247,8 +247,8 @@ func resolvePaths() Paths {
 	}
 
 	return Paths{
-		ConfigDir: filepath.Join(configHome, "spidey"),
-		DataDir:   filepath.Join(dataHome, "spidey"),
-		CacheDir:  filepath.Join(cacheHome, "spidey"),
+		ConfigDir: filepath.Join(configHome, "grudge"),
+		DataDir:   filepath.Join(dataHome, "grudge"),
+		CacheDir:  filepath.Join(cacheHome, "grudge"),
 	}
 }

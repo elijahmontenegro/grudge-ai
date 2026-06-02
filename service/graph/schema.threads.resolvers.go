@@ -13,9 +13,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/rrc"
+	"github.com/emontenegr/grudge/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

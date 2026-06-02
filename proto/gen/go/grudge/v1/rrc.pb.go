@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: spidey/v1/rrc.proto
+// source: grudge/v1/rrc.proto
 
 package v1
 
@@ -58,11 +58,11 @@ func (x EdgeSource) String() string {
 }
 
 func (EdgeSource) Descriptor() protoreflect.EnumDescriptor {
-	return file_spidey_v1_rrc_proto_enumTypes[0].Descriptor()
+	return file_grudge_v1_rrc_proto_enumTypes[0].Descriptor()
 }
 
 func (EdgeSource) Type() protoreflect.EnumType {
-	return &file_spidey_v1_rrc_proto_enumTypes[0]
+	return &file_grudge_v1_rrc_proto_enumTypes[0]
 }
 
 func (x EdgeSource) Number() protoreflect.EnumNumber {
@@ -71,7 +71,7 @@ func (x EdgeSource) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use EdgeSource.Descriptor instead.
 func (EdgeSource) EnumDescriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{0}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{0}
 }
 
 type QUDStatus int32
@@ -110,11 +110,11 @@ func (x QUDStatus) String() string {
 }
 
 func (QUDStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_spidey_v1_rrc_proto_enumTypes[1].Descriptor()
+	return file_grudge_v1_rrc_proto_enumTypes[1].Descriptor()
 }
 
 func (QUDStatus) Type() protoreflect.EnumType {
-	return &file_spidey_v1_rrc_proto_enumTypes[1]
+	return &file_grudge_v1_rrc_proto_enumTypes[1]
 }
 
 func (x QUDStatus) Number() protoreflect.EnumNumber {
@@ -123,7 +123,7 @@ func (x QUDStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use QUDStatus.Descriptor instead.
 func (QUDStatus) EnumDescriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{1}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{1}
 }
 
 type ExclusionReason int32
@@ -162,11 +162,11 @@ func (x ExclusionReason) String() string {
 }
 
 func (ExclusionReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_spidey_v1_rrc_proto_enumTypes[2].Descriptor()
+	return file_grudge_v1_rrc_proto_enumTypes[2].Descriptor()
 }
 
 func (ExclusionReason) Type() protoreflect.EnumType {
-	return &file_spidey_v1_rrc_proto_enumTypes[2]
+	return &file_grudge_v1_rrc_proto_enumTypes[2]
 }
 
 func (x ExclusionReason) Number() protoreflect.EnumNumber {
@@ -175,7 +175,7 @@ func (x ExclusionReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ExclusionReason.Descriptor instead.
 func (ExclusionReason) EnumDescriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{2}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{2}
 }
 
 type Edge struct {
@@ -183,7 +183,7 @@ type Edge struct {
 	FromMessageId     string                 `protobuf:"bytes,1,opt,name=from_message_id,json=fromMessageId,proto3" json:"from_message_id,omitempty"`
 	ToMessageId       string                 `protobuf:"bytes,2,opt,name=to_message_id,json=toMessageId,proto3" json:"to_message_id,omitempty"`
 	Score             float32                `protobuf:"fixed32,3,opt,name=score,proto3" json:"score,omitempty"`
-	Source            EdgeSource             `protobuf:"varint,4,opt,name=source,proto3,enum=spidey.v1.EdgeSource" json:"source,omitempty"`
+	Source            EdgeSource             `protobuf:"varint,4,opt,name=source,proto3,enum=grudge.v1.EdgeSource" json:"source,omitempty"`
 	CrossEncoderScore float32                `protobuf:"fixed32,5,opt,name=cross_encoder_score,json=crossEncoderScore,proto3" json:"cross_encoder_score,omitempty"`
 	QudWeight         float32                `protobuf:"fixed32,6,opt,name=qud_weight,json=qudWeight,proto3" json:"qud_weight,omitempty"`
 	TemporalProximity float32                `protobuf:"fixed32,7,opt,name=temporal_proximity,json=temporalProximity,proto3" json:"temporal_proximity,omitempty"`
@@ -196,7 +196,7 @@ type Edge struct {
 
 func (x *Edge) Reset() {
 	*x = Edge{}
-	mi := &file_spidey_v1_rrc_proto_msgTypes[0]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -208,7 +208,7 @@ func (x *Edge) String() string {
 func (*Edge) ProtoMessage() {}
 
 func (x *Edge) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_rrc_proto_msgTypes[0]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -221,7 +221,7 @@ func (x *Edge) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Edge.ProtoReflect.Descriptor instead.
 func (*Edge) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{0}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Edge) GetFromMessageId() string {
@@ -300,7 +300,7 @@ type QUD struct {
 	Question      string                 `protobuf:"bytes,2,opt,name=question,proto3" json:"question,omitempty"`
 	EstablishedBy string                 `protobuf:"bytes,3,opt,name=established_by,json=establishedBy,proto3" json:"established_by,omitempty"`
 	ParentQudId   string                 `protobuf:"bytes,4,opt,name=parent_qud_id,json=parentQudId,proto3" json:"parent_qud_id,omitempty"`
-	Status        QUDStatus              `protobuf:"varint,5,opt,name=status,proto3,enum=spidey.v1.QUDStatus" json:"status,omitempty"`
+	Status        QUDStatus              `protobuf:"varint,5,opt,name=status,proto3,enum=grudge.v1.QUDStatus" json:"status,omitempty"`
 	AddressedBy   []string               `protobuf:"bytes,6,rep,name=addressed_by,json=addressedBy,proto3" json:"addressed_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -308,7 +308,7 @@ type QUD struct {
 
 func (x *QUD) Reset() {
 	*x = QUD{}
-	mi := &file_spidey_v1_rrc_proto_msgTypes[1]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -320,7 +320,7 @@ func (x *QUD) String() string {
 func (*QUD) ProtoMessage() {}
 
 func (x *QUD) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_rrc_proto_msgTypes[1]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -333,7 +333,7 @@ func (x *QUD) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QUD.ProtoReflect.Descriptor instead.
 func (*QUD) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{1}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *QUD) GetId() string {
@@ -388,7 +388,7 @@ type QUDGraph struct {
 
 func (x *QUDGraph) Reset() {
 	*x = QUDGraph{}
-	mi := &file_spidey_v1_rrc_proto_msgTypes[2]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -400,7 +400,7 @@ func (x *QUDGraph) String() string {
 func (*QUDGraph) ProtoMessage() {}
 
 func (x *QUDGraph) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_rrc_proto_msgTypes[2]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -413,7 +413,7 @@ func (x *QUDGraph) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QUDGraph.ProtoReflect.Descriptor instead.
 func (*QUDGraph) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{2}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *QUDGraph) GetQuds() []*QUD {
@@ -444,7 +444,7 @@ type SelectedMessage struct {
 
 func (x *SelectedMessage) Reset() {
 	*x = SelectedMessage{}
-	mi := &file_spidey_v1_rrc_proto_msgTypes[3]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -456,7 +456,7 @@ func (x *SelectedMessage) String() string {
 func (*SelectedMessage) ProtoMessage() {}
 
 func (x *SelectedMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_rrc_proto_msgTypes[3]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -469,7 +469,7 @@ func (x *SelectedMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SelectedMessage.ProtoReflect.Descriptor instead.
 func (*SelectedMessage) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{3}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SelectedMessage) GetMessageId() string {
@@ -517,7 +517,7 @@ func (x *SelectedMessage) GetCrossThread() bool {
 type ExcludedMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MessageId     string                 `protobuf:"bytes,1,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	Reason        ExclusionReason        `protobuf:"varint,2,opt,name=reason,proto3,enum=spidey.v1.ExclusionReason" json:"reason,omitempty"`
+	Reason        ExclusionReason        `protobuf:"varint,2,opt,name=reason,proto3,enum=grudge.v1.ExclusionReason" json:"reason,omitempty"`
 	Score         float32                `protobuf:"fixed32,3,opt,name=score,proto3" json:"score,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -525,7 +525,7 @@ type ExcludedMessage struct {
 
 func (x *ExcludedMessage) Reset() {
 	*x = ExcludedMessage{}
-	mi := &file_spidey_v1_rrc_proto_msgTypes[4]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -537,7 +537,7 @@ func (x *ExcludedMessage) String() string {
 func (*ExcludedMessage) ProtoMessage() {}
 
 func (x *ExcludedMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_rrc_proto_msgTypes[4]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -550,7 +550,7 @@ func (x *ExcludedMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExcludedMessage.ProtoReflect.Descriptor instead.
 func (*ExcludedMessage) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{4}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ExcludedMessage) GetMessageId() string {
@@ -577,7 +577,7 @@ func (x *ExcludedMessage) GetScore() float32 {
 type SelectionResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`             // Unique ID for this RRC selection event
-	Scope         SelectionScope         `protobuf:"varint,2,opt,name=scope,proto3,enum=spidey.v1.SelectionScope" json:"scope,omitempty"` // Thread-scoped or all-threads
+	Scope         SelectionScope         `protobuf:"varint,2,opt,name=scope,proto3,enum=grudge.v1.SelectionScope" json:"scope,omitempty"` // Thread-scoped or all-threads
 	ThreadId      string                 `protobuf:"bytes,3,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`          // Thread where the prompt originated
 	Selected      []*SelectedMessage     `protobuf:"bytes,4,rep,name=selected,proto3" json:"selected,omitempty"`
 	Excluded      []*ExcludedMessage     `protobuf:"bytes,5,rep,name=excluded,proto3" json:"excluded,omitempty"`
@@ -587,7 +587,7 @@ type SelectionResult struct {
 
 func (x *SelectionResult) Reset() {
 	*x = SelectionResult{}
-	mi := &file_spidey_v1_rrc_proto_msgTypes[5]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -599,7 +599,7 @@ func (x *SelectionResult) String() string {
 func (*SelectionResult) ProtoMessage() {}
 
 func (x *SelectionResult) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_rrc_proto_msgTypes[5]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -612,7 +612,7 @@ func (x *SelectionResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SelectionResult.ProtoReflect.Descriptor instead.
 func (*SelectionResult) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{5}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SelectionResult) GetEventId() string {
@@ -661,7 +661,7 @@ type CarryForwardInput struct {
 
 func (x *CarryForwardInput) Reset() {
 	*x = CarryForwardInput{}
-	mi := &file_spidey_v1_rrc_proto_msgTypes[6]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -673,7 +673,7 @@ func (x *CarryForwardInput) String() string {
 func (*CarryForwardInput) ProtoMessage() {}
 
 func (x *CarryForwardInput) ProtoReflect() protoreflect.Message {
-	mi := &file_spidey_v1_rrc_proto_msgTypes[6]
+	mi := &file_grudge_v1_rrc_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -686,7 +686,7 @@ func (x *CarryForwardInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CarryForwardInput.ProtoReflect.Descriptor instead.
 func (*CarryForwardInput) Descriptor() ([]byte, []int) {
-	return file_spidey_v1_rrc_proto_rawDescGZIP(), []int{6}
+	return file_grudge_v1_rrc_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CarryForwardInput) GetEventId() string {
@@ -710,16 +710,16 @@ func (x *CarryForwardInput) GetThinkingBlocks() []*ThinkingContent {
 	return nil
 }
 
-var File_spidey_v1_rrc_proto protoreflect.FileDescriptor
+var File_grudge_v1_rrc_proto protoreflect.FileDescriptor
 
-const file_spidey_v1_rrc_proto_rawDesc = "" +
+const file_grudge_v1_rrc_proto_rawDesc = "" +
 	"\n" +
-	"\x13spidey/v1/rrc.proto\x12\tspidey.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16spidey/v1/thread.proto\"\x9a\x03\n" +
+	"\x13grudge/v1/rrc.proto\x12\tgrudge.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16grudge/v1/thread.proto\"\x9a\x03\n" +
 	"\x04Edge\x12&\n" +
 	"\x0ffrom_message_id\x18\x01 \x01(\tR\rfromMessageId\x12\"\n" +
 	"\rto_message_id\x18\x02 \x01(\tR\vtoMessageId\x12\x14\n" +
 	"\x05score\x18\x03 \x01(\x02R\x05score\x12-\n" +
-	"\x06source\x18\x04 \x01(\x0e2\x15.spidey.v1.EdgeSourceR\x06source\x12.\n" +
+	"\x06source\x18\x04 \x01(\x0e2\x15.grudge.v1.EdgeSourceR\x06source\x12.\n" +
 	"\x13cross_encoder_score\x18\x05 \x01(\x02R\x11crossEncoderScore\x12\x1d\n" +
 	"\n" +
 	"qud_weight\x18\x06 \x01(\x02R\tqudWeight\x12-\n" +
@@ -735,34 +735,34 @@ const file_spidey_v1_rrc_proto_rawDesc = "" +
 	"\bquestion\x18\x02 \x01(\tR\bquestion\x12%\n" +
 	"\x0eestablished_by\x18\x03 \x01(\tR\restablishedBy\x12\"\n" +
 	"\rparent_qud_id\x18\x04 \x01(\tR\vparentQudId\x12,\n" +
-	"\x06status\x18\x05 \x01(\x0e2\x14.spidey.v1.QUDStatusR\x06status\x12!\n" +
+	"\x06status\x18\x05 \x01(\x0e2\x14.grudge.v1.QUDStatusR\x06status\x12!\n" +
 	"\faddressed_by\x18\x06 \x03(\tR\vaddressedBy\"Q\n" +
 	"\bQUDGraph\x12\"\n" +
-	"\x04quds\x18\x01 \x03(\v2\x0e.spidey.v1.QUDR\x04quds\x12!\n" +
+	"\x04quds\x18\x01 \x03(\v2\x0e.grudge.v1.QUDR\x04quds\x12!\n" +
 	"\factive_stack\x18\x02 \x03(\tR\vactiveStack\"\xe4\x01\n" +
 	"\x0fSelectedMessage\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12'\n" +
 	"\x0feffective_score\x18\x02 \x01(\x02R\x0eeffectiveScore\x12\x1b\n" +
 	"\thop_depth\x18\x03 \x01(\x05R\bhopDepth\x12,\n" +
-	"\tvia_edges\x18\x04 \x03(\v2\x0f.spidey.v1.EdgeR\bviaEdges\x12\x1b\n" +
+	"\tvia_edges\x18\x04 \x03(\v2\x0f.grudge.v1.EdgeR\bviaEdges\x12\x1b\n" +
 	"\tthread_id\x18\x05 \x01(\tR\bthreadId\x12!\n" +
 	"\fcross_thread\x18\x06 \x01(\bR\vcrossThread\"z\n" +
 	"\x0fExcludedMessage\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x122\n" +
-	"\x06reason\x18\x02 \x01(\x0e2\x1a.spidey.v1.ExclusionReasonR\x06reason\x12\x14\n" +
+	"\x06reason\x18\x02 \x01(\x0e2\x1a.grudge.v1.ExclusionReasonR\x06reason\x12\x14\n" +
 	"\x05score\x18\x03 \x01(\x02R\x05score\"\xea\x01\n" +
 	"\x0fSelectionResult\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12/\n" +
-	"\x05scope\x18\x02 \x01(\x0e2\x19.spidey.v1.SelectionScopeR\x05scope\x12\x1b\n" +
+	"\x05scope\x18\x02 \x01(\x0e2\x19.grudge.v1.SelectionScopeR\x05scope\x12\x1b\n" +
 	"\tthread_id\x18\x03 \x01(\tR\bthreadId\x126\n" +
-	"\bselected\x18\x04 \x03(\v2\x1a.spidey.v1.SelectedMessageR\bselected\x126\n" +
-	"\bexcluded\x18\x05 \x03(\v2\x1a.spidey.v1.ExcludedMessageR\bexcluded\"\x90\x01\n" +
+	"\bselected\x18\x04 \x03(\v2\x1a.grudge.v1.SelectedMessageR\bselected\x126\n" +
+	"\bexcluded\x18\x05 \x03(\v2\x1a.grudge.v1.ExcludedMessageR\bexcluded\"\x90\x01\n" +
 	"\x11CarryForwardInput\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1b\n" +
 	"\tthread_id\x18\x02 \x01(\tR\bthreadId\x12C\n" +
-	"\x0fthinking_blocks\x18\x03 \x03(\v2\x1a.spidey.v1.ThinkingContentR\x0ethinkingBlocks*s\n" +
+	"\x0fthinking_blocks\x18\x03 \x03(\v2\x1a.grudge.v1.ThinkingContentR\x0ethinkingBlocks*s\n" +
 	"\n" +
 	"EdgeSource\x12\x1b\n" +
 	"\x17EDGE_SOURCE_UNSPECIFIED\x10\x00\x12\x1d\n" +
@@ -779,49 +779,49 @@ const file_spidey_v1_rrc_proto_rawDesc = "" +
 	" EXCLUSION_REASON_BELOW_THRESHOLD\x10\x01\x12)\n" +
 	"%EXCLUSION_REASON_TRANSITIVE_REDUCTION\x10\x02\x12 \n" +
 	"\x1cEXCLUSION_REASON_DEPTH_LIMIT\x10\x03B\x8d\x01\n" +
-	"\rcom.spidey.v1B\bRrcProtoP\x01Z-github.com/emontenegr/spidey/gen/go/spidey/v1\xa2\x02\x03SXX\xaa\x02\tSpidey.V1\xca\x02\tSpidey\\V1\xe2\x02\x15Spidey\\V1\\GPBMetadata\xea\x02\n" +
-	"Spidey::V1b\x06proto3"
+	"\rcom.grudge.v1B\bRrcProtoP\x01Z-github.com/emontenegr/grudge/gen/go/grudge/v1\xa2\x02\x03GXX\xaa\x02\tGrudge.V1\xca\x02\tGrudge\\V1\xe2\x02\x15Grudge\\V1\\GPBMetadata\xea\x02\n" +
+	"Grudge::V1b\x06proto3"
 
 var (
-	file_spidey_v1_rrc_proto_rawDescOnce sync.Once
-	file_spidey_v1_rrc_proto_rawDescData []byte
+	file_grudge_v1_rrc_proto_rawDescOnce sync.Once
+	file_grudge_v1_rrc_proto_rawDescData []byte
 )
 
-func file_spidey_v1_rrc_proto_rawDescGZIP() []byte {
-	file_spidey_v1_rrc_proto_rawDescOnce.Do(func() {
-		file_spidey_v1_rrc_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_spidey_v1_rrc_proto_rawDesc), len(file_spidey_v1_rrc_proto_rawDesc)))
+func file_grudge_v1_rrc_proto_rawDescGZIP() []byte {
+	file_grudge_v1_rrc_proto_rawDescOnce.Do(func() {
+		file_grudge_v1_rrc_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_grudge_v1_rrc_proto_rawDesc), len(file_grudge_v1_rrc_proto_rawDesc)))
 	})
-	return file_spidey_v1_rrc_proto_rawDescData
+	return file_grudge_v1_rrc_proto_rawDescData
 }
 
-var file_spidey_v1_rrc_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_spidey_v1_rrc_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
-var file_spidey_v1_rrc_proto_goTypes = []any{
-	(EdgeSource)(0),               // 0: spidey.v1.EdgeSource
-	(QUDStatus)(0),                // 1: spidey.v1.QUDStatus
-	(ExclusionReason)(0),          // 2: spidey.v1.ExclusionReason
-	(*Edge)(nil),                  // 3: spidey.v1.Edge
-	(*QUD)(nil),                   // 4: spidey.v1.QUD
-	(*QUDGraph)(nil),              // 5: spidey.v1.QUDGraph
-	(*SelectedMessage)(nil),       // 6: spidey.v1.SelectedMessage
-	(*ExcludedMessage)(nil),       // 7: spidey.v1.ExcludedMessage
-	(*SelectionResult)(nil),       // 8: spidey.v1.SelectionResult
-	(*CarryForwardInput)(nil),     // 9: spidey.v1.CarryForwardInput
+var file_grudge_v1_rrc_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_grudge_v1_rrc_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_grudge_v1_rrc_proto_goTypes = []any{
+	(EdgeSource)(0),               // 0: grudge.v1.EdgeSource
+	(QUDStatus)(0),                // 1: grudge.v1.QUDStatus
+	(ExclusionReason)(0),          // 2: grudge.v1.ExclusionReason
+	(*Edge)(nil),                  // 3: grudge.v1.Edge
+	(*QUD)(nil),                   // 4: grudge.v1.QUD
+	(*QUDGraph)(nil),              // 5: grudge.v1.QUDGraph
+	(*SelectedMessage)(nil),       // 6: grudge.v1.SelectedMessage
+	(*ExcludedMessage)(nil),       // 7: grudge.v1.ExcludedMessage
+	(*SelectionResult)(nil),       // 8: grudge.v1.SelectionResult
+	(*CarryForwardInput)(nil),     // 9: grudge.v1.CarryForwardInput
 	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
-	(SelectionScope)(0),           // 11: spidey.v1.SelectionScope
-	(*ThinkingContent)(nil),       // 12: spidey.v1.ThinkingContent
+	(SelectionScope)(0),           // 11: grudge.v1.SelectionScope
+	(*ThinkingContent)(nil),       // 12: grudge.v1.ThinkingContent
 }
-var file_spidey_v1_rrc_proto_depIdxs = []int32{
-	0,  // 0: spidey.v1.Edge.source:type_name -> spidey.v1.EdgeSource
-	10, // 1: spidey.v1.Edge.detected_at:type_name -> google.protobuf.Timestamp
-	1,  // 2: spidey.v1.QUD.status:type_name -> spidey.v1.QUDStatus
-	4,  // 3: spidey.v1.QUDGraph.quds:type_name -> spidey.v1.QUD
-	3,  // 4: spidey.v1.SelectedMessage.via_edges:type_name -> spidey.v1.Edge
-	2,  // 5: spidey.v1.ExcludedMessage.reason:type_name -> spidey.v1.ExclusionReason
-	11, // 6: spidey.v1.SelectionResult.scope:type_name -> spidey.v1.SelectionScope
-	6,  // 7: spidey.v1.SelectionResult.selected:type_name -> spidey.v1.SelectedMessage
-	7,  // 8: spidey.v1.SelectionResult.excluded:type_name -> spidey.v1.ExcludedMessage
-	12, // 9: spidey.v1.CarryForwardInput.thinking_blocks:type_name -> spidey.v1.ThinkingContent
+var file_grudge_v1_rrc_proto_depIdxs = []int32{
+	0,  // 0: grudge.v1.Edge.source:type_name -> grudge.v1.EdgeSource
+	10, // 1: grudge.v1.Edge.detected_at:type_name -> google.protobuf.Timestamp
+	1,  // 2: grudge.v1.QUD.status:type_name -> grudge.v1.QUDStatus
+	4,  // 3: grudge.v1.QUDGraph.quds:type_name -> grudge.v1.QUD
+	3,  // 4: grudge.v1.SelectedMessage.via_edges:type_name -> grudge.v1.Edge
+	2,  // 5: grudge.v1.ExcludedMessage.reason:type_name -> grudge.v1.ExclusionReason
+	11, // 6: grudge.v1.SelectionResult.scope:type_name -> grudge.v1.SelectionScope
+	6,  // 7: grudge.v1.SelectionResult.selected:type_name -> grudge.v1.SelectedMessage
+	7,  // 8: grudge.v1.SelectionResult.excluded:type_name -> grudge.v1.ExcludedMessage
+	12, // 9: grudge.v1.CarryForwardInput.thinking_blocks:type_name -> grudge.v1.ThinkingContent
 	10, // [10:10] is the sub-list for method output_type
 	10, // [10:10] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
@@ -829,28 +829,28 @@ var file_spidey_v1_rrc_proto_depIdxs = []int32{
 	0,  // [0:10] is the sub-list for field type_name
 }
 
-func init() { file_spidey_v1_rrc_proto_init() }
-func file_spidey_v1_rrc_proto_init() {
-	if File_spidey_v1_rrc_proto != nil {
+func init() { file_grudge_v1_rrc_proto_init() }
+func file_grudge_v1_rrc_proto_init() {
+	if File_grudge_v1_rrc_proto != nil {
 		return
 	}
-	file_spidey_v1_thread_proto_init()
+	file_grudge_v1_thread_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_spidey_v1_rrc_proto_rawDesc), len(file_spidey_v1_rrc_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_grudge_v1_rrc_proto_rawDesc), len(file_grudge_v1_rrc_proto_rawDesc)),
 			NumEnums:      3,
 			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_spidey_v1_rrc_proto_goTypes,
-		DependencyIndexes: file_spidey_v1_rrc_proto_depIdxs,
-		EnumInfos:         file_spidey_v1_rrc_proto_enumTypes,
-		MessageInfos:      file_spidey_v1_rrc_proto_msgTypes,
+		GoTypes:           file_grudge_v1_rrc_proto_goTypes,
+		DependencyIndexes: file_grudge_v1_rrc_proto_depIdxs,
+		EnumInfos:         file_grudge_v1_rrc_proto_enumTypes,
+		MessageInfos:      file_grudge_v1_rrc_proto_msgTypes,
 	}.Build()
-	File_spidey_v1_rrc_proto = out.File
-	file_spidey_v1_rrc_proto_goTypes = nil
-	file_spidey_v1_rrc_proto_depIdxs = nil
+	File_grudge_v1_rrc_proto = out.File
+	file_grudge_v1_rrc_proto_goTypes = nil
+	file_grudge_v1_rrc_proto_depIdxs = nil
 }

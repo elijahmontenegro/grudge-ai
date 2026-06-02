@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package spidey.v1;
+package grudge.v1;
 
-option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+option go_package = "github.com/emontenegr/grudge/gen/go/grudge/v1";
 
 import "google/protobuf/timestamp.proto";
-import "spidey/v1/thread.proto";
+import "grudge/v1/thread.proto";
 
 // Prerequisite DAG edge. Produced by cross-encoder or QUD carry-forward.
 

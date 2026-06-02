@@ -1,6 +1,6 @@
-# Spidey — Architecture & Design Principles
+# Grudge — Architecture & Design Principles
 
-The design principles Spidey commits to. Written for contributors who want to
+The design principles Grudge commits to. Written for contributors who want to
 understand *why* the codebase looks the way it does — what the boundaries
 guard, what failure modes drove each choice, and what's load-bearing vs.
 incidental.

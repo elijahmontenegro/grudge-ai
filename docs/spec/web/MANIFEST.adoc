@@ -1,5 +1,5 @@
-= Spidey Web UI
-:project-name: Spidey
+= Grudge Web UI
+:project-name: Grudge
 :module-name: Web UI
 :rrc-full: Retrieval-Restored Continuation
 :ui-framework: React 19.2.4
@@ -22,7 +22,7 @@
 
 *Paradigm:* RRC-Native Agentic Interface
 
-The web UI is a {ui-framework} application served by the service at `spidey.localhost:8420`. The browser opens automatically when the service launches. It is the agentic interface -- not a chat clone.
+The web UI is a {ui-framework} application served by the service at `grudge.localhost:8420`. The browser opens automatically when the service launches. It is the agentic interface -- not a chat clone.
 
 Three things make this different from every other agentic UI:
 
@@ -52,7 +52,7 @@ Three things make this different from every other agentic UI:
 
 *Code Generation:* {codegen} — plugins: {codegen-plugins}
 
-*Served by:* `spec/service` (static assets at `spidey.localhost`)
+*Served by:* `spec/service` (static assets at `grudge.localhost`)
 
 *Depends on:* `spec/service` ({api-protocol} API)
 
@@ -69,7 +69,7 @@ Three things make this different from every other agentic UI:
 - RRC introspection: drill into citations to see full selection detail, QUD graph state, carry-forward history
 - Agentic interface: tool visualization, agent state, execution traces
 - Message display: rich content (text, code, tool results, images) -- not a plain chat list
-- Home page: landing view when opening Spidey
+- Home page: landing view when opening Grudge
 - Autonomous mode controls: duration picker, play/pause/stop, progress display, thread state in sidebar
 - {api-client} integration: queries, mutations, subscriptions against the service {api-protocol} API
 - Code generation: {api-protocol} schema -> TypeScript client types via {codegen}
@@ -88,7 +88,7 @@ Three things make this different from every other agentic UI:
 
 === Thread Management
 
-- User opens Spidey -> sees thread list with state indicators (idle, running, paused) and warmth (carry-forward count) -> picks a thread or creates one
+- User opens Grudge -> sees thread list with state indicators (idle, running, paused) and warmth (carry-forward count) -> picks a thread or creates one
 - User creates a thread -> types a name or starts with a prompt (thread auto-named from first prompt) -> adds one or more working directories
 - User adds or removes mounted directories from a thread at any time
 - User sees which threads are running/paused/idle from any view via the persistent sidebar
@@ -173,7 +173,7 @@ Three things make this different from every other agentic UI:
 
 === First Run
 
-- User launches Spidey for the first time -> service starts, tray icon appears, browser opens
+- User launches Grudge for the first time -> service starts, tray icon appears, browser opens
 - Onboarding: user provides name and preferences (stored once, injected into prompt templates)
 - Service probes localhost for Ollama (default port) and TEI (default port)
 - Detected -> shows detected providers (LLM, cross-encoder, small fast model), user confirms
@@ -215,7 +215,7 @@ Agent progress updates in the sidebar even when the user is in a different threa
 
 === Navigation History
 
-Citation jumps are navigation events. Browser back/forward work naturally. `spidey.localhost/thread/{id}` is a real URL. Back returns to the same scroll position and expanded state.
+Citation jumps are navigation events. Browser back/forward work naturally. `grudge.localhost/thread/{id}` is a real URL. Back returns to the same scroll position and expanded state.
 
 === Offline Resilience
 

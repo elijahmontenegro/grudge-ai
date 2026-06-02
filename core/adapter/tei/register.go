@@ -3,7 +3,7 @@ package tei
 import (
 	"strings"
 
-	"github.com/emontenegr/spidey/core"
+	"github.com/emontenegr/grudge/core"
 )
 
 // queryPrefixForModel returns the canonical query-side instruction prefix
@@ -12,7 +12,7 @@ import (
 // support, so the client embeds it directly. For symmetric models like
 // bge-m3 returns "" and EmbedQuery routes identically to EmbedDocument.
 //
-// The Spidey-specific task description is what makes this useful for RRC
+// The Grudge-specific task description is what makes this useful for RRC
 // — it tells the model the retrieval is "find the prior message containing
 // the prerequisite info this follow-up depends on", not generic web search.
 func queryPrefixForModel(model string) string {

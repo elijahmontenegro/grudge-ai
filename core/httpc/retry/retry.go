@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
+	"github.com/emontenegr/grudge/core"
 )
 
 // Policy controls retry behavior.

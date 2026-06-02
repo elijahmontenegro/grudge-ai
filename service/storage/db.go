@@ -35,7 +35,7 @@ type DB struct {
 //     WAL mode + busy_timeout handle the write contention; the default
 //     pool size is fine.
 func Open(dataDir string) (*DB, error) {
-	dbPath := filepath.Join(dataDir, "spidey.db")
+	dbPath := filepath.Join(dataDir, "grudge.db")
 	// ncruces/go-sqlite3 driver via WASM (pure Go, no cgo). The
 	// blank-imported sqlite-vec-go-bindings/ncruces auto-registers
 	// the vec0 virtual-table module so chunk_vectors works on every
@@ -50,7 +50,7 @@ func Open(dataDir string) (*DB, error) {
 		"&_pragma=temp_store(MEMORY)" +
 		// trusted_schema=ON allows triggers to write to virtual tables
 		// (vec0 chunk_vectors). Default OFF is a SQLite security
-		// feature against tainted attached databases; Spidey's
+		// feature against tainted attached databases; Grudge's
 		// single-application-owned DB is a trusted-schema use case.
 		"&_pragma=trusted_schema(ON)" +
 		"&_txlock=immediate"

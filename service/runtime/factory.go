@@ -6,19 +6,19 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/core/httpc/retry"
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/service/agent"
-	"github.com/emontenegr/spidey/service/agent/tools"
-	"github.com/emontenegr/spidey/service/config"
-	"github.com/emontenegr/spidey/service/hooks"
-	"github.com/emontenegr/spidey/service/messages"
-	"github.com/emontenegr/spidey/service/prompt"
-	"github.com/emontenegr/spidey/service/sandbox"
-	"github.com/emontenegr/spidey/service/skills"
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/core"
+	"github.com/emontenegr/grudge/core/httpc/retry"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/rrc"
+	"github.com/emontenegr/grudge/service/agent"
+	"github.com/emontenegr/grudge/service/agent/tools"
+	"github.com/emontenegr/grudge/service/config"
+	"github.com/emontenegr/grudge/service/hooks"
+	"github.com/emontenegr/grudge/service/messages"
+	"github.com/emontenegr/grudge/service/prompt"
+	"github.com/emontenegr/grudge/service/sandbox"
+	"github.com/emontenegr/grudge/service/skills"
+	"github.com/emontenegr/grudge/service/storage"
 
 	"google.golang.org/adk/tool"
 )
@@ -151,7 +151,7 @@ func assembleInstruction(threadID string, thread *pb.Thread, deps Deps) (string,
 			mode = "plan"
 		}
 	}
-	spideyMD := prompt.LoadSpideyMD(thread.WorkingDirs)
+	grudgeMD := prompt.LoadGrudgeMD(thread.WorkingDirs)
 	planDir, err := storage.PlanDirForThread(deps.Config.DataDir, threadID)
 	if err != nil {
 		return "", fmt.Errorf("plan dir: %w", err)
@@ -161,7 +161,7 @@ func assembleInstruction(threadID string, thread *pb.Thread, deps Deps) (string,
 		ThreadName:  thread.Name,
 		Sandboxed:   thread.Sandboxed,
 		WorkingDirs: thread.WorkingDirs,
-		SpideyMD:    spideyMD,
+		GrudgeMD:    grudgeMD,
 		PlanDir:     planDir,
 		CurrentTime: time.Now().Format(time.RFC3339),
 		Mode:        mode,

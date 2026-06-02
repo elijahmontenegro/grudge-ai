@@ -18,12 +18,12 @@ import (
 	"log"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/rrc/chunk"
-	"github.com/emontenegr/spidey/service/config"
-	"github.com/emontenegr/spidey/service/search"
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/core"
+	"github.com/emontenegr/grudge/rrc"
+	"github.com/emontenegr/grudge/rrc/chunk"
+	"github.com/emontenegr/grudge/service/config"
+	"github.com/emontenegr/grudge/service/search"
+	"github.com/emontenegr/grudge/service/storage"
 )
 
 // backfillChunks populates the chunks table for every message
@@ -208,7 +208,7 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	}
 
 	if s.Scorer == nil || s.MainCompleter == nil {
-		log.Printf("WARNING: providers not fully configured — configure at http://spidey.localhost:8420/settings")
+		log.Printf("WARNING: providers not fully configured — configure at http://grudge.localhost:8420/settings")
 	}
 
 	// RRC engine. Config precedence: zero Settings.Engine → DefaultConfig

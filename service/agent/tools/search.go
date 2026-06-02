@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emontenegr/spidey/service/sandbox"
+	"github.com/emontenegr/grudge/service/sandbox"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

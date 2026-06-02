@@ -1,8 +1,8 @@
 package runtime
 
 import (
-	"github.com/emontenegr/spidey/core/httpc/retry"
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
+	"github.com/emontenegr/grudge/core/httpc/retry"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
 )
 
 // Pubsub fans out runtime events to UI subscribers. The factory

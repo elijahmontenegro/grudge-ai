@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
 )
 
 func ptrInt32(v int32) *int32 { return &v }

@@ -1,9 +1,9 @@
-# Spidey
+# Grudge
 
-Spidey is an open-source LLM agent framework.
+Grudge is an open-source LLM agent framework.
 
 <!-- Drop a screenshot at docs/assets/screenshot.png and uncomment: -->
-<!-- ![Spidey UI](docs/assets/screenshot.png) -->
+<!-- ![Grudge UI](docs/assets/screenshot.png) -->
 
 ## Memory
 
@@ -51,7 +51,7 @@ core/  <──  service/  ──>  web/
   selection trace, edges, prerequisite scores, prompt derivation, tool
   timeline.
 
-**Spidey is defined by a formal AsciiDoc spec.** Read
+**Grudge is defined by a formal AsciiDoc spec.** Read
 [`docs/spec/MANIFEST.adoc`](docs/spec/MANIFEST.adoc) if the code
 disagrees with the docs.
 
@@ -66,7 +66,7 @@ Requires Go 1.25+, Node 20+, Docker, and [go-task](https://taskfile.dev)
 ```bash
 task substrate:up    # TEI embedder + vLLM reranker + SearXNG search
 task build           # web bundle + Go binary
-task run             # serves on http://spidey.localhost:8420
+task run             # serves on http://grudge.localhost:8420
 ```
 
 `task stop` drains the SQLite WAL cleanly. `task substrate:down` releases

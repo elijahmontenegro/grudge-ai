@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/emontenegr/spidey/service/agent"
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/service/agent"
+	"github.com/emontenegr/grudge/service/storage"
 )
 
 // ReconcileOnBoot normalizes agent_state rows that were left

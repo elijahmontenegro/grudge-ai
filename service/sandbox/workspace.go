@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/service/storage"
 )
 
 // ContainerWorkspace is the path at which the host workspace directory

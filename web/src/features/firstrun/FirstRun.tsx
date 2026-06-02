@@ -87,13 +87,13 @@ export function FirstRun({ onComplete }: { onComplete: () => void }) {
     <div className="firstrun">
       <div className="firstrun-brand">
         <span className="firstrun-dot" />
-        <span className="firstrun-wordmark">spidey</span>
+        <span className="firstrun-wordmark">grudge</span>
         <span className="firstrun-sep">/</span>
         <span className="firstrun-crumb">first run</span>
       </div>
-      <h1>Welcome to Spidey.</h1>
+      <h1>Welcome to Grudge.</h1>
       <div className="lede">
-        Spidey runs locally. Point it at a model provider to get started. RRC scorer,
+        Grudge runs locally. Point it at a model provider to get started. RRC scorer,
         embedder, and web search are optional — configure them later in Settings if you want
         prerequisite selection, semantic search, or the WebSearch tool.
       </div>
@@ -148,7 +148,7 @@ export function FirstRun({ onComplete }: { onComplete: () => void }) {
             opacity: saving || !canConfirm ? 0.5 : 1,
           }}
         >
-          {saving ? 'saving…' : 'confirm · open spidey'}
+          {saving ? 'saving…' : 'confirm · open grudge'}
         </button>
         <div style={{ flex: 1 }} />
         {saveError ? (

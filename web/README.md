@@ -1,7 +1,7 @@
-# Spidey web UI
+# Grudge web UI
 
 React 19 + Apollo Client. Speaks GraphQL + WebSocket subscriptions to the
-Spidey service. Renders the full RRC introspection surface — selection
+Grudge service. Renders the full RRC introspection surface — selection
 trace, edges, prerequisite scores, prompt derivation, agent state, and the
 tool execution timeline — alongside the thread / chat experience.
 
@@ -12,7 +12,7 @@ npm install
 npm run dev
 ```
 
-The Vite dev server proxies GraphQL to a running Spidey backend (see
+The Vite dev server proxies GraphQL to a running Grudge backend (see
 `vite.config.ts`). Start the backend first via `task run` from the repo
 root.
 

@@ -5,21 +5,21 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/emontenegr/spidey/core/httpc/retry"
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/service/agent"
-	"github.com/emontenegr/spidey/service/approvals"
-	"github.com/emontenegr/spidey/service/config"
-	"github.com/emontenegr/spidey/service/hooks"
-	"github.com/emontenegr/spidey/service/messages"
-	"github.com/emontenegr/spidey/service/plans"
-	"github.com/emontenegr/spidey/service/prompt"
-	"github.com/emontenegr/spidey/service/pubsub"
-	"github.com/emontenegr/spidey/service/runtime"
-	"github.com/emontenegr/spidey/service/selections"
-	"github.com/emontenegr/spidey/service/skills"
-	"github.com/emontenegr/spidey/service/storage"
-	"github.com/emontenegr/spidey/service/substrate"
+	"github.com/emontenegr/grudge/core/httpc/retry"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/service/agent"
+	"github.com/emontenegr/grudge/service/approvals"
+	"github.com/emontenegr/grudge/service/config"
+	"github.com/emontenegr/grudge/service/hooks"
+	"github.com/emontenegr/grudge/service/messages"
+	"github.com/emontenegr/grudge/service/plans"
+	"github.com/emontenegr/grudge/service/prompt"
+	"github.com/emontenegr/grudge/service/pubsub"
+	"github.com/emontenegr/grudge/service/runtime"
+	"github.com/emontenegr/grudge/service/selections"
+	"github.com/emontenegr/grudge/service/skills"
+	"github.com/emontenegr/grudge/service/storage"
+	"github.com/emontenegr/grudge/service/substrate"
 
 	"google.golang.org/adk/tool"
 )
@@ -170,7 +170,7 @@ func (r *Resolver) publishAgentState(threadID string, state *AgentState) {
 // so the UI hides the retry indicator.
 func (r *Resolver) publishRetryStatus(threadID string, ev retry.Event) {
 	// Log every retry event server-side so "why is this happening" has
-	// an actual answer in spidey.log instead of being stuck in the UI's
+	// an actual answer in grudge.log instead of being stuck in the UI's
 	// retry subscription buffer. Final+no-error = success clear; Final
 	// with an error = terminal; otherwise an in-flight retry with a
 	// delay before the next attempt.

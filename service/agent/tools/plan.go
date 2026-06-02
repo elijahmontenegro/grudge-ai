@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/emontenegr/spidey/service/internal/adoc"
+	"github.com/emontenegr/grudge/service/internal/adoc"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

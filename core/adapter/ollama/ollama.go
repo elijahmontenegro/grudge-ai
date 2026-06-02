@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/core/internal/httpc"
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
+	"github.com/emontenegr/grudge/core"
+	"github.com/emontenegr/grudge/core/internal/httpc"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
 )
 
 // dumpBudget caps how many distinct 5xx request bodies we dump per
@@ -59,7 +59,7 @@ func dumpFailingRequestOnce(body []byte) {
 		log.Printf("[Ollama] dump: UserHomeDir: %v", err)
 		return
 	}
-	dir := filepath.Join(home, ".local", "share", "spidey", "failing-requests")
+	dir := filepath.Join(home, ".local", "share", "grudge", "failing-requests")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		log.Printf("[Ollama] dump: MkdirAll: %v", err)
 		return

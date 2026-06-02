@@ -3,10 +3,10 @@ package adk
 import (
 	"testing"
 
-	"github.com/emontenegr/spidey/core"
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/rrc/chunk"
-	"github.com/emontenegr/spidey/rrc/tiktoken"
+	"github.com/emontenegr/grudge/core"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/rrc/chunk"
+	"github.com/emontenegr/grudge/rrc/tiktoken"
 )
 
 func init() {

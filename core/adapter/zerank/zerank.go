@@ -25,9 +25,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	"github.com/emontenegr/spidey/core/internal/httpc"
-	"github.com/emontenegr/spidey/core/httpc/retry"
+	"github.com/emontenegr/grudge/core"
+	"github.com/emontenegr/grudge/core/internal/httpc"
+	"github.com/emontenegr/grudge/core/httpc/retry"
 )
 
 // zerankRetryPolicy mirrors TEI's policy — local service, ~6 minute

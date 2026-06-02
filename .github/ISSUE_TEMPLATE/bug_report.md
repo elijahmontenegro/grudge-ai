@@ -15,7 +15,7 @@ labels: bug
 
 ## Environment
 
-- Spidey version / commit:
+- Grudge version / commit:
 - OS:
 - Go version (`go version`):
 - Provider + model in use:

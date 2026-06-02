@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/service/agent/tools"
-	"github.com/emontenegr/spidey/service/hooks"
-	"github.com/emontenegr/spidey/service/storage"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/service/agent/tools"
+	"github.com/emontenegr/grudge/service/hooks"
+	"github.com/emontenegr/grudge/service/storage"
 )
 
 // toolAgent implements tools.Agent by closing over the kernel

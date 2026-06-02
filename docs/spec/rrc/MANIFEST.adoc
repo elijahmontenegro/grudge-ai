@@ -1,5 +1,5 @@
-= Spidey RRC Engine
-:project-name: Spidey
+= Grudge RRC Engine
+:project-name: Grudge
 :module-name: RRC Engine
 :rrc-full: Retrieval-Restored Continuation
 :lang: Go 1.26.1
@@ -25,7 +25,7 @@ The engine does not know which mode it's running in. It operates on whatever str
 
 *Language:* {lang}
 
-*Dependencies:* `proto/gen/go/spidey/v1` (proto types), standard library. No dependency on `spec/core`. The engine defines its own consumer interfaces (Scorer, Completer) -- any core adapter satisfies them via Go structural typing.
+*Dependencies:* `proto/gen/go/grudge/v1` (proto types), standard library. No dependency on `spec/core`. The engine defines its own consumer interfaces (Scorer, Completer) -- any core adapter satisfies them via Go structural typing.
 
 === RRC Reference
 
@@ -58,13 +58,13 @@ include::../MANIFEST.adoc[tag=rrc]
 
 == Implementation
 
-Proto types referenced throughout this spec (`pb.Message`, `pb.Edge`, `pb.SelectionResult`, `pb.CarryForwardInput`, `pb.ClassifyRequest`, `pb.CompletionRequest`, etc.) are defined in `spec/core` (Proto Truth Type Definitions section) and generated to `proto/gen/go/spidey/v1/`.
+Proto types referenced throughout this spec (`pb.Message`, `pb.Edge`, `pb.SelectionResult`, `pb.CarryForwardInput`, `pb.ClassifyRequest`, `pb.CompletionRequest`, etc.) are defined in `spec/core` (Proto Truth Type Definitions section) and generated to `proto/gen/go/grudge/v1/`.
 
 === File Tree
 
 ----
 rrc/
-├── go.mod            # depends on gen/go/spidey/v1 only
+├── go.mod            # depends on gen/go/grudge/v1 only
 ├── engine.go         # Public API: Engine struct, NewEngine, OnMessage, Select, CarryForward, Fork, Merge
 ├── interfaces.go     # Consumer-defined interfaces: Scorer, Completer
 ├── dag.go            # DAG type, dual adjacency list, edge operations, subgraph extraction

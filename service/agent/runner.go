@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/emontenegr/spidey/core"
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/rrc"
-	adk "github.com/emontenegr/spidey/service/agent/internal/adk"
-	"github.com/emontenegr/spidey/service/messages"
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/core"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/rrc"
+	adk "github.com/emontenegr/grudge/service/agent/internal/adk"
+	"github.com/emontenegr/grudge/service/messages"
+	"github.com/emontenegr/grudge/service/storage"
 
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
@@ -229,7 +229,7 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 
 	// Create the ADK runner
 	adkRunner, err := runner.New(runner.Config{
-		AppName:           "spidey",
+		AppName:           "grudge",
 		Agent:             rootAgent,
 		SessionService:    session.InMemoryService(),
 		AutoCreateSession: true,

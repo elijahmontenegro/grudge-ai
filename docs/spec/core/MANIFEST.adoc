@@ -1,5 +1,5 @@
-= Spidey Core Library
-:project-name: Spidey
+= Grudge Core Library
+:project-name: Grudge
 :module-name: Core Library
 :lang: Go 1.26.1
 :codegen: buf v1.67.0, go generate
@@ -13,7 +13,7 @@
 
 *Paradigm:* Provider-Agnostic Abstraction Library
 
-The core library is the foundational Go package. It defines the abstraction interfaces and provider/embedder/scorer adapters. Proto truth types are defined in `proto/spidey/v1/` and generate to `proto/gen/go/spidey/v1/` -- core imports them, it does not own them. Core has no opinion on RRC, orchestration, UI, or deployment.
+The core library is the foundational Go package. It defines the abstraction interfaces and provider/embedder/scorer adapters. Proto truth types are defined in `proto/grudge/v1/` and generate to `proto/gen/go/grudge/v1/` -- core imports them, it does not own them. Core has no opinion on RRC, orchestration, UI, or deployment.
 
 === Stack
 
@@ -21,7 +21,7 @@ The core library is the foundational Go package. It defines the abstraction inte
 
 *Code Generation:* {codegen}
 
-*Truth Types:* Protocol Buffers (`.proto` files in `proto/spidey/v1/` are the canonical source; Go types generate to `proto/gen/go/spidey/v1/`)
+*Truth Types:* Protocol Buffers (`.proto` files in `proto/grudge/v1/` are the canonical source; Go types generate to `proto/gen/go/grudge/v1/`)
 
 *Proto Syntax:* {proto-syntax}
 
@@ -54,7 +54,7 @@ The core library is the foundational Go package. It defines the abstraction inte
 
 === Proto Truth Types
 
-Defined in `proto/spidey/v1/`. Generated Go types in `proto/gen/go/spidey/v1/`. Three files:
+Defined in `proto/grudge/v1/`. Generated Go types in `proto/gen/go/grudge/v1/`. Three files:
 
 - **thread.proto** -- Message, Role, ContentBlock (TextContent, ThinkingContent, ToolCallContent, ToolResultContent, ImageContent), Thread, SelectionScope
 - **rrc.proto** -- Edge, EdgeSource, QUD, QUDStatus, QUDGraph, SelectedMessage, ExcludedMessage, ExclusionReason, SelectionResult
@@ -289,8 +289,8 @@ The adapter closes the channel when the stream ends or the context is cancelled.
 
 Proto compilation via `buf v1.67.0`. Configuration in `buf.yaml` at the repository root.
 
-Input: `proto/spidey/v1/*.proto`
-Output: `proto/gen/go/spidey/v1/*.go`
+Input: `proto/grudge/v1/*.proto`
+Output: `proto/gen/go/grudge/v1/*.go`
 
 Generated Go types live in the `gen/go` module (its own `go.mod`, depends on `google.golang.org/protobuf v1.36.3` only). All other Go modules import from `gen/go`.
 
@@ -298,7 +298,7 @@ Downstream: GraphQL schema (in service spec) and TypeScript types (in web spec) 
 
 === Proto Truth Type Definitions
 
-Proto source files live in `proto/spidey/v1/` at the repository root. Generated Go types live in `proto/gen/go/spidey/v1/` (its own Go module). These paths are outside the `core/` module — core imports from `proto/gen/go`, it does not own the proto files. The proto files are reproduced here as the canonical reference for all specs.
+Proto source files live in `proto/grudge/v1/` at the repository root. Generated Go types live in `proto/gen/go/grudge/v1/` (its own Go module). These paths are outside the `core/` module — core imports from `proto/gen/go`, it does not own the proto files. The proto files are reproduced here as the canonical reference for all specs.
 
 Syntax: {proto-syntax}.
 
@@ -307,8 +307,8 @@ Syntax: {proto-syntax}.
 [source,protobuf]
 ----
 syntax = "proto3";
-package spidey.v1;
-option go_package = "github.com/emontenegr/spidey/proto/gen/go/spidey/v1";
+package grudge.v1;
+option go_package = "github.com/emontenegr/grudge/proto/gen/go/grudge/v1";
 import "google/protobuf/timestamp.proto";
 
 enum Role {
@@ -366,10 +366,10 @@ enum SelectionScope {
 [source,protobuf]
 ----
 syntax = "proto3";
-package spidey.v1;
-option go_package = "github.com/emontenegr/spidey/proto/gen/go/spidey/v1";
+package grudge.v1;
+option go_package = "github.com/emontenegr/grudge/proto/gen/go/grudge/v1";
 import "google/protobuf/timestamp.proto";
-import "spidey/v1/thread.proto";
+import "grudge/v1/thread.proto";
 
 enum EdgeSource {
   EDGE_SOURCE_UNSPECIFIED = 0;
@@ -454,10 +454,10 @@ message CarryForwardInput {
 [source,protobuf]
 ----
 syntax = "proto3";
-package spidey.v1;
-option go_package = "github.com/emontenegr/spidey/proto/gen/go/spidey/v1";
+package grudge.v1;
+option go_package = "github.com/emontenegr/grudge/proto/gen/go/grudge/v1";
 import "google/protobuf/struct.proto";
-import "spidey/v1/thread.proto";
+import "grudge/v1/thread.proto";
 
 message LLMMessage {
   Role role = 1;

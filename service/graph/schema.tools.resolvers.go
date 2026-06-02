@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/rrc"
+	"github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/rrc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

@@ -3,7 +3,7 @@
 **Date:** 2026-04-29
 **Hardware target:** NVIDIA RTX 3080 Ti, 12 GB VRAM
 **Scope:** Architectural and model-level selection for RRC's two-layer prereq detection substrate (retrieval + rerank).
-**Audience:** Whoever picks up Spidey next. Self-contained — does not assume prior session context.
+**Audience:** Whoever picks up Grudge next. Self-contained — does not assume prior session context.
 
 ---
 
@@ -27,7 +27,7 @@ The contract is silent on architecture. Single-vector dense bi-encoder, multi-ve
 
 ### 1.2 What this evaluation answers
 
-Which model architecture and specific (Layer 1, Layer 2) pair best satisfies RRC's contract on Spidey's actual workload, given a 12 GB consumer GPU constraint.
+Which model architecture and specific (Layer 1, Layer 2) pair best satisfies RRC's contract on Grudge's actual workload, given a 12 GB consumer GPU constraint.
 
 ### 1.3 What this evaluation does not answer
 
@@ -54,7 +54,7 @@ Candidate length 33–1430 chars. Every "correct" candidate fits in a single pro
 - F_long_document (6) — buried-section discrimination, candidates from same parent doc with overlapping vocabulary
 
 **R3 — Multi-chunk source discrimination. 5 sources, 5 queries.**
-Each "source" is a 2800–5034 char document from real Spidey artifacts (substrate plan, journal, CLAUDE.md). Sources pre-chunked via `rrc/chunking.go` defaults (2000 char max, 200 char overlap, paragraph-preferring boundaries) into 13 chunks total. Pool is the 13 chunks. Per query, score every chunk; aggregate to source-level rank via max-over-chunks. Reports source-level top-K.
+Each "source" is a 2800–5034 char document from real Grudge artifacts (substrate plan, journal, CLAUDE.md). Sources pre-chunked via `rrc/chunking.go` defaults (2000 char max, 200 char overlap, paragraph-preferring boundaries) into 13 chunks total. Pool is the 13 chunks. Per query, score every chunk; aggregate to source-level rank via max-over-chunks. Reports source-level top-K.
 
 This is the production retrieval shape: messages > 2000 chars get chunked, each chunk indexed separately, the engine forms message-pair edges via max-over-chunks aggregation.
 
@@ -252,7 +252,7 @@ Architectural argument for multi-vector was lossless retrieval *as a property* (
 - The size-confound was broken (33M, 150M, 560M ColBERTs all cluster at the same ceiling)
 - The architectural-property claim does not hold for short-utterance discrimination
 
-P2 wins on multi-chunk source-level retrieval (5/5 at 33M params, 0.14GB, 14ms). For a workload dominated by long structured content, P2 single-stage (answerai-colbert-small) would be the principled choice. Spidey's mixed corpus has both shapes. Picking the architecture that's robust on both is the contract-derived answer.
+P2 wins on multi-chunk source-level retrieval (5/5 at 33M params, 0.14GB, 14ms). For a workload dominated by long structured content, P2 single-stage (answerai-colbert-small) would be the principled choice. Grudge's mixed corpus has both shapes. Picking the architecture that's robust on both is the contract-derived answer.
 
 ### 7.2 Cascaded P3 — dense retrieve + multi-vector rerank
 
@@ -264,7 +264,7 @@ P3 was hypothesized as a compromise: keep cheap dense retrieval, gain multi-vect
 
 **Status: rejected on product-shape grounds, not measured.**
 
-Using Claude/GPT API for prereq scoring per turn makes RRC's correctness depend on a third-party API. Per-call cost, network as SPOF, data leaves the machine, no offline operation. Spidey's local-first deployment shape disqualifies this. Frontier LLMs are appropriate as the *main agent* but not as the prereq detector.
+Using Claude/GPT API for prereq scoring per turn makes RRC's correctness depend on a third-party API. Per-call cost, network as SPOF, data leaves the machine, no offline operation. Grudge's local-first deployment shape disqualifies this. Frontier LLMs are appropriate as the *main agent* but not as the prereq detector.
 
 ### 7.4 Hybrid sparse + dense (P4)
 
@@ -319,7 +319,7 @@ Mean latencies are per-pair on a quiet GPU. Production has additional load (KV c
 
 ### 8.7 Long-tail content shapes
 
-Content tested is technical-prose-shaped (Spidey artifacts, fictional scenarios). RRC will encounter code dumps, structured data, multilingual content, attachments. None of these are in the eval set. zembed-1's claimed multilingual robustness vs Qwen3-Embedding's multilingual coverage was not differentially tested.
+Content tested is technical-prose-shaped (Grudge artifacts, fictional scenarios). RRC will encounter code dumps, structured data, multilingual content, attachments. None of these are in the eval set. zembed-1's claimed multilingual robustness vs Qwen3-Embedding's multilingual coverage was not differentially tested.
 
 ---
 

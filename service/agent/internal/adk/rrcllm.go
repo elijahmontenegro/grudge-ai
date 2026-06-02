@@ -8,12 +8,12 @@ import (
 	"log"
 	"math"
 
-	"github.com/emontenegr/spidey/core"
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/rrc"
-	"github.com/emontenegr/spidey/rrc/chunk"
-	"github.com/emontenegr/spidey/service/search"
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/core"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/rrc"
+	"github.com/emontenegr/grudge/rrc/chunk"
+	"github.com/emontenegr/grudge/service/search"
+	"github.com/emontenegr/grudge/service/storage"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )

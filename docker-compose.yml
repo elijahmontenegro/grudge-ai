@@ -1,4 +1,4 @@
-# Spidey dev environment — local services.
+# Grudge dev environment — local services.
 # Usage: docker compose up -d
 #
 # The main LLM is served by the Ollama app itself (native `:cloud`
@@ -30,7 +30,7 @@ services:
   #     docker compose build sandbox
   # See SANDBOX.md for what's inside and how to extend.
   sandbox:
-    image: spidey-sandbox:latest
+    image: grudge-sandbox:latest
     build:
       context: ./containers/sandbox
     profiles: ["build-only"]
@@ -49,7 +49,7 @@ services:
     build:
       context: ./containers/vllm
       dockerfile: Dockerfile
-    image: spidey-vllm:latest
+    image: grudge-vllm:latest
     ports:
       - "8000:8000"
     volumes:

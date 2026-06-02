@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
+	pb "github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
 )
 
 // AutonomousState tracks the state of an autonomous run for a thread.

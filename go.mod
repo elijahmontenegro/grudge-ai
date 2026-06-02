@@ -1,4 +1,4 @@
-module github.com/emontenegr/spidey
+module github.com/emontenegr/grudge
 
 go 1.25.0
 

@@ -18,7 +18,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     // Log for devtools — backend has no error sink so this is where it stops.
-    console.error('[Spidey] React error:', error, info.componentStack)
+    console.error('[Grudge] React error:', error, info.componentStack)
   }
 
   render() {

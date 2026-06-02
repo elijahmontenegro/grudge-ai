@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in Spidey. This document covers the practical bits —
+Thanks for your interest in Grudge. This document covers the practical bits —
 how to develop, test, and submit changes. For design rationale, see
 [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
@@ -9,11 +9,11 @@ how to develop, test, and submit changes. For design rationale, see
 Requires Go 1.25+, Node 20+, Docker, and [go-task](https://taskfile.dev).
 
 ```bash
-git clone https://github.com/emontenegr/spidey.git
-cd spidey
+git clone https://github.com/emontenegr/grudge.git
+cd grudge
 task substrate:up   # start TEI + vLLM + SearXNG containers
 task build          # build the web bundle + the Go binary
-task run            # serves on http://spidey.localhost:8420
+task run            # serves on http://grudge.localhost:8420
 ```
 
 ## Before opening a PR
@@ -48,7 +48,7 @@ possible.
 | Add a model provider | `core/adapter/<name>/` + register in `init()` |
 | Add a tool the agent can call | `service/agent/tools/` |
 | Change a GraphQL schema field | `service/graph/schema.graphqls` → run `gqlgen generate` |
-| Change a proto message | `proto/spidey/v1/*.proto` → `task proto` |
+| Change a proto message | `proto/grudge/v1/*.proto` → `task proto` |
 | Document a design decision | `ARCHITECTURE.md` |
 
 ## Reporting bugs / requesting features

@@ -1,10 +1,10 @@
 syntax = "proto3";
 
-package spidey.v1;
+package grudge.v1;
 
-option go_package = "github.com/emontenegr/spidey/gen/go/spidey/v1";
+option go_package = "github.com/emontenegr/grudge/gen/go/grudge/v1";
 
-import "spidey/v1/thread.proto";
+import "grudge/v1/thread.proto";
 
 // LLM interface types. Provider-agnostic completion.
 //

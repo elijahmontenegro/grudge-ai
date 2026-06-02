@@ -23,7 +23,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/service/storage"
 )
 
 func main() {
@@ -33,7 +33,7 @@ func main() {
 		last        int
 		percentiles bool
 	)
-	flag.StringVar(&dataDir, "data", defaultDataDir(), "Spidey data directory (contains spidey.db)")
+	flag.StringVar(&dataDir, "data", defaultDataDir(), "Grudge data directory (contains grudge.db)")
 	flag.StringVar(&threadID, "thread", "", "thread id to inspect (required)")
 	flag.IntVar(&last, "last", 25, "show the most recent N traces (table mode)")
 	flag.BoolVar(&percentiles, "percentiles", false, "print p50/p90/p99 per stage instead of the per-row table")
@@ -147,15 +147,15 @@ func percentile(sorted []int64, p float64) int64 {
 // would pull in the whole settings layer and the tool would need to
 // understand provider config it never reads.
 func defaultDataDir() string {
-	if d := os.Getenv("SPIDEY_DATA_DIR"); d != "" {
+	if d := os.Getenv("GRUDGE_DATA_DIR"); d != "" {
 		return d
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "."
 	}
-	// Match the layout used by config.Load on Windows (.local/share/spidey)
+	// Match the layout used by config.Load on Windows (.local/share/grudge)
 	// and Linux/macOS (same path). Cross-platform-uniform via the env-var
 	// escape hatch for non-standard installs.
-	return home + "/.local/share/spidey"
+	return home + "/.local/share/grudge"
 }

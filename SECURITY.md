@@ -2,7 +2,7 @@
 
 ## Threat model
 
-Spidey runs an LLM-driven agent that issues shell commands and writes to the
+Grudge runs an LLM-driven agent that issues shell commands and writes to the
 filesystem. The threat model assumes the **model itself may be hostile** —
 prompt injection from corpus content, a compromised provider, or a
 malformed tool response can all attempt to coerce the agent into actions
@@ -26,20 +26,20 @@ Concrete protections:
   `sandbox.ResolveWorkspacePath`; anything outside the workspace is
   rejected.
 
-What Spidey does **not** protect against:
+What Grudge does **not** protect against:
 
 - Models tricked into exfiltrating data through allowed network calls
   (the sandbox does not restrict outbound network).
 - Malicious code that escapes the container via a kernel vulnerability.
 - A user opting out of the sandbox (`sandboxed=false`).
 - API keys stored in the user's keychain — protection is at the OS
-  keychain layer, not within Spidey.
+  keychain layer, not within Grudge.
 
 ## Reporting a vulnerability
 
 **Please don't file security issues as public GitHub issues.**
 
-Use GitHub's [private security advisories](https://github.com/emontenegr/spidey/security/advisories/new)
+Use GitHub's [private security advisories](https://github.com/emontenegr/grudge/security/advisories/new)
 to report. Include a description, reproduction, and impact. We'll acknowledge
 within 7 days.
 

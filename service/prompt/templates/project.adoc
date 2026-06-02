@@ -1,6 +1,6 @@
-{{if .SpideyMD}}
+{{if .GrudgeMD}}
 ## Project Instructions
 
-{{range .SpideyMD}}{{.}}
+{{range .GrudgeMD}}{{.}}
 
 {{end}}{{end}}

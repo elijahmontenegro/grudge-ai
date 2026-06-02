@@ -22,7 +22,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/emontenegr/spidey/service/storage"
+	"github.com/emontenegr/grudge/service/storage"
 
 	"github.com/google/uuid"
 )
@@ -50,7 +50,7 @@ type AttachmentManager struct {
 	dataDir string
 }
 
-// NewAttachmentManager binds the manager to the spidey data directory.
+// NewAttachmentManager binds the manager to the grudge data directory.
 // All attachment paths resolve under
 // {dataDir}/sandboxes/sbx-{threadID}/_attachments/ — same root the
 // sandbox mounts at /workspace, so attachments are immediately visible

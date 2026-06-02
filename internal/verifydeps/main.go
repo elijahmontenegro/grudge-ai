@@ -34,8 +34,8 @@ var checks = []check{
 		desc: "service/storage import boundary",
 		pkg:  "./service/storage/...",
 		// Anything matching forbidden but not allowed is a leak.
-		forbidden: []string{"github.com/emontenegr/spidey/service/"},
-		allowed:   []string{"github.com/emontenegr/spidey/service/storage"},
+		forbidden: []string{"github.com/emontenegr/grudge/service/"},
+		allowed:   []string{"github.com/emontenegr/grudge/service/storage"},
 	},
 	{
 		desc: "rrc tokenizer decoupling",

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/emontenegr/spidey/service/internal/adoc"
+	"github.com/emontenegr/grudge/service/internal/adoc"
 )
 
 // Templates are baked into the binary. The composition root
@@ -33,7 +33,7 @@ type TemplateData struct {
 	ThreadName  string
 	Sandboxed   bool     // true when Bash + file tools run inside the Docker workspace
 	WorkingDirs []string
-	SpideyMD    []string // contents of SPIDEY.md files from mounted dirs
+	GrudgeMD    []string // contents of GRUDGE.md files from mounted dirs
 	PlanContent string   // compiled plan content (per-turn)
 	PlanDir     string   // writable plan directory path
 	CurrentTime string

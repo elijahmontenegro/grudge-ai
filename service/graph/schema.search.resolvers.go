@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/emontenegr/spidey/proto/gen/go/spidey/v1"
-	"github.com/emontenegr/spidey/rrc"
+	"github.com/emontenegr/grudge/proto/gen/go/grudge/v1"
+	"github.com/emontenegr/grudge/rrc"
 )
 
 // Score is the resolver for the score field.

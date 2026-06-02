@@ -26,7 +26,7 @@ type Argument struct {
 }
 
 // LoadAll discovers and loads skills from user and project directories.
-// Priority: user ($XDG_DATA_HOME/spidey/skills/) then project (.spidey/skills/).
+// Priority: user ($XDG_DATA_HOME/grudge/skills/) then project (.grudge/skills/).
 func LoadAll(userSkillsDir string, projectDirs []string) []Skill {
 	var skills []Skill
 
@@ -35,7 +35,7 @@ func LoadAll(userSkillsDir string, projectDirs []string) []Skill {
 
 	// Project skills from mounted directories
 	for _, dir := range projectDirs {
-		projectSkillsDir := filepath.Join(dir, ".spidey", "skills")
+		projectSkillsDir := filepath.Join(dir, ".grudge", "skills")
 		skills = append(skills, loadFromDir(projectSkillsDir)...)
 	}
 
