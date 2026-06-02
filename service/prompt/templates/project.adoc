@@ -1,6 +1,6 @@
-{{if .GrudgeMD}}
+{{if .AgentsMD}}
 ## Project Instructions
 
-{{range .GrudgeMD}}{{.}}
+{{range .AgentsMD}}{{.}}
 
 {{end}}{{end}}

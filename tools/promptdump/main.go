@@ -60,7 +60,7 @@ func main() {
 			ThreadName:  *threadName,
 			Sandboxed:   *sandboxed,
 			WorkingDirs: []string{"/example/working/dir"},
-			GrudgeMD:    []string{"## Example project instructions\n\nMounted GRUDGE.md content lands here."},
+			AgentsMD:    []string{"## Example project instructions\n\nMounted AGENTS.md content lands here."},
 			PlanContent: "",
 			PlanDir:     "/example/plan/dir",
 			CurrentTime: "2026-05-29T00:00:00Z (mock)",

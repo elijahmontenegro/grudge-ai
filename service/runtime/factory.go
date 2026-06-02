@@ -151,7 +151,7 @@ func assembleInstruction(threadID string, thread *pb.Thread, deps Deps) (string,
 			mode = "plan"
 		}
 	}
-	grudgeMD := prompt.LoadGrudgeMD(thread.WorkingDirs)
+	agentsMD := prompt.LoadAgentsMD(thread.WorkingDirs)
 	planDir, err := storage.PlanDirForThread(deps.Config.DataDir, threadID)
 	if err != nil {
 		return "", fmt.Errorf("plan dir: %w", err)
@@ -161,7 +161,7 @@ func assembleInstruction(threadID string, thread *pb.Thread, deps Deps) (string,
 		ThreadName:  thread.Name,
 		Sandboxed:   thread.Sandboxed,
 		WorkingDirs: thread.WorkingDirs,
-		GrudgeMD:    grudgeMD,
+		AgentsMD:    agentsMD,
 		PlanDir:     planDir,
 		CurrentTime: time.Now().Format(time.RFC3339),
 		Mode:        mode,

@@ -6,12 +6,12 @@ import (
 	"strings"
 )
 
-// LoadGrudgeMD reads GRUDGE.md files from mounted working directories.
-// Any mounted directory can contain a GRUDGE.md file — all are collected.
-func LoadGrudgeMD(workingDirs []string) []string {
+// LoadAgentsMD reads AGENTS.md files from mounted working directories.
+// Any mounted directory can contain a AGENTS.md file — all are collected.
+func LoadAgentsMD(workingDirs []string) []string {
 	var contents []string
 	for _, dir := range workingDirs {
-		path := filepath.Join(dir, "GRUDGE.md")
+		path := filepath.Join(dir, "AGENTS.md")
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue

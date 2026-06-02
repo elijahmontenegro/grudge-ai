@@ -33,7 +33,7 @@ type TemplateData struct {
 	ThreadName  string
 	Sandboxed   bool     // true when Bash + file tools run inside the Docker workspace
 	WorkingDirs []string
-	GrudgeMD    []string // contents of GRUDGE.md files from mounted dirs
+	AgentsMD    []string // contents of AGENTS.md files from mounted dirs
 	PlanContent string   // compiled plan content (per-turn)
 	PlanDir     string   // writable plan directory path
 	CurrentTime string

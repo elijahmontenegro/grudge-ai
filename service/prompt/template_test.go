@@ -19,7 +19,7 @@ func fixture(mode string) TemplateData {
 		ThreadName:  "test",
 		Sandboxed:   false,
 		WorkingDirs: []string{"/test"},
-		GrudgeMD:    []string{"## test"},
+		AgentsMD:    []string{"## test"},
 		PlanContent: "",
 		PlanDir:     "/plans/test",
 		CurrentTime: "2026-05-29T00:00:00Z",
