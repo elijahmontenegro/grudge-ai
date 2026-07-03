@@ -147,3 +147,28 @@ func (c Calibrator) LogLoss(samples []LabeledSample) float64 {
 	}
 	return sum / float64(len(samples))
 }
+
+// PriorLogLoss is the log-loss of the best label-prior-only predictor
+// over samples — the constant prediction p = positives/total. It is
+// the no-skill baseline: a fitted calibrator whose LogLoss does not
+// beat this is not using the score signal at all (it has collapsed to
+// predicting the base rate). Exposed so every fit path — seed fit
+// today, corpus-replay mass fit later, live health checks — measures
+// validity against the same baseline.
+func PriorLogLoss(samples []LabeledSample) float64 {
+	if len(samples) == 0 {
+		return 0
+	}
+	var pos int
+	for _, s := range samples {
+		if s.IsPrereq {
+			pos++
+		}
+	}
+	p := float64(pos) / float64(len(samples))
+	if p <= 0 || p >= 1 {
+		// Single-class data: the prior predicts it perfectly.
+		return 0
+	}
+	return -(p*math.Log(p) + (1-p)*math.Log(1-p))
+}

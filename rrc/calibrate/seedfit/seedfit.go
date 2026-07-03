@@ -75,6 +75,19 @@ type Result struct {
 // Scoring failures on individual triples abort the fit rather than silently
 // thinning the training set: a half-scored seed produces a calibrator that
 // looks fitted but wasn't, which is worse than falling back to the bootstrap.
+//
+// The fit is also VALIDITY-GATED before it can be returned (and therefore
+// before anything can persist it): the seed is labeled ground truth, so a
+// working scorer+fit must separate the positives from the negatives better
+// than the label prior alone. A scorer that collapsed to uniform output
+// (template drift zeroing every pair, a wrong model at the endpoint) fits a
+// flat base-rate calibrator with ~zero skill — persisting that would
+// silently blind retrieval under a calibrator that ignores its input. Such
+// a fit is refused with an error; the caller stays on its current
+// calibrator and retries later. Validity is measured absolutely against
+// the labels, never relative to a prior fit — a flat calibrator scores the
+// same log-loss on healthy and garbage input, so relative comparisons
+// cannot detect their own poisoning.
 func Fit(ctx context.Context, scorer Scorer, seedJSON []byte, prior calibrate.Calibrator) (Result, error) {
 	if scorer == nil {
 		return Result{}, fmt.Errorf("seedfit: nil scorer")
@@ -115,6 +128,28 @@ func Fit(ctx context.Context, scorer Scorer, seedJSON []byte, prior calibrate.Ca
 	if err != nil {
 		return Result{}, fmt.Errorf("seedfit: fit: %w", err)
 	}
+
+	// Validity gate (see doc comment). Both checks are absolute against
+	// the labels: A must be a positive association (an anti-correlated or
+	// score-blind fit is a broken scorer, whatever its log-loss), and the
+	// fit must show real skill over the no-signal prior baseline.
+	logLoss := cal.LogLoss(samples)
+	priorLL := calibrate.PriorLogLoss(samples)
+	skill := 0.0
+	if priorLL > 0 {
+		skill = 1 - logLoss/priorLL
+	}
+	if cal.A <= 0 {
+		return Result{}, fmt.Errorf(
+			"seedfit: fitted similarity coefficient A=%.3f ≤ 0 — scores are uncorrelated or anti-correlated with the seed labels; refusing the fit (scorer collapse or wrong model at endpoint?)",
+			cal.A)
+	}
+	if skill < minFitSkill {
+		return Result{}, fmt.Errorf(
+			"seedfit: fit shows no discrimination on the labeled seed (log-loss %.4f vs prior baseline %.4f, skill %.2f < %.2f); refusing the fit (scorer collapse or wrong model at endpoint?)",
+			logLoss, priorLL, skill, minFitSkill)
+	}
+
 	// Preserve the structural lift: the seed carried no mass signal, so the
 	// fitted B is a meaningless 0. Carry the prior's boundary-shift ratio
 	// B/A onto the fitted similarity scale (see doc comment).
@@ -126,9 +161,20 @@ func Fit(ctx context.Context, scorer Scorer, seedJSON []byte, prior calibrate.Ca
 		Samples:    len(samples),
 		Positives:  pos,
 		Negatives:  neg,
-		LogLoss:    cal.LogLoss(samples),
+		LogLoss:    logLoss,
 	}, nil
 }
+
+// minFitSkill is the validity floor for a fit, measured as skill over
+// the label-prior baseline: skill = 1 − LogLoss/PriorLogLoss. A scorer
+// that separates the seed's labeled positives from negatives at all
+// clears it easily (zerank's first live fit: log-loss 0.330 vs prior
+// 0.500 → skill ≈ 0.34); a collapsed scorer fits a flat base-rate
+// calibrator with skill ≈ 0. Deliberately loose — the failure being
+// refused is catastrophic non-discrimination, not subtle
+// mis-calibration — mirroring the loose-threshold stance elsewhere
+// (provenanceReachCap et al.).
+const minFitSkill = 0.10
 
 // EnsureFitted is the load-or-fit-and-save composition: return the
 // persisted calibrator for scorerModelID when one exists at path,

@@ -210,9 +210,21 @@ func (s *scorer) scoreOne(ctx context.Context, query, document string) (float64,
 			}
 		}
 	}
+	if math.IsInf(yesLogprob, -1) && math.IsInf(noLogprob, -1) {
+		// NEITHER Yes nor No in the top-K: the model is not answering
+		// the binary relevance question at all. That is a recipe
+		// violation — chat-template drift (a thinking prelude
+		// reappearing ahead of the answer token) or a non-zerank model
+		// at the endpoint — not a relevance signal. Returning 0 here
+		// would let every pair silently score 0.0 under an HTTP 200,
+		// and anything fit against those scores downstream would be
+		// fit against garbage. Fail loudly instead.
+		return 0, fmt.Errorf("%w: neither Yes nor No in top-%d logprobs — chat-template drift or wrong model at endpoint?",
+			core.ErrProviderUnavailable, len(first.TopLogprobs))
+	}
 	if math.IsInf(yesLogprob, -1) {
-		// "Yes" not in the top-K logprobs at all — model is confident
-		// "no". Score 0.
+		// "Yes" not in the top-K logprobs but "No" is — the model
+		// answered the binary question and is confident "no". Score 0.
 		return 0, nil
 	}
 	// Recover the binary log-odds (Yes vs No) from the post-softmax

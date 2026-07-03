@@ -217,3 +217,42 @@ func TestProviderImplementsScorerOnly(t *testing.T) {
 		t.Error("zerank should not be an EmbedderProvider")
 	}
 }
+
+// TestScoreErrorsWhenNeitherYesNorNo is the garbage-with-200 gate: when
+// the top-K logprobs contain neither Yes nor No, the model is not
+// answering the binary relevance question (chat-template drift leaking
+// a thinking prelude, or a non-zerank model at the endpoint). Returning
+// 0 would let every pair silently score 0.0 and poison anything fit
+// against those scores; the adapter must fail loudly instead.
+func TestScoreErrorsWhenNeitherYesNorNo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(completionResponse{
+			Choices: []struct {
+				Logprobs tokenChoiceLogprobs `json:"logprobs"`
+			}{{
+				Logprobs: tokenChoiceLogprobs{
+					Content: []struct {
+						Token       string         `json:"token"`
+						Logprob     float64        `json:"logprob"`
+						TopLogprobs []tokenLogprob `json:"top_logprobs"`
+					}{{
+						Token: "</think>",
+						TopLogprobs: []tokenLogprob{
+							{Token: "</think>", Logprob: -0.1},
+							{Token: "Okay", Logprob: -2.3},
+							{Token: "The", Logprob: -3.1},
+						},
+					}},
+				},
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
+	_, err := cls.Score(context.Background(), "q", []string{"d"})
+	if err == nil {
+		t.Fatal("neither-Yes-nor-No output must error, got a score")
+	}
+	t.Logf("refused as expected: %v", err)
+}

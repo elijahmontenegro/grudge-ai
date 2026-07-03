@@ -88,3 +88,56 @@ type failScorer struct{}
 func (failScorer) Score(context.Context, string, []string) ([]float64, error) {
 	return nil, context.DeadlineExceeded
 }
+
+// collapsedScorer returns the same score for every candidate — the
+// signature of a scorer whose recipe broke while still returning 200s
+// (chat-template drift zeroing every pair, wrong model at the endpoint).
+type collapsedScorer struct{}
+
+func (collapsedScorer) Score(_ context.Context, _ string, c []string) ([]float64, error) {
+	return make([]float64, len(c)), nil // all 0.0
+}
+
+// invertedScorer scores distractors HIGH and true prerequisites LOW —
+// systematically anti-correlated with the labels.
+type invertedScorer struct{}
+
+func (invertedScorer) Score(_ context.Context, _ string, c []string) ([]float64, error) {
+	out := make([]float64, len(c))
+	for i := range out {
+		if i == 0 {
+			out[i] = 0.1
+		} else {
+			out[i] = 0.9
+		}
+	}
+	return out, nil
+}
+
+// TestFit_RefusesCollapsedScorer is the poison gate: a scorer with no
+// discrimination must never produce a persistable calibrator. A flat
+// fit predicts the base rate for every input — persisted, it would
+// silently blind retrieval and, being input-independent, would score
+// identically on healthy and garbage input, making it undetectable by
+// any baseline-relative check. The gate refuses it absolutely, against
+// the labels.
+func TestFit_RefusesCollapsedScorer(t *testing.T) {
+	prior := calibrate.Bootstrap(0.60, 12.0, 6.0)
+	_, err := Fit(context.Background(), collapsedScorer{}, []byte(miniSeed), prior)
+	if err == nil {
+		t.Fatal("collapsed scorer must be refused, got a fit")
+	}
+	t.Logf("refused as expected: %v", err)
+}
+
+// TestFit_RefusesAntiCorrelatedScorer: a negative similarity
+// coefficient means the scorer ranks distractors above prerequisites —
+// broken, whatever its log-loss says.
+func TestFit_RefusesAntiCorrelatedScorer(t *testing.T) {
+	prior := calibrate.Bootstrap(0.60, 12.0, 6.0)
+	_, err := Fit(context.Background(), invertedScorer{}, []byte(miniSeed), prior)
+	if err == nil {
+		t.Fatal("anti-correlated scorer must be refused, got a fit")
+	}
+	t.Logf("refused as expected: %v", err)
+}
