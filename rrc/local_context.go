@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"strings"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
 
-const LocalContextSerializationVersion = "local-context-v1"
+const localContextSerializationVersion = "local-context-v1"
 
 // SerializedLocalContextChunk is one scorer-sized piece of the serialized Local Context.
 type SerializedLocalContextChunk struct {
@@ -38,15 +38,15 @@ type SerializedLocalContext struct {
 // discourse, and the triggering event is never pushed out.
 //
 // Two fallbacks preserve behavior where turn identity is unavailable:
-//   - currentTurnID == "" (legacy rows, or an autonomous tick's first
-//     model call before any event of the tick is stored): fall back to the
-//     bounded last-N window.
+//   - currentTurnID == "" (an autonomous tick's first model call,
+//     before any event of the tick is stored): fall back to the bounded
+//     last-N window.
 //   - the turn's messages are found but lack a user-text or assistant-text
 //     anchor: reach back for the minimum anchor pair (shared with
 //     BuildLocalContext) so the selector input is a disambiguating span,
 //     not a lone ambiguous block. Everything else older stays a candidate,
 //     not auto-included.
-func BuildActiveDiscourse(threadCorpus []*pb.Message, currentTurnID string, fallbackN int) []*pb.Message {
+func BuildActiveDiscourse(threadCorpus []*threadv1.Message, currentTurnID string, fallbackN int) []*threadv1.Message {
 	if len(threadCorpus) == 0 {
 		return nil
 	}
@@ -70,7 +70,7 @@ func BuildActiveDiscourse(threadCorpus []*pb.Message, currentTurnID string, fall
 		return BuildLocalContext(threadCorpus, fallbackN)
 	}
 
-	window := append([]*pb.Message(nil), threadCorpus[start:]...)
+	window := append([]*threadv1.Message(nil), threadCorpus[start:]...)
 	return append(reachBackForAnchors(threadCorpus, start, window), window...)
 }
 
@@ -78,7 +78,7 @@ func BuildActiveDiscourse(threadCorpus []*pb.Message, currentTurnID string, fall
 // the latest stored event. The last N messages form the base. If that
 // base lacks the latest user-text or assistant-text anchor, the builder
 // reaches back for that anchor without pulling the intervening turn.
-func BuildLocalContext(threadCorpus []*pb.Message, n int) []*pb.Message {
+func BuildLocalContext(threadCorpus []*threadv1.Message, n int) []*threadv1.Message {
 	if len(threadCorpus) == 0 || n <= 0 {
 		return nil
 	}
@@ -86,7 +86,7 @@ func BuildLocalContext(threadCorpus []*pb.Message, n int) []*pb.Message {
 	if start < 0 {
 		start = 0
 	}
-	window := append([]*pb.Message(nil), threadCorpus[start:]...)
+	window := append([]*threadv1.Message(nil), threadCorpus[start:]...)
 	return append(reachBackForAnchors(threadCorpus, start, window), window...)
 }
 
@@ -95,31 +95,31 @@ func BuildLocalContext(threadCorpus []*pb.Message, n int) []*pb.Message {
 // scanning backward from before `start` and pulling only the missing
 // anchors (not the intervening turns). Shared by BuildLocalContext and
 // BuildActiveDiscourse. Returns a fresh slice in corpus order.
-func reachBackForAnchors(threadCorpus []*pb.Message, start int, window []*pb.Message) []*pb.Message {
+func reachBackForAnchors(threadCorpus []*threadv1.Message, start int, window []*threadv1.Message) []*threadv1.Message {
 	haveUser, haveAssistant := false, false
 	for _, m := range window {
 		if !hasTextBlock(m.Content) {
 			continue
 		}
-		haveUser = haveUser || m.Role == pb.Role_ROLE_USER
-		haveAssistant = haveAssistant || m.Role == pb.Role_ROLE_ASSISTANT
+		haveUser = haveUser || m.Role == threadv1.Role_ROLE_USER
+		haveAssistant = haveAssistant || m.Role == threadv1.Role_ROLE_ASSISTANT
 	}
 
-	var prefix []*pb.Message
+	var prefix []*threadv1.Message
 	for i := start - 1; i >= 0 && (!haveUser || !haveAssistant); i-- {
 		m := threadCorpus[i]
 		if !hasTextBlock(m.Content) {
 			continue
 		}
 		switch m.Role {
-		case pb.Role_ROLE_USER:
+		case threadv1.Role_ROLE_USER:
 			if !haveUser {
-				prefix = append([]*pb.Message{m}, prefix...)
+				prefix = append([]*threadv1.Message{m}, prefix...)
 				haveUser = true
 			}
-		case pb.Role_ROLE_ASSISTANT:
+		case threadv1.Role_ROLE_ASSISTANT:
 			if !haveAssistant {
-				prefix = append([]*pb.Message{m}, prefix...)
+				prefix = append([]*threadv1.Message{m}, prefix...)
 				haveAssistant = true
 			}
 		}
@@ -131,7 +131,7 @@ func reachBackForAnchors(threadCorpus []*pb.Message, start int, window []*pb.Mes
 // explicit role and block labels, then chunks that serialization for the
 // scorer. Message IDs participate in the fingerprint but are not shown
 // to the scorer.
-func SerializeLocalContext(local []*pb.Message, cfg chunk.Config) *SerializedLocalContext {
+func SerializeLocalContext(local []*threadv1.Message, cfg chunk.Config) *SerializedLocalContext {
 	if len(local) == 0 {
 		return nil
 	}
@@ -157,7 +157,7 @@ func SerializeLocalContext(local []*pb.Message, cfg chunk.Config) *SerializedLoc
 	}
 
 	h := sha256.New()
-	fmt.Fprintf(h, "version:%s\n", LocalContextSerializationVersion)
+	fmt.Fprintf(h, "version:%s\n", localContextSerializationVersion)
 	for _, id := range ids {
 		fmt.Fprintf(h, "message:%s\n", id)
 	}
@@ -177,7 +177,7 @@ func SerializeLocalContext(local []*pb.Message, cfg chunk.Config) *SerializedLoc
 // SerializeMessageForScoring is the role-aware, block-aware serialization
 // used for both Local Context and candidate indexing.
 // The stored message remains the lossless source of truth.
-func SerializeMessageForScoring(m *pb.Message) string {
+func SerializeMessageForScoring(m *threadv1.Message) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[message role=%s]\n", roleLabel(m.Role))
 	for _, b := range m.Content {
@@ -205,20 +205,20 @@ func SerializeMessageForScoring(m *pb.Message) string {
 	return sb.String()
 }
 
-func roleLabel(role pb.Role) string {
+func roleLabel(role threadv1.Role) string {
 	switch role {
-	case pb.Role_ROLE_USER:
+	case threadv1.Role_ROLE_USER:
 		return "user"
-	case pb.Role_ROLE_ASSISTANT:
+	case threadv1.Role_ROLE_ASSISTANT:
 		return "assistant"
-	case pb.Role_ROLE_SYSTEM:
+	case threadv1.Role_ROLE_SYSTEM:
 		return "system"
 	default:
 		return "unspecified"
 	}
 }
 
-func hasTextBlock(blocks []*pb.ContentBlock) bool {
+func hasTextBlock(blocks []*threadv1.ContentBlock) bool {
 	for _, b := range blocks {
 		if t := b.GetText(); t != nil && t.Text != "" {
 			return true

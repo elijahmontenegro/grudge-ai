@@ -3,16 +3,17 @@ package rrc
 import (
 	"container/heap"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // selectionEntry is the internal working type used during best-first traversal.
-// Mapped to pb.SelectedMessage in the returned SelectionResult.
+// Mapped to rrcv1.SelectedMessage in the returned SelectionResult.
 type selectionEntry struct {
 	MessageID      string
 	EffectiveScore float64
 	HopDepth       int
-	ViaEdges       []*pb.Edge
+	ViaEdges       []*rrcv1.Edge
 	ThreadID       string
 	CrossThread    bool
 }
@@ -23,7 +24,7 @@ type selectionEntry struct {
 // probabilities — the same currency acceptance uses — rather than raw CE
 // scores gated by a flat threshold. Kept as a named function so a future
 // per-edge adjustment (age decay, re-calibration) lands here.
-func edgeScoreUnderConfig(edge *pb.Edge, _ EngineConfig) float64 {
+func edgeScoreUnderConfig(edge *rrcv1.Edge, _ EngineConfig) float64 {
 	return float64(edge.Score)
 }
 
@@ -31,11 +32,10 @@ func edgeScoreUnderConfig(edge *pb.Edge, _ EngineConfig) float64 {
 // the DAG. Returns selected entries and a map of messages excluded due to score floor.
 //
 // Edges are re-projected under current config at walk time — stored
-// edges that no longer clear EdgeThreshold are skipped, stored edges
-// whose raw components still pass the current weights contribute
-// their new fused score. This is how config change takes effect
-// retroactively without a separate rebuild path.
-func extractSubgraph(d *dag, promptID string, promptThreadID string, scope pb.SelectionScope, cfg EngineConfig) ([]selectionEntry, map[string]float64) {
+// edges that no longer clear calibrated acceptance are skipped. This
+// is how a config change takes effect retroactively without a
+// separate rebuild path.
+func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threadv1.SelectionScope, cfg EngineConfig) ([]selectionEntry, map[string]float64) {
 	visited := make(map[string]bool)
 	visited[promptID] = true
 	belowFloor := make(map[string]float64) // messageID -> score (excluded by floor)
@@ -45,7 +45,7 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope pb.Se
 
 	// Seed with direct prerequisites of the prompt
 	for _, edge := range d.Prerequisites(promptID) {
-		if edge.Source == pb.EdgeSource_EDGE_SOURCE_PROVENANCE {
+		if edge.Source == rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 			continue // provenance is a recorded structural signal, not a
 			// scored prerequisite edge; it is consumed by the traversal
 			// recall path (A2) and folded into acceptance (A4), never by
@@ -67,7 +67,7 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope pb.Se
 				MessageID:      edge.FromMessageId,
 				EffectiveScore: score,
 				HopDepth:       1,
-				ViaEdges:       []*pb.Edge{edge},
+				ViaEdges:       []*rrcv1.Edge{edge},
 				ThreadID:       edge.FromThreadId,
 				CrossThread:    crossThread,
 			},
@@ -99,7 +99,7 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope pb.Se
 
 		// Push prerequisites with multiplicatively decayed (chain-rule) scores
 		for _, edge := range d.Prerequisites(entry.MessageID) {
-			if edge.Source == pb.EdgeSource_EDGE_SOURCE_PROVENANCE {
+			if edge.Source == rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 				continue // see seed loop: provenance is not a CE-scored edge
 			}
 			if visited[edge.FromMessageId] {
@@ -119,7 +119,7 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope pb.Se
 					MessageID:      edge.FromMessageId,
 					EffectiveScore: effectiveScore,
 					HopDepth:       entry.HopDepth + 1,
-					ViaEdges:       append(append([]*pb.Edge{}, entry.ViaEdges...), edge),
+					ViaEdges:       append(append([]*rrcv1.Edge{}, entry.ViaEdges...), edge),
 					ThreadID:       edge.FromThreadId,
 					CrossThread:    crossThread,
 				},
@@ -175,7 +175,7 @@ func transitiveReduction(selected []selectionEntry) []selectionEntry {
 
 	// Remove edges that are transitively reachable
 	for i := range selected {
-		var filtered []*pb.Edge
+		var filtered []*rrcv1.Edge
 		for _, e := range selected[i].ViaEdges {
 			isRedundant := false
 			// Check if from is reachable from any other direct prereq
@@ -199,8 +199,8 @@ func transitiveReduction(selected []selectionEntry) []selectionEntry {
 }
 
 // scopeAllows returns true if the edge is allowed under the given scope filter.
-func scopeAllows(edge *pb.Edge, promptThreadID string, scope pb.SelectionScope) bool {
-	if scope == pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS {
+func scopeAllows(edge *rrcv1.Edge, promptThreadID string, scope threadv1.SelectionScope) bool {
+	if scope == threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS {
 		return true
 	}
 	// Thread-scoped: both endpoints must be in the prompt's thread

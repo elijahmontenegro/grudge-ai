@@ -1,9 +1,7 @@
 package storage
 
 import (
-	"encoding/json"
-
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -19,7 +17,10 @@ import (
 // panel wants and it's small.
 
 // SaveSelection persists a SelectionResult. Idempotent by event_id.
-func (d *DB) SaveSelection(result *pb.SelectionResult, anchorMessageID, threadID string) error {
+// Everything queryable (scope, fingerprint, Local Context ids, thread)
+// lives inside the marshaled result; the row carries only the lookup
+// keys.
+func (d *DB) SaveSelection(result *rrcv1.SelectionResult, anchorMessageID string) error {
 	if result == nil {
 		return nil
 	}
@@ -27,16 +28,11 @@ func (d *DB) SaveSelection(result *pb.SelectionResult, anchorMessageID, threadID
 	if err != nil {
 		return err
 	}
-	localContextIDs, err := json.Marshal(result.LocalContextMessageIds)
-	if err != nil {
-		return err
-	}
 	_, err = d.Exec(
 		`INSERT OR REPLACE INTO selections
-		 (event_id, anchor_message_id, thread_id, scope, local_context_fingerprint, local_context_message_ids, result)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		result.EventId, anchorMessageID, threadID, int(result.Scope),
-		result.LocalContextFingerprint, localContextIDs, blob,
+		 (event_id, anchor_message_id, result)
+		 VALUES (?, ?, ?)`,
+		result.EventId, anchorMessageID, blob,
 	)
 	return err
 }
@@ -45,7 +41,7 @@ func (d *DB) SaveSelection(result *pb.SelectionResult, anchorMessageID, threadID
 // Returns (nil, nil) if not found — selections are optional; Retrieval
 // Autonomous continuations without a new event skip Selection
 // entirely and have no row.
-func (d *DB) GetSelection(eventID string) (*pb.SelectionResult, error) {
+func (d *DB) GetSelection(eventID string) (*rrcv1.SelectionResult, error) {
 	var blob []byte
 	err := d.QueryRow(
 		`SELECT result FROM selections WHERE event_id = ?`,
@@ -54,7 +50,7 @@ func (d *DB) GetSelection(eventID string) (*pb.SelectionResult, error) {
 	if err != nil {
 		return nil, nil
 	}
-	result := &pb.SelectionResult{}
+	result := &rrcv1.SelectionResult{}
 	if err := proto.Unmarshal(blob, result); err != nil {
 		return nil, err
 	}
@@ -63,7 +59,7 @@ func (d *DB) GetSelection(eventID string) (*pb.SelectionResult, error) {
 
 // GetSelectionForMessage returns the SelectionResult anchored to the
 // given stored event.
-func (d *DB) GetSelectionForMessage(messageID string) (*pb.SelectionResult, error) {
+func (d *DB) GetSelectionForMessage(messageID string) (*rrcv1.SelectionResult, error) {
 	var blob []byte
 	err := d.QueryRow(
 		`SELECT result FROM selections WHERE anchor_message_id = ? ORDER BY created_at DESC LIMIT 1`,
@@ -72,7 +68,7 @@ func (d *DB) GetSelectionForMessage(messageID string) (*pb.SelectionResult, erro
 	if err != nil {
 		return nil, nil
 	}
-	result := &pb.SelectionResult{}
+	result := &rrcv1.SelectionResult{}
 	if err := proto.Unmarshal(blob, result); err != nil {
 		return nil, err
 	}

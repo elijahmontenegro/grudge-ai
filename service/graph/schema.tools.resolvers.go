@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -32,10 +32,10 @@ func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reas
 	if reason != nil && *reason != "" && threadID != "" {
 		corpus, _ := r.db.ThreadCorpus(threadID)
 		denialText := fmt.Sprintf("Tool call denied by user. Reason: %s", *reason)
-		msg := &v1.Message{
+		msg := &threadv1.Message{
 			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-			Role:      v1.Role_ROLE_SYSTEM,
-			Content:   rrc.BlocksFromText(denialText),
+			Role:      threadv1.Role_ROLE_SYSTEM,
+			Content:   pbtext.BlocksFromText(denialText),
 			Position:  int64(len(corpus)),
 			ThreadId:  threadID,
 			CreatedAt: timestamppb.Now(),

@@ -23,11 +23,10 @@ type EngineConfig struct {
 	// descendant mass) into one currency — P(prereq | sim, mass) — so
 	// acceptance is calibrated expected value against the token budget's
 	// marginal price, not a flat threshold on a raw score. This is the A4
-	// acceptance mechanism; it supersedes EdgeThreshold/ScoreFloor (below,
-	// retained only for settings/telemetry compatibility, no longer gating).
-	// The default is a bootstrap calibrator (DefaultConfig) that reproduces
-	// the precision-first operating point until a fitted model from the
-	// rrc/calibrate offline pipeline replaces it per-deployment.
+	// acceptance mechanism. The default is a bootstrap calibrator
+	// (DefaultConfig) that reproduces the precision-first operating point
+	// until a fitted model replaces it per-deployment (the runtime
+	// self-fits from the embedded seed set on first boot per scorer).
 	Calibrator calibrate.Calibrator
 
 	// LossRatio is the precision stance — V_harm/(V_gain+V_harm) — the
@@ -37,21 +36,6 @@ type EngineConfig struct {
 	// swap. With shadow price μ=0 (budget slack) the acceptance floor is
 	// P(prereq) ≥ LossRatio. Higher = more precision-first (RRC's stance).
 	LossRatio float64
-
-	// Deprecated: retained for settings-file / GraphQL compatibility and
-	// telemetry, no longer used for acceptance gating (A4 replaced the flat
-	// cutoffs with calibrated expected value + budget shed). EdgeThreshold
-	// was the flat CE cutoff; ScoreFloor the DAG-traversal cutoff.
-	EdgeThreshold float64 // Deprecated: no longer gates edge formation.
-	ScoreFloor    float64 // Deprecated: no longer gates DAG traversal.
-
-	// Deprecated: the z-score "relative standout" gate was removed in A4.
-	// It was a statistical patch for a flat threshold's brittleness under
-	// scorer drift; calibrated P(prereq) subsumes that job (the fusion
-	// coefficients re-fit on drift, so there is nothing for a z-gate to
-	// compensate). Retained only for settings-file / GraphQL compatibility;
-	// no longer gates edge formation.
-	ZScoreThreshold float64
 
 	// MinBatchStdDev is the meta-discriminator (paper §3.2 Gate 3):
 	// if the per-call CE distribution is too flat
@@ -133,34 +117,10 @@ type EngineConfig struct {
 
 // DefaultConfig returns the default engine configuration.
 //
-// EdgeThreshold = 0.60 — calibrated 2026-05-24 against the 31-triple
-// labeled eval set (eval/pairs.json) after the zerank adapter's
-// binary-logit scoring fix. At 0.60: precision = 100%, recall =
-// 45.2%. The 0.60 floor sits in a clean gap between the top-scoring
-// negative (0.562) and the bottom-scoring recognized positive
-// (0.660). Stricter floors (0.65, 0.70) keep 100% precision but
-// trade recall; looser floors (0.55) start admitting false positives
-// (top negative is 0.562). The 55% recall ceiling reflects model
-// capability — zerank is an IR-relevance reranker, not a discourse
-// or coreference model, so D_coreference / C_factual_recall pairs
-// score zero regardless of threshold. See docs/eval-reports for the
-// sweep table.
-//
-// ZScoreThreshold = 0 (disabled). The score distribution under the
-// fixed scorer is bimodal: negatives cluster at 0.000, positives at
-// 0.66–0.96. Z-score over a bimodal is degenerate, and within the
-// positive cluster the relative-standout test strips most edges as
-// "not unusually high" — fighting the abs floor for the same job.
-// One discriminator (the abs floor) is the principled architecture.
-//
-// MinBatchStdDev = 0.05 retained as a separate sanity guard: if the
-// reranker returns near-identical scores across every candidate in
-// a batch, it's signaling "I can't discriminate this batch" and the
-// engine drops edges for that round only. Independent of edge
-// scoring; not redundant with z-gate.
-//
-// ScoreFloor = 0.3 is unchanged; it's a lower-bound on what edges
-// can reach into Selection at assembly time, not edge formation.
+// MinBatchStdDev = 0.05 is a sanity guard: if the reranker returns
+// near-identical scores across every candidate in a batch, it's
+// signaling "I can't discriminate this batch" and the engine drops
+// edges for that round only. Independent of edge scoring.
 func DefaultConfig() EngineConfig {
 	return EngineConfig{
 		// Bootstrap calibrator + loss ratio. Until the rrc/calibrate offline
@@ -179,9 +139,6 @@ func DefaultConfig() EngineConfig {
 		Calibrator: calibrate.Bootstrap(0.60, 12.0, 6.0),
 		LossRatio:  0.5,
 
-		EdgeThreshold:    0.60,
-		ScoreFloor:       0.3,
-		ZScoreThreshold:  0,
 		MinBatchStdDev:   0.05,
 		RerankTopK:       64,
 		LocalContextSize: 10,

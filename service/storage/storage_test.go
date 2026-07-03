@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -26,7 +27,7 @@ func testDB(t *testing.T) *DB {
 func TestCreateAndGetThread(t *testing.T) {
 	db := testDB(t)
 
-	thread := &pb.Thread{
+	thread := &threadv1.Thread{
 		Id:        "t1",
 		Name:      "Test Thread",
 		Sandboxed: true,
@@ -48,7 +49,7 @@ func TestCreateAndGetThread(t *testing.T) {
 func TestCreateThread_WithWorkingDirs(t *testing.T) {
 	db := testDB(t)
 
-	thread := &pb.Thread{
+	thread := &threadv1.Thread{
 		Id:          "t1",
 		Name:        "Test",
 		WorkingDirs: []string{"/home/user/project", "/tmp/scratch"},
@@ -71,7 +72,7 @@ func TestListThreads(t *testing.T) {
 	db := testDB(t)
 
 	for i, name := range []string{"Alpha", "Beta", "Gamma"} {
-		db.CreateThread(&pb.Thread{
+		db.CreateThread(&threadv1.Thread{
 			Id: name, Name: name, CreatedAt: timestamppb.Now(),
 		})
 		_ = i
@@ -89,7 +90,7 @@ func TestListThreads(t *testing.T) {
 func TestArchiveThread(t *testing.T) {
 	db := testDB(t)
 
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
 
 	if err := db.ArchiveThread("t1"); err != nil {
 		t.Fatal(err)
@@ -114,7 +115,7 @@ func TestArchiveThread(t *testing.T) {
 func TestUnarchiveThread(t *testing.T) {
 	db := testDB(t)
 
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
 	db.ArchiveThread("t1")
 	db.UnarchiveThread("t1")
 
@@ -127,7 +128,7 @@ func TestUnarchiveThread(t *testing.T) {
 func TestDeleteThread(t *testing.T) {
 	db := testDB(t)
 
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
 
 	if err := db.DeleteThread("t1"); err != nil {
 		t.Fatal(err)
@@ -142,7 +143,7 @@ func TestDeleteThread(t *testing.T) {
 func TestUpdateThreadName(t *testing.T) {
 	db := testDB(t)
 
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "Old Name", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Old Name", CreatedAt: timestamppb.Now()})
 
 	if err := db.UpdateThreadName("t1", "New Name"); err != nil {
 		t.Fatal(err)
@@ -159,14 +160,14 @@ func TestUpdateThreadName(t *testing.T) {
 func TestInsertAndGetMessage(t *testing.T) {
 	db := testDB(t)
 
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
 
-	msg := &pb.Message{
+	msg := &threadv1.Message{
 		Id:       "m1",
 		ThreadId: "t1",
-		Role:     pb.Role_ROLE_USER,
-		Content: []*pb.ContentBlock{
-			{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "Hello world"}}},
+		Role:     threadv1.Role_ROLE_USER,
+		Content: []*threadv1.ContentBlock{
+			{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "Hello world"}}},
 		},
 		Position:  0,
 		CreatedAt: timestamppb.Now(),
@@ -179,7 +180,7 @@ func TestInsertAndGetMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Id != "m1" || got.ThreadId != "t1" || got.Role != pb.Role_ROLE_USER {
+	if got.Id != "m1" || got.ThreadId != "t1" || got.Role != threadv1.Role_ROLE_USER {
 		t.Fatalf("unexpected message: %+v", got)
 	}
 	if len(got.Content) != 1 {
@@ -193,12 +194,12 @@ func TestInsertAndGetMessage(t *testing.T) {
 func TestListMessages_Order(t *testing.T) {
 	db := testDB(t)
 
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
 
 	for i, text := range []string{"first", "second", "third"} {
-		db.InsertMessage(&pb.Message{
-			Id: text, ThreadId: "t1", Role: pb.Role_ROLE_USER,
-			Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: text}}}},
+		db.InsertMessage(&threadv1.Message{
+			Id: text, ThreadId: "t1", Role: threadv1.Role_ROLE_USER,
+			Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: text}}}},
 			Position: int64(i), CreatedAt: timestamppb.Now(),
 		}, nil)
 	}
@@ -219,10 +220,10 @@ func TestListMessages_Order(t *testing.T) {
 func TestThreadCorpus(t *testing.T) {
 	db := testDB(t)
 
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
-	db.InsertMessage(&pb.Message{
-		Id: "m1", ThreadId: "t1", Role: pb.Role_ROLE_USER,
-		Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "hello"}}}},
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
+	db.InsertMessage(&threadv1.Message{
+		Id: "m1", ThreadId: "t1", Role: threadv1.Role_ROLE_USER,
+		Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "hello"}}}},
 		Position: 0, CreatedAt: timestamppb.Now(),
 	}, nil)
 
@@ -238,16 +239,16 @@ func TestThreadCorpus(t *testing.T) {
 func TestMessageCount(t *testing.T) {
 	db := testDB(t)
 
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
 
 	if count := db.MessageCount("t1"); count != 0 {
 		t.Fatalf("expected 0 messages, got %d", count)
 	}
 
 	for i := 0; i < 5; i++ {
-		db.InsertMessage(&pb.Message{
-			Id: "m" + string(rune('0'+i)), ThreadId: "t1", Role: pb.Role_ROLE_USER,
-			Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "msg"}}}},
+		db.InsertMessage(&threadv1.Message{
+			Id: "m" + string(rune('0'+i)), ThreadId: "t1", Role: threadv1.Role_ROLE_USER,
+			Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "msg"}}}},
 			Position: int64(i), CreatedAt: timestamppb.Now(),
 		}, nil)
 	}
@@ -262,14 +263,12 @@ func TestMessageCount(t *testing.T) {
 func TestInsertAndLoadEdges(t *testing.T) {
 	db := testDB(t)
 
-	edge := &pb.Edge{
+	edge := &rrcv1.Edge{
 		FromMessageId:     "m0",
 		ToMessageId:       "m1",
 		Score:             0.85,
-		Source:            pb.EdgeSource_EDGE_SOURCE_CROSS_ENCODER,
+		Source:            rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER,
 		CrossEncoderScore: 0.8,
-		QudWeight:         0.0,
-		TemporalProximity: 0.5,
 		DetectedAt:        timestamppb.Now(),
 		FromThreadId:      "t1",
 		ToThreadId:        "t1",
@@ -301,12 +300,12 @@ func TestDeleteEdgesForThread(t *testing.T) {
 	db := testDB(t)
 
 	// Edge in t1
-	db.InsertEdge(&pb.Edge{
+	db.InsertEdge(&rrcv1.Edge{
 		FromMessageId: "m0", ToMessageId: "m1", Score: 0.8,
 		DetectedAt: timestamppb.Now(), FromThreadId: "t1", ToThreadId: "t1",
 	})
 	// Edge in t2
-	db.InsertEdge(&pb.Edge{
+	db.InsertEdge(&rrcv1.Edge{
 		FromMessageId: "m2", ToMessageId: "m3", Score: 0.7,
 		DetectedAt: timestamppb.Now(), FromThreadId: "t2", ToThreadId: "t2",
 	})
@@ -341,10 +340,10 @@ func TestOpen_CreatesDB(t *testing.T) {
 func TestCascadeDelete(t *testing.T) {
 	db := testDB(t)
 
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
-	db.InsertMessage(&pb.Message{
-		Id: "m1", ThreadId: "t1", Role: pb.Role_ROLE_USER,
-		Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "hello"}}}},
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
+	db.InsertMessage(&threadv1.Message{
+		Id: "m1", ThreadId: "t1", Role: threadv1.Role_ROLE_USER,
+		Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "hello"}}}},
 		Position: 0, CreatedAt: timestamppb.Now(),
 	}, nil)
 
@@ -364,7 +363,7 @@ func TestCascadeDelete(t *testing.T) {
 // reset mode/roundCount/startedAt/durationLimit to zero values.
 func TestAgentState_NarrowHelpersPreserveFields(t *testing.T) {
 	db := testDB(t)
-	db.CreateThread(&pb.Thread{Id: "t-agent", Name: "T", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t-agent", Name: "T", CreatedAt: timestamppb.Now()})
 
 	started := timestamppb.Now().AsTime()
 	if err := db.StartAutonomousRun("t-agent", started, "1h"); err != nil {
@@ -438,7 +437,7 @@ func TestAgentState_NarrowHelpersPreserveFields(t *testing.T) {
 // a new run on a thread that previously ran SHOULD clear the counter.
 func TestAgentState_StartAutonomousRunResetsRoundCount(t *testing.T) {
 	db := testDB(t)
-	db.CreateThread(&pb.Thread{Id: "t-restart", Name: "T", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t-restart", Name: "T", CreatedAt: timestamppb.Now()})
 
 	// First run: round_count climbs.
 	first := timestamppb.Now().AsTime()
@@ -474,7 +473,7 @@ func TestAgentState_StartAutonomousRunResetsRoundCount(t *testing.T) {
 // it, the subsequent narrow UPDATE silently no-ops on a missing row.
 func TestAgentState_EnsureAgentStateRowIsIdempotent(t *testing.T) {
 	db := testDB(t)
-	db.CreateThread(&pb.Thread{Id: "t-ensure", Name: "T", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t-ensure", Name: "T", CreatedAt: timestamppb.Now()})
 
 	// First call: row created.
 	if err := db.EnsureAgentStateRow("t-ensure", AgentStatusIdle, AgentModeNormal); err != nil {

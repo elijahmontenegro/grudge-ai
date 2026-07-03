@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package grudge.llm.v1;
+
+option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1;llmv1";
+
+import "grudge/thread/v1/thread.proto";
+
+// LLM interface types. Provider-agnostic completion.
+//
+// LLMMessage is the wire format — role + content blocks, no corpus metadata.
+// The service converts between corpus Message and LLMMessage at the boundary.
+
+message LLMMessage {
+  grudge.thread.v1.Role role = 1;
+  repeated grudge.thread.v1.ContentBlock content = 2;
+}
+
+// ToolDeclaration describes a tool the model can call.
+message ToolDeclaration {
+  string name = 1;
+  string description = 2;
+  // JSON Schema for the tool's parameters, as a JSON string.
+  string parameters_json = 3;
+}
+
+// ToolChoiceMode controls whether and which tool the model is
+// expected to invoke. Default (UNSPECIFIED) maps to AUTO. Each
+// adapter translates to its provider's wire vocabulary.
+enum ToolChoiceMode {
+  TOOL_CHOICE_MODE_UNSPECIFIED = 0;
+  TOOL_CHOICE_MODE_AUTO = 1;     // model chooses freely
+  TOOL_CHOICE_MODE_NONE = 2;     // disallow tool calls
+  TOOL_CHOICE_MODE_REQUIRED = 3; // require any tool call
+  TOOL_CHOICE_MODE_NAMED = 4;    // require the named tool
+}
+
+// ToolChoice constrains the model's tool invocation. named_tool is
+// only consulted when mode == TOOL_CHOICE_MODE_NAMED.
+message ToolChoice {
+  ToolChoiceMode mode = 1;
+  string named_tool = 2;
+}
+
+message CompletionRequest {
+  repeated LLMMessage messages = 1;
+  string model = 2;
+  optional int32 max_tokens = 3;
+  optional float temperature = 4;
+  optional float top_p = 5;
+  repeated string stop = 6;
+  bool stream = 7;
+  // Tool declarations — functions the model can call.
+  repeated ToolDeclaration tools = 9;
+  // Tool-choice constraint. Optional — unset means model decides.
+  ToolChoice tool_choice = 10;
+}
+
+message CompletionResponse {
+  string id = 1;
+  LLMMessage message = 2;
+  Usage usage = 3;
+  string model = 4;
+  // Why generation stopped. Provider-specific strings, normalized
+  // by the adapter to: "stop", "length", "tool_calls",
+  // "content_filter", or empty.
+  string finish_reason = 5;
+}
+
+message Usage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+}
+
+// Streaming. Each chunk carries a content block delta.
+
+message StreamChunk {
+  oneof delta {
+    grudge.thread.v1.TextContent text = 1;
+    grudge.thread.v1.ThinkingContent thinking = 2;
+    grudge.thread.v1.ToolCallContent tool_call = 3;
+    grudge.thread.v1.ToolResultContent tool_result = 7;
+  }
+  bool done = 4;
+  optional Usage usage = 5;
+  optional string error = 6;  // Set on stream failure (done=true + error = failure)
+  // Provider-specific finish reason on the final chunk. Empty when
+  // generation has not stopped (intermediate chunks) or the
+  // provider didn't supply one.
+  string finish_reason = 8;
+  // Choice index for providers that emit multiple parallel
+  // completions (OpenAI's `n` parameter). Default 0 — single-choice
+  // path.
+  int32 choice_index = 9;
+}

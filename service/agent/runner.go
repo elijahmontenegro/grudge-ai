@@ -12,10 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elijahmontenegro/grudge/adkbridge"
 	"github.com/elijahmontenegro/grudge/core"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/rrc"
-	adk "github.com/elijahmontenegro/grudge/service/agent/internal/adk"
 	"github.com/elijahmontenegro/grudge/service/messages"
 	"github.com/elijahmontenegro/grudge/service/storage"
 
@@ -40,7 +42,7 @@ type Runner struct {
 	instruction     string
 	rerankerModelID string // for subagent forks to inherit
 	adkRunner       *runner.Runner
-	rrcLLM          *adk.RRCLLM // stored to set scope per-call
+	rrcLLM          *adkbridge.RRCLLM // stored to set scope per-call
 	mu              sync.Mutex
 	msgSeq          atomic.Int64 // monotonic message ID counter
 	// currentTurnID is the active-discourse identity stamped on every
@@ -59,8 +61,8 @@ type Runner struct {
 	// interrupting ADK's event iterator (which is running on the
 	// derived ctx) and any in-flight HTTP call underneath.
 	turnCancel  atomic.Pointer[context.CancelFunc]
-	onStream    adk.StreamCallback
-	onSelection func(result *pb.SelectionResult)
+	onStream    adkbridge.StreamCallback
+	onSelection func(result *rrcv1.SelectionResult)
 	onRound     func(round int, elapsed time.Duration)
 	// Event handlers — service wires these to publish to GraphQL subscriptions
 	OnToolCall   func(callID, toolName, args string)
@@ -121,12 +123,12 @@ func (r *Runner) CancelTurn() {
 }
 
 // SetStreamCallback sets the callback for streaming deltas (for subscription publishing).
-func (r *Runner) SetStreamCallback(cb adk.StreamCallback) {
+func (r *Runner) SetStreamCallback(cb adkbridge.StreamCallback) {
 	r.onStream = cb
 }
 
 // SetSelectionCallback sets the callback for RRC selection results (for introspection).
-func (r *Runner) SetSelectionCallback(cb func(result *pb.SelectionResult)) {
+func (r *Runner) SetSelectionCallback(cb func(result *rrcv1.SelectionResult)) {
 	r.onSelection = cb
 }
 
@@ -160,18 +162,18 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 	// RRC-as-LLM: ADK calls this thinking it's an LLM. Engine owns its
 	// own lock now; rrcLLM acquires it directly via engine.Lock /
 	// Unlock — no shared mutex passed in.
-	rrcLLM := adk.NewRRCLLM(engine, completer, db, threadID, modelName)
+	rrcLLM := adkbridge.NewRRCLLM(engine, completer, db, threadID, modelName)
 	rrcLLM.OnStream = func(delta, thinking string, done bool) {
 		if r.onStream != nil {
 			r.onStream(delta, thinking, done)
 		}
 	}
-	rrcLLM.OnSelection = func(result *pb.SelectionResult) {
+	rrcLLM.OnSelection = func(result *rrcv1.SelectionResult) {
 		if r.onSelection != nil {
 			r.onSelection(result)
 		}
 	}
-	rrcLLM.OnEdge = func(edge *pb.Edge) { db.InsertEdge(edge) }
+	rrcLLM.OnEdge = func(edge *rrcv1.Edge) { db.InsertEdge(edge) }
 	rrcLLM.OnAssemble = func(t rrc.AssembleTelemetry) {
 		// Capture into the per-SendMessage trace scratch. SendMessage
 		// holds r.mu for its entire duration and resets these fields at
@@ -221,7 +223,7 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 		Tools:           tools,
 		IncludeContents: llmagent.IncludeContentsNone,
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
-			adk.StripADKIdentity(agentName, ""),
+			adkbridge.StripADKIdentity(agentName, ""),
 		},
 		AfterModelCallbacks: []llmagent.AfterModelCallback{
 			r.afterModelCallback,
@@ -264,7 +266,7 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 // SQLite write. The enqueue is fire-and-forget into the bounded
 // worker pool; its cost is steady-state background load, not a tick
 // stage.
-func (r *Runner) indexMessage(msg *pb.Message) error {
+func (r *Runner) indexMessage(msg *threadv1.Message) error {
 	// Stamp the active-discourse identity. Every message stored during a
 	// SendMessage — triggering event, thinking, tool calls, tool results,
 	// final assistant text — shares the turn's id, so BuildActiveDiscourse
@@ -306,7 +308,7 @@ func (r *Runner) nextMsgID() string {
 // SendMessage processes a user message through the ADK agent loop.
 // ADK is the orchestrator — we iterate its events and surface tool calls,
 // results, thinking, and text to the frontend via callbacks.
-func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.SelectionScope, attachments ...*pb.AttachmentContent) (msg *pb.Message, retErr error) {
+func (r *Runner) SendMessage(ctx context.Context, content string, scope threadv1.SelectionScope, attachments ...*threadv1.AttachmentContent) (msg *threadv1.Message, retErr error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -371,15 +373,15 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.Selec
 	// at the adapter via repositioning of already-persisted messages,
 	// never by writing synthetic Events here.
 	if content != "" || len(attachments) > 0 {
-		blocks := rrc.BlocksFromText(content)
+		blocks := pbtext.BlocksFromText(content)
 		for _, a := range attachments {
-			blocks = append(blocks, &pb.ContentBlock{
-				Block: &pb.ContentBlock_Attachment{Attachment: a},
+			blocks = append(blocks, &threadv1.ContentBlock{
+				Block: &threadv1.ContentBlock_Attachment{Attachment: a},
 			})
 		}
-		userMsg := &pb.Message{
+		userMsg := &threadv1.Message{
 			Id:       r.nextMsgID(),
-			Role:     pb.Role_ROLE_USER,
+			Role:     threadv1.Role_ROLE_USER,
 			Content:  blocks,
 			Position: int64(len(corpus)),
 			ThreadId: r.threadID,
@@ -513,11 +515,11 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 // the dedup of ADK re-emission, the thinking-flush ordering around
 // tool calls, and the error/content precedence at turn-end are all
 // observable here.
-func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Message, error) {
+func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*threadv1.Message, error) {
 	var lastErr error
 	var thinkingBuf strings.Builder
 	var textBuf strings.Builder
-	var lastAssistantMsg *pb.Message
+	var lastAssistantMsg *threadv1.Message
 
 	// ADK occasionally emits the same FunctionCall or FunctionResponse
 	// Part across multiple events in a single Run (observed: every tool
@@ -532,10 +534,10 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 		if thinkingBuf.Len() == 0 {
 			return
 		}
-		msg := &pb.Message{
+		msg := &threadv1.Message{
 			Id:       r.nextMsgID(),
-			Role:     pb.Role_ROLE_ASSISTANT,
-			Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: thinkingBuf.String()}}}},
+			Role:     threadv1.Role_ROLE_ASSISTANT,
+			Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: thinkingBuf.String()}}}},
 			Position: r.msgSeq.Load(),
 			ThreadId: r.threadID,
 		}
@@ -585,14 +587,14 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 
 				argsJSON := "{}"
 				if fc.Args != nil {
-					if s, err := adk.MarshalFunctionArgs(fc.Args); err == nil {
-						argsJSON = s
+					if b, err := json.Marshal(fc.Args); err == nil {
+						argsJSON = string(b)
 					}
 				}
-				toolCallMsg := &pb.Message{
+				toolCallMsg := &threadv1.Message{
 					Id:       r.nextMsgID(),
-					Role:     pb.Role_ROLE_ASSISTANT,
-					Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallContent{Id: fc.ID, Name: fc.Name, Arguments: argsJSON}}}},
+					Role:     threadv1.Role_ROLE_ASSISTANT,
+					Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{Id: fc.ID, Name: fc.Name, Arguments: argsJSON}}}},
 					Position: r.msgSeq.Load(),
 					ThreadId: r.threadID,
 				}
@@ -620,10 +622,10 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 						resultText = string(b)
 					}
 				}
-				toolResultMsg := &pb.Message{
+				toolResultMsg := &threadv1.Message{
 					Id:       r.nextMsgID(),
-					Role:     pb.Role_ROLE_ASSISTANT,
-					Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultContent{ToolCallId: fr.ID, Content: resultText}}}},
+					Role:     threadv1.Role_ROLE_ASSISTANT,
+					Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolResult{ToolResult: &threadv1.ToolResultContent{ToolCallId: fr.ID, Content: resultText}}}},
 					Position: r.msgSeq.Load(),
 					ThreadId: r.threadID,
 				}
@@ -657,11 +659,11 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 		if lastErr != nil {
 			content = "Tool execution failed: " + lastErr.Error()
 		}
-		toolResultMsg := &pb.Message{
+		toolResultMsg := &threadv1.Message{
 			Id:   r.nextMsgID(),
-			Role: pb.Role_ROLE_ASSISTANT,
-			Content: []*pb.ContentBlock{{Block: &pb.ContentBlock_ToolResult{
-				ToolResult: &pb.ToolResultContent{
+			Role: threadv1.Role_ROLE_ASSISTANT,
+			Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolResult{
+				ToolResult: &threadv1.ToolResultContent{
 					ToolCallId: callID,
 					Content:    content,
 					IsError:    true,
@@ -679,21 +681,21 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 	}
 
 	// Store final thinking + text as the last message in the turn
-	var finalContent []*pb.ContentBlock
+	var finalContent []*threadv1.ContentBlock
 	if thinkingBuf.Len() > 0 {
-		finalContent = append(finalContent, &pb.ContentBlock{
-			Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: thinkingBuf.String()}},
+		finalContent = append(finalContent, &threadv1.ContentBlock{
+			Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: thinkingBuf.String()}},
 		})
 	}
 	if textBuf.Len() > 0 {
-		finalContent = append(finalContent, &pb.ContentBlock{
-			Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: textBuf.String()}},
+		finalContent = append(finalContent, &threadv1.ContentBlock{
+			Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: textBuf.String()}},
 		})
 	}
 	if len(finalContent) > 0 {
-		lastAssistantMsg = &pb.Message{
+		lastAssistantMsg = &threadv1.Message{
 			Id:       r.nextMsgID(),
-			Role:     pb.Role_ROLE_ASSISTANT,
+			Role:     threadv1.Role_ROLE_ASSISTANT,
 			Content:  finalContent,
 			Position: r.msgSeq.Load(),
 			ThreadId: r.threadID,

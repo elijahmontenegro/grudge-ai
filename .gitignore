@@ -16,9 +16,9 @@
 web/node_modules/
 node_modules/
 
-# Frontend build output. web/dist is the Vite output; the
-# service/cmd/grudge/dist copy is the //go:embed source synced by the
-# Taskfile's embed-sync task. Both are build artifacts.
+# Frontend build output. Vite builds straight into the //go:embed
+# source (web/vite.config.ts build.outDir → service/cmd/grudge/dist).
+# web/dist/ is kept ignored as a guard against stale local builds.
 web/dist/
 service/cmd/grudge/dist/
 

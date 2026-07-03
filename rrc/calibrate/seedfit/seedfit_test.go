@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 )
 
@@ -24,7 +23,7 @@ func (sepScorer) Score(_ context.Context, _ string, c []string) ([]float64, erro
 	return out, nil
 }
 
-var _ core.Scorer = sepScorer{}
+var _ Scorer = sepScorer{}
 
 const miniSeed = `{"categories":{"X":[
   {"id":"1","query":"q1","correct":"a","distractors":["b","c"]},

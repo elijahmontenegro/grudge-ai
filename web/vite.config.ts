@@ -16,6 +16,12 @@ function gitShortSha(): string {
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Build straight into the go:embed directory — no copy step. The
+  // grudge binary embeds all:dist from service/cmd/grudge.
+  build: {
+    outDir: path.resolve(__dirname, '../service/cmd/grudge/dist'),
+    emptyOutDir: true,
+  },
   css: {
     transformer: 'postcss',
   },

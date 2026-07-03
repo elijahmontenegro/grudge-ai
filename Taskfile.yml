@@ -16,25 +16,27 @@ tasks:
 
   build:
     desc: Build the grudge binary (compile-checks every other package via test)
-    deps: [embed-sync]
+    deps: [web:build]
     cmds:
       - go build -o service/grudge.exe ./service/cmd/grudge
 
   test:
-    desc: Test all Go packages
+    desc: Test all Go packages across every workspace module
     cmds:
       - go test $(go list ./... | grep -v node_modules)
+      - for m in proto rrc core adoc sandbox; do (cd $m && go test ./...) || exit 1; done
 
   lint:
-    desc: Vet all Go packages. Skips copylocks on service/graph because
-          gqlgen's generated marshalers pass proto messages by value
-          and proto types embed a sync.Mutex via MessageState. The
-          warning is benign (marshalers don't mutate from multiple
-          goroutines); excluding only that package preserves rigor on
-          hand-written code.
+    desc: Vet all Go packages across every workspace module. Skips
+          copylocks on service/graph because gqlgen's generated
+          marshalers pass proto messages by value and proto types embed
+          a sync.Mutex via MessageState. The warning is benign
+          (marshalers don't mutate from multiple goroutines); excluding
+          only that package preserves rigor on hand-written code.
     cmds:
       - go vet $(go list ./... | grep -v -e node_modules -e '/service/graph$')
       - go vet -copylocks=false ./service/graph/...
+      - for m in proto rrc core adoc sandbox; do (cd $m && go vet ./...) || exit 1; done
 
   verify:deps:
     desc: Dependency-graph invariants (storage boundary, tiktoken decoupling)
@@ -44,11 +46,11 @@ tasks:
   verify:
     desc: Run every CI invariant — lint, dep-graph checks, gqlgen freshness, Go tests, web tests
     cmds:
-      # embed-sync first: lint and test type-check service/cmd/grudge/main.go,
-      # which has //go:embed all:dist — the dist directory must exist before
-      # go vet / go test runs or it fails "pattern all:dist: no matching files
-      # found." embed-sync (deps: web:build) is the canonical way to populate it.
-      - task: embed-sync
+      # web:build first: lint and test type-check service/cmd/grudge/main.go,
+      # which has //go:embed all:dist — vite writes straight into that
+      # directory (build.outDir), so it must exist before go vet / go test
+      # runs or they fail "pattern all:dist: no matching files found."
+      - task: web:build
       - task: lint
       - task: verify:deps
       - task: gqlgen:check
@@ -56,9 +58,10 @@ tasks:
       - task: web:test
 
   tidy:
-    desc: Run go mod tidy
+    desc: Run go mod tidy in every workspace module
     cmds:
       - go mod tidy
+      - for m in proto rrc core adoc sandbox; do (cd $m && go mod tidy) || exit 1; done
 
   proto:
     desc: Regenerate proto/gen/go from .proto sources via buf
@@ -107,17 +110,6 @@ tasks:
     dir: web
     cmds:
       - npm run dev
-
-  embed-sync:
-    desc: Sync web/dist into service/cmd/grudge/dist for go:embed
-    deps: [web:build]
-    cmds:
-      - rm -rf service/cmd/grudge/dist
-      - cp -r web/dist service/cmd/grudge/dist
-    sources:
-      - web/dist/**/*
-    generates:
-      - service/cmd/grudge/dist/**/*
 
   run:
     desc: Build everything and run grudge
@@ -195,7 +187,7 @@ tasks:
           to see those variants. Useful for inspecting what the model
           actually sees without booting the full service.
     cmds:
-      - go run ./tools/promptdump {{.CLI_ARGS}}
+      - go run ./service/cmd/promptdump {{.CLI_ARGS}}
 
   clean:
     desc: Remove build artifacts

@@ -5,22 +5,21 @@ import (
 	"slices"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc/chunk"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
-func localMessage(id string, role pb.Role, position int64, blocks ...*pb.ContentBlock) *pb.Message {
-	return &pb.Message{Id: id, ThreadId: "t1", Role: role, Position: position, Content: blocks}
+func localMessage(id string, role threadv1.Role, position int64, blocks ...*threadv1.ContentBlock) *threadv1.Message {
+	return &threadv1.Message{Id: id, ThreadId: "t1", Role: role, Position: position, Content: blocks}
 }
 
-func textBlock(text string) *pb.ContentBlock {
-	return &pb.ContentBlock{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: text}}}
+func textBlock(text string) *threadv1.ContentBlock {
+	return &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: text}}}
 }
 
 func TestBuildLocalContextBoundsAndReachesBackForAnchors(t *testing.T) {
-	corpus := []*pb.Message{
-		localMessage("user", pb.Role_ROLE_USER, 0, textBlock("original ask")),
-		localMessage("assistant", pb.Role_ROLE_ASSISTANT, 1, textBlock("working on it")),
+	corpus := []*threadv1.Message{
+		localMessage("user", threadv1.Role_ROLE_USER, 0, textBlock("original ask")),
+		localMessage("assistant", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("working on it")),
 		storedCall("call", "t1", "op", 2),
 		storedResult("result", "t1", "op", 3),
 	}
@@ -33,12 +32,12 @@ func TestBuildLocalContextBoundsAndReachesBackForAnchors(t *testing.T) {
 }
 
 func TestSerializedLocalContextUsesSameOrderedMessagesAndLabelsBlocks(t *testing.T) {
-	local := []*pb.Message{
-		localMessage("u", pb.Role_ROLE_USER, 0, textBlock("inspect the file")),
+	local := []*threadv1.Message{
+		localMessage("u", threadv1.Role_ROLE_USER, 0, textBlock("inspect the file")),
 		storedCall("c", "t1", "op-1", 1),
 		storedResult("r", "t1", "op-1", 2),
 	}
-	serialized := SerializeLocalContext(local, chunk.DefaultConfig())
+	serialized := SerializeLocalContext(local, testChunkConfig())
 	if serialized == nil {
 		t.Fatal("serialization is nil")
 	}
@@ -57,16 +56,16 @@ func TestSerializedLocalContextUsesSameOrderedMessagesAndLabelsBlocks(t *testing
 }
 
 func TestSerializedLocalContextFingerprintChangesWithOrderRoleAndContent(t *testing.T) {
-	a := localMessage("a", pb.Role_ROLE_USER, 0, textBlock("alpha"))
-	b := localMessage("b", pb.Role_ROLE_ASSISTANT, 1, textBlock("beta"))
-	base := SerializeLocalContext([]*pb.Message{a, b}, chunk.DefaultConfig()).Fingerprint
-	reordered := SerializeLocalContext([]*pb.Message{b, a}, chunk.DefaultConfig()).Fingerprint
-	roleChanged := SerializeLocalContext([]*pb.Message{
-		localMessage("a", pb.Role_ROLE_ASSISTANT, 0, textBlock("alpha")), b,
-	}, chunk.DefaultConfig()).Fingerprint
-	contentChanged := SerializeLocalContext([]*pb.Message{
-		localMessage("a", pb.Role_ROLE_USER, 0, textBlock("changed")), b,
-	}, chunk.DefaultConfig()).Fingerprint
+	a := localMessage("a", threadv1.Role_ROLE_USER, 0, textBlock("alpha"))
+	b := localMessage("b", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("beta"))
+	base := SerializeLocalContext([]*threadv1.Message{a, b}, testChunkConfig()).Fingerprint
+	reordered := SerializeLocalContext([]*threadv1.Message{b, a}, testChunkConfig()).Fingerprint
+	roleChanged := SerializeLocalContext([]*threadv1.Message{
+		localMessage("a", threadv1.Role_ROLE_ASSISTANT, 0, textBlock("alpha")), b,
+	}, testChunkConfig()).Fingerprint
+	contentChanged := SerializeLocalContext([]*threadv1.Message{
+		localMessage("a", threadv1.Role_ROLE_USER, 0, textBlock("changed")), b,
+	}, testChunkConfig()).Fingerprint
 	if base == reordered || base == roleChanged || base == contentChanged {
 		t.Fatal("fingerprint must bind order, role, and exact serialized content")
 	}
@@ -81,10 +80,10 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	engine := testEngine(scorer, oracle)
 	serialized := testSerializedLocalContext(anchor)
 
-	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, []*pb.Message{prior, anchor}, pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, []*threadv1.Message{prior, anchor}, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, []*pb.Message{prior, anchor}, pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, []*threadv1.Message{prior, anchor}, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if scorer.callCount != 1 {
@@ -92,7 +91,7 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	}
 	changed := *serialized
 	changed.Fingerprint = serialized.Fingerprint + "-changed"
-	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, []*pb.Message{prior, anchor}, pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, []*threadv1.Message{prior, anchor}, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if scorer.callCount != 2 {
@@ -100,7 +99,7 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	}
 }
 
-func withTurn(m *pb.Message, turnID string) *pb.Message {
+func withTurn(m *threadv1.Message, turnID string) *threadv1.Message {
 	m.TurnId = turnID
 	return m
 }
@@ -111,10 +110,10 @@ func withTurn(m *pb.Message, turnID string) *pb.Message {
 func TestBuildActiveDiscourse_TurnScopedWindow(t *testing.T) {
 	// Prior completed turn (turn-A) + a long current turn (turn-B) whose
 	// tool loop is longer than any small fixed N.
-	corpus := []*pb.Message{
-		withTurn(localMessage("u0", pb.Role_ROLE_USER, 0, textBlock("earlier ask")), "turn-A"),
-		withTurn(localMessage("a0", pb.Role_ROLE_ASSISTANT, 1, textBlock("earlier answer")), "turn-A"),
-		withTurn(localMessage("u1", pb.Role_ROLE_USER, 2, textBlock("current ask")), "turn-B"),
+	corpus := []*threadv1.Message{
+		withTurn(localMessage("u0", threadv1.Role_ROLE_USER, 0, textBlock("earlier ask")), "turn-A"),
+		withTurn(localMessage("a0", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("earlier answer")), "turn-A"),
+		withTurn(localMessage("u1", threadv1.Role_ROLE_USER, 2, textBlock("current ask")), "turn-B"),
 	}
 	// 20-step tool loop in the current turn.
 	pos := int64(3)
@@ -154,9 +153,9 @@ func TestBuildActiveDiscourse_TurnScopedWindow(t *testing.T) {
 // lacks an assistant-text anchor, the builder reaches back for it (shared
 // reach-back with BuildLocalContext) so the span disambiguates.
 func TestBuildActiveDiscourse_ReachesBackForAnchors(t *testing.T) {
-	corpus := []*pb.Message{
-		withTurn(localMessage("u0", pb.Role_ROLE_USER, 0, textBlock("original ask")), "turn-A"),
-		withTurn(localMessage("a0", pb.Role_ROLE_ASSISTANT, 1, textBlock("prior assistant text")), "turn-A"),
+	corpus := []*threadv1.Message{
+		withTurn(localMessage("u0", threadv1.Role_ROLE_USER, 0, textBlock("original ask")), "turn-A"),
+		withTurn(localMessage("a0", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("prior assistant text")), "turn-A"),
 		// Current turn is a tool-only continuation: no assistant text of its own.
 		withTurn(storedCall("c", "t1", "op", 2), "turn-B"),
 		withTurn(storedResult("r", "t1", "op", 3), "turn-B"),
@@ -178,9 +177,9 @@ func TestBuildActiveDiscourse_ReachesBackForAnchors(t *testing.T) {
 // rows / autonomous first call) falls back to the bounded recency window,
 // preserving prior behavior.
 func TestBuildActiveDiscourse_FallsBackWhenNoTurnID(t *testing.T) {
-	corpus := []*pb.Message{
-		localMessage("user", pb.Role_ROLE_USER, 0, textBlock("original ask")),
-		localMessage("assistant", pb.Role_ROLE_ASSISTANT, 1, textBlock("working on it")),
+	corpus := []*threadv1.Message{
+		localMessage("user", threadv1.Role_ROLE_USER, 0, textBlock("original ask")),
+		localMessage("assistant", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("working on it")),
 		storedCall("call", "t1", "op", 2),
 		storedResult("result", "t1", "op", 3),
 	}
@@ -196,9 +195,9 @@ func TestBuildActiveDiscourse_FallsBackWhenNoTurnID(t *testing.T) {
 // RRCLLM but with no stored message yet (autonomous tick before any event
 // of the tick lands) falls back to recency rather than returning empty.
 func TestBuildActiveDiscourse_UnknownTurnIDFallsBack(t *testing.T) {
-	corpus := []*pb.Message{
-		localMessage("user", pb.Role_ROLE_USER, 0, textBlock("ask")),
-		localMessage("assistant", pb.Role_ROLE_ASSISTANT, 1, textBlock("answer")),
+	corpus := []*threadv1.Message{
+		localMessage("user", threadv1.Role_ROLE_USER, 0, textBlock("ask")),
+		localMessage("assistant", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("answer")),
 	}
 	got := messageIDs(BuildActiveDiscourse(corpus, "turn-not-yet-stored", 2))
 	if len(got) == 0 {

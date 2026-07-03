@@ -10,25 +10,25 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc"
-	"github.com/elijahmontenegro/grudge/service/internal/adoc"
+	"github.com/elijahmontenegro/grudge/adoc"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Role is the resolver for the role field.
-func (r *messageResolver) Role(ctx context.Context, obj *v1.Message) (string, error) {
+func (r *messageResolver) Role(ctx context.Context, obj *threadv1.Message) (string, error) {
 	return protoRoleToDisplay(obj.Role), nil
 }
 
 // Content is the resolver for the content field.
-func (r *messageResolver) Content(ctx context.Context, obj *v1.Message) (string, error) {
+func (r *messageResolver) Content(ctx context.Context, obj *threadv1.Message) (string, error) {
 	return protoContentToDisplay(obj.Content), nil
 }
 
 // Thinking is the resolver for the thinking field.
-func (r *messageResolver) Thinking(ctx context.Context, obj *v1.Message) (*string, error) {
+func (r *messageResolver) Thinking(ctx context.Context, obj *threadv1.Message) (*string, error) {
 	thinking := protoThinkingContent(obj.Content)
 	if thinking == "" {
 		return nil, nil
@@ -37,7 +37,7 @@ func (r *messageResolver) Thinking(ctx context.Context, obj *v1.Message) (*strin
 }
 
 // ToolCalls is the resolver for the toolCalls field.
-func (r *messageResolver) ToolCalls(ctx context.Context, obj *v1.Message) ([]*ToolCallBlock, error) {
+func (r *messageResolver) ToolCalls(ctx context.Context, obj *threadv1.Message) ([]*ToolCallBlock, error) {
 	calls := protoToolCalls(obj.Content)
 	result := make([]*ToolCallBlock, len(calls))
 	for i, tc := range calls {
@@ -47,7 +47,7 @@ func (r *messageResolver) ToolCalls(ctx context.Context, obj *v1.Message) ([]*To
 }
 
 // ToolResults is the resolver for the toolResults field.
-func (r *messageResolver) ToolResults(ctx context.Context, obj *v1.Message) ([]*ToolResultBlock, error) {
+func (r *messageResolver) ToolResults(ctx context.Context, obj *threadv1.Message) ([]*ToolResultBlock, error) {
 	results := protoToolResults(obj.Content)
 	out := make([]*ToolResultBlock, len(results))
 	for i, tr := range results {
@@ -60,7 +60,7 @@ func (r *messageResolver) ToolResults(ctx context.Context, obj *v1.Message) ([]*
 // message's content blocks and surfaces any AttachmentContent as
 // metadata-only blocks (the actual file bytes stay in the workspace;
 // GraphQL returns references, clients fetch via the HTTP endpoint).
-func (r *messageResolver) Attachments(ctx context.Context, obj *v1.Message) ([]*AttachmentBlock, error) {
+func (r *messageResolver) Attachments(ctx context.Context, obj *threadv1.Message) ([]*AttachmentBlock, error) {
 	var out []*AttachmentBlock
 	for _, b := range obj.Content {
 		if a := b.GetAttachment(); a != nil {
@@ -77,7 +77,7 @@ func (r *messageResolver) Attachments(ctx context.Context, obj *v1.Message) ([]*
 }
 
 // CreatedAt is the resolver for the createdAt field.
-func (r *messageResolver) CreatedAt(ctx context.Context, obj *v1.Message) (*time.Time, error) {
+func (r *messageResolver) CreatedAt(ctx context.Context, obj *threadv1.Message) (*time.Time, error) {
 	if obj.CreatedAt != nil {
 		t := obj.CreatedAt.AsTime()
 		return &t, nil
@@ -86,19 +86,19 @@ func (r *messageResolver) CreatedAt(ctx context.Context, obj *v1.Message) (*time
 }
 
 // CitedByCount is the resolver for the citedByCount field.
-func (r *messageResolver) CitedByCount(ctx context.Context, obj *v1.Message) (int, error) {
+func (r *messageResolver) CitedByCount(ctx context.Context, obj *threadv1.Message) (int, error) {
 	return r.selections.CitationCount(obj.Id), nil
 }
 
 // EditMessage is the resolver for the editMessage field.
-func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*v1.Thread, error) {
+func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*threadv1.Thread, error) {
 	parentThread, err := r.db.GetThread(threadID)
 	if err != nil {
 		return nil, err
 	}
 
 	branchPos := int64(messagePosition)
-	newThread := &v1.Thread{
+	newThread := &threadv1.Thread{
 		Id:                  fmt.Sprintf("thread-%d", time.Now().UnixNano()),
 		Name:                parentThread.Name + " (branch)",
 		WorkingDirs:         parentThread.WorkingDirs,
@@ -117,10 +117,10 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 	// inherited corpus.
 
 	// Insert the edited message at the branch point
-	msg := &v1.Message{
+	msg := &threadv1.Message{
 		Id:       fmt.Sprintf("msg-%s-0", newThread.Id),
-		Role:     v1.Role_ROLE_USER,
-		Content:  rrc.BlocksFromText(newContent),
+		Role:     threadv1.Role_ROLE_USER,
+		Content:  pbtext.BlocksFromText(newContent),
 		Position: int64(messagePosition),
 		ThreadId: newThread.Id,
 	}
@@ -137,7 +137,7 @@ func (r *mutationResolver) CompileAdoc(ctx context.Context, path string) (string
 }
 
 // SendMessage is the resolver for the sendMessage field.
-func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope, attachments []*AttachmentInput) (*v1.Message, error) {
+func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope, attachments []*AttachmentInput) (*threadv1.Message, error) {
 	// Auto-name thread from first user message
 	corpus, err := r.db.ThreadCorpus(threadID)
 	if err != nil {
@@ -158,9 +158,9 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 	// relevant. Thread-only is the opt-out, not the default — the old
 	// default made the agent look amnesiac ("I don't retain info across
 	// chats") because it literally had no cross-thread context to pull.
-	pbScope := v1.SelectionScope_SELECTION_SCOPE_ALL_THREADS
+	pbScope := threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS
 	if scope != nil && *scope == SelectionScopeThread {
-		pbScope = v1.SelectionScope_SELECTION_SCOPE_THREAD
+		pbScope = threadv1.SelectionScope_SELECTION_SCOPE_THREAD
 	}
 
 	// Defer a publish of Status=Idle so the UI doesn't get stuck showing
@@ -213,7 +213,7 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 }
 
 // Messages is the resolver for the messages field.
-func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*v1.Message, error) {
+func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*threadv1.Message, error) {
 	lim, off := 0, 0
 	if limit != nil {
 		lim = *limit

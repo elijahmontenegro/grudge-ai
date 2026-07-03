@@ -3,7 +3,8 @@ package storage
 import (
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -11,11 +12,11 @@ import (
 // survives insert → GetMessage / ListMessages / AllCorpus / LatestMessage.
 func TestTurnID_RoundTrips(t *testing.T) {
 	db := testDB(t)
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "T", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "T", CreatedAt: timestamppb.Now()})
 
-	msg := &pb.Message{
-		Id: "m1", ThreadId: "t1", Role: pb.Role_ROLE_USER,
-		Content:   []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "hi"}}}},
+	msg := &threadv1.Message{
+		Id: "m1", ThreadId: "t1", Role: threadv1.Role_ROLE_USER,
+		Content:   []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "hi"}}}},
 		Position:  0,
 		CreatedAt: timestamppb.Now(),
 		TurnId:    "turn-abc",
@@ -60,10 +61,10 @@ func TestTurnID_RoundTrips(t *testing.T) {
 // A0 schema-bump work — latent, predates turn_id).
 func TestTurnID_DefaultsEmpty(t *testing.T) {
 	db := testDB(t)
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "T", CreatedAt: timestamppb.Now()})
-	if err := db.InsertMessage(&pb.Message{
-		Id: "m1", ThreadId: "t1", Role: pb.Role_ROLE_USER, Position: 0,
-		Content:   []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "x"}}}},
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "T", CreatedAt: timestamppb.Now()})
+	if err := db.InsertMessage(&threadv1.Message{
+		Id: "m1", ThreadId: "t1", Role: threadv1.Role_ROLE_USER, Position: 0,
+		Content:   []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "x"}}}},
 		CreatedAt: timestamppb.Now(),
 	}, nil); err != nil {
 		t.Fatal(err)
@@ -83,16 +84,16 @@ func TestTurnID_DefaultsEmpty(t *testing.T) {
 // recorded alongside similarity, not clobbering it.
 func TestProvenanceEdge_CoexistsWithCrossEncoder(t *testing.T) {
 	db := testDB(t)
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "T", CreatedAt: timestamppb.Now()})
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "T", CreatedAt: timestamppb.Now()})
 
-	ce := &pb.Edge{
+	ce := &rrcv1.Edge{
 		FromMessageId: "a", ToMessageId: "b", Score: 0.7,
-		Source: pb.EdgeSource_EDGE_SOURCE_CROSS_ENCODER, CrossEncoderScore: 0.7,
+		Source: rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER, CrossEncoderScore: 0.7,
 		DetectedAt: timestamppb.Now(), FromThreadId: "t1", ToThreadId: "t1",
 	}
-	prov := &pb.Edge{
+	prov := &rrcv1.Edge{
 		FromMessageId: "a", ToMessageId: "b", Score: 0.9,
-		Source: pb.EdgeSource_EDGE_SOURCE_PROVENANCE, CrossEncoderScore: 0,
+		Source: rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE, CrossEncoderScore: 0,
 		DetectedAt: timestamppb.Now(), FromThreadId: "t1", ToThreadId: "t1",
 	}
 	if err := db.InsertEdge(ce); err != nil {
@@ -112,9 +113,9 @@ func TestProvenanceEdge_CoexistsWithCrossEncoder(t *testing.T) {
 			continue
 		}
 		switch e.Source {
-		case pb.EdgeSource_EDGE_SOURCE_CROSS_ENCODER:
+		case rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER:
 			sawCE = true
-		case pb.EdgeSource_EDGE_SOURCE_PROVENANCE:
+		case rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE:
 			sawProv = true
 		}
 	}
@@ -158,10 +159,10 @@ func TestEnsureEmbeddingDim_FirstRunAndNoOp(t *testing.T) {
 // truth (chunks, messages) intact — the "vector cache is rebuildable" invariant.
 func TestEnsureEmbeddingDim_RebuildsOnChange(t *testing.T) {
 	db := testDB(t)
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "T", CreatedAt: timestamppb.Now()})
-	if err := db.InsertMessage(&pb.Message{
-		Id: "m1", ThreadId: "t1", Role: pb.Role_ROLE_USER, Position: 0,
-		Content:   []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "hello"}}}},
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "T", CreatedAt: timestamppb.Now()})
+	if err := db.InsertMessage(&threadv1.Message{
+		Id: "m1", ThreadId: "t1", Role: threadv1.Role_ROLE_USER, Position: 0,
+		Content:   []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "hello"}}}},
 		CreatedAt: timestamppb.Now(),
 	}, []Chunk{{MessageID: "m1", ChunkIndex: 0, Text: "hello", ByteStart: 0, ByteEnd: 5, TokenEst: 1}}); err != nil {
 		t.Fatal(err)

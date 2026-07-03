@@ -3,17 +3,26 @@ package rrc
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // SelectPrerequisites scores serialized Local Context against eligible
-// stored messages and attaches prerequisite edges to the latest stored event.
-func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocalContext, anchor *pb.Message, corpus []*pb.Message, scope pb.SelectionScope, threadID string) ([]*pb.Edge, PrerequisiteSelectionTelemetry, error) {
+// stored messages and attaches prerequisite edges to the latest stored
+// event. Takes the engine mutex — safe for external callers alongside
+// Assemble / RecordProvenance / Fork / Merge.
+func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, corpus []*threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.selectPrerequisitesLocked(ctx, local, anchor, corpus, scope, threadID)
+}
+
+// selectPrerequisitesLocked is SelectPrerequisites' body. Caller holds e.mu.
+func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, corpus []*threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
 	if local == nil || len(local.Chunks) == 0 || len(corpus) == 0 {
 		return nil, PrerequisiteSelectionTelemetry{}, nil
 	}
@@ -29,12 +38,12 @@ func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocal
 	for _, id := range local.MessageIDs {
 		excluded[id] = true
 	}
-	eligible := make(map[string]*pb.Message, len(corpus))
+	eligible := make(map[string]*threadv1.Message, len(corpus))
 	for _, message := range corpus {
 		if excluded[message.Id] || textFromMessage(message) == "" {
 			continue
 		}
-		if scope == pb.SelectionScope_SELECTION_SCOPE_THREAD && message.ThreadId != threadID {
+		if scope == threadv1.SelectionScope_SELECTION_SCOPE_THREAD && message.ThreadId != threadID {
 			continue
 		}
 		eligible[message.Id] = message
@@ -44,7 +53,7 @@ func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocal
 	}
 
 	retrievalScope := ScopeAll
-	if scope == pb.SelectionScope_SELECTION_SCOPE_THREAD {
+	if scope == threadv1.SelectionScope_SELECTION_SCOPE_THREAD {
 		retrievalScope = ScopeThread
 	}
 	predicate := PredAnd{Children: []Predicate{
@@ -154,7 +163,7 @@ func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocal
 	}
 
 	type scoredMessage struct {
-		message *pb.Message
+		message *threadv1.Message
 		score   float64
 	}
 	candidates := make([]scoredMessage, 0, len(bestScore))
@@ -192,7 +201,7 @@ func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocal
 	// P(prereq) ≥ LossRatio — the precision stance. The stored edge Score is
 	// the calibrated P so downstream traversal and budget ranking speak the
 	// same currency; CrossEncoderScore retains the raw similarity.
-	var edges []*pb.Edge
+	var edges []*rrcv1.Edge
 	for _, candidate := range candidates {
 		sim := candidate.score
 		mass := reachMass[candidate.message.Id]
@@ -200,24 +209,28 @@ func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocal
 		if !accept(p, e.cfg.LossRatio, 0 /* μ at formation */, 0 /* tokens n/a at formation */) {
 			continue
 		}
-		edge := &pb.Edge{
+		edge := &rrcv1.Edge{
 			FromMessageId:     candidate.message.Id,
 			ToMessageId:       anchor.Id,
 			Score:             float32(p),
-			Source:            pb.EdgeSource_EDGE_SOURCE_CROSS_ENCODER,
+			Source:            rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER,
 			CrossEncoderScore: float32(sim),
 			DetectedAt:        timestamppb.Now(),
 			FromThreadId:      candidate.message.ThreadId,
 			ToThreadId:        anchor.ThreadId,
 		}
-		e.dag.AddEdge(edge)
+		if !e.admitEdge(edge) {
+			continue
+		}
 		edges = append(edges, edge)
 	}
 
 	duration := time.Since(started)
-	log.Printf("RRC: SelectPrerequisites fingerprint=%s anchor=%s thread=%s eligible=%d localContextChunks=%d retrieved=%d cached=%d reranked=%d edges=%d dur=%v",
-		local.Fingerprint, anchor.Id, anchor.ThreadId, len(eligible), len(local.Chunks),
-		totalRetrieved, totalCached, totalReranked, len(edges), duration)
+	e.logger.Info("RRC: SelectPrerequisites",
+		"fingerprint", local.Fingerprint, "anchor", anchor.Id, "thread", anchor.ThreadId,
+		"eligible", len(eligible), "localContextChunks", len(local.Chunks),
+		"retrieved", totalRetrieved, "cached", totalCached, "reranked", totalReranked,
+		"edges", len(edges), "dur", duration)
 	return edges, PrerequisiteSelectionTelemetry{
 		DurationMs:          duration.Milliseconds(),
 		PriorsConsidered:    len(eligible),

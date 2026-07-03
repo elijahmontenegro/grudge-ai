@@ -7,7 +7,8 @@ import (
 	"iter"
 
 	"github.com/elijahmontenegro/grudge/core/genaicodec"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/genai"
 )
 
@@ -16,7 +17,7 @@ type completer struct {
 	model  string
 }
 
-func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error) {
+func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
 	contents, cfg := c.encode(req)
 	resp, err := c.client.Models.GenerateContent(ctx, c.model, contents, cfg)
 	if err != nil {
@@ -26,23 +27,23 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 		return nil, fmt.Errorf("vertex: no candidates in response")
 	}
 	msg := genaicodec.ContentToProto(resp.Candidates[0].Content)
-	msg.Role = pb.Role_ROLE_ASSISTANT
-	out := &pb.CompletionResponse{
+	msg.Role = threadv1.Role_ROLE_ASSISTANT
+	out := &llmv1.CompletionResponse{
 		Model:        c.model,
 		Message:      msg,
 		FinishReason: normalizeFinish(resp.Candidates[0].FinishReason),
 	}
 	if u := resp.UsageMetadata; u != nil {
-		out.Usage = &pb.Usage{PromptTokens: u.PromptTokenCount, CompletionTokens: u.CandidatesTokenCount}
+		out.Usage = &llmv1.Usage{PromptTokens: u.PromptTokenCount, CompletionTokens: u.CandidatesTokenCount}
 	}
 	return out, nil
 }
 
-func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
-	return func(yield func(*pb.StreamChunk, error) bool) {
+func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
+	return func(yield func(*llmv1.StreamChunk, error) bool) {
 		contents, cfg := c.encode(req)
 		var lastFinish string
-		var usage *pb.Usage
+		var usage *llmv1.Usage
 		for resp, err := range c.client.Models.GenerateContentStream(ctx, c.model, contents, cfg) {
 			if err != nil {
 				yield(nil, fmt.Errorf("vertex stream: %w", err))
@@ -56,7 +57,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 				lastFinish = normalizeFinish(cand.FinishReason)
 			}
 			if u := resp.UsageMetadata; u != nil {
-				usage = &pb.Usage{PromptTokens: u.PromptTokenCount, CompletionTokens: u.CandidatesTokenCount}
+				usage = &llmv1.Usage{PromptTokens: u.PromptTokenCount, CompletionTokens: u.CandidatesTokenCount}
 			}
 			if cand.Content == nil {
 				continue
@@ -72,18 +73,18 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			}
 		}
 		// Terminal chunk carries the finish reason + usage.
-		yield(&pb.StreamChunk{Done: true, FinishReason: lastFinish, Usage: usage}, nil)
+		yield(&llmv1.StreamChunk{Done: true, FinishReason: lastFinish, Usage: usage}, nil)
 	}
 }
 
 // partToChunk maps one genai response Part to a StreamChunk delta. Returns
 // nil for empty/unmapped parts.
-func partToChunk(p *genai.Part) *pb.StreamChunk {
+func partToChunk(p *genai.Part) *llmv1.StreamChunk {
 	switch {
 	case p.Text != "" && p.Thought:
-		return &pb.StreamChunk{Delta: &pb.StreamChunk_Thinking{Thinking: &pb.ThinkingContent{Text: p.Text}}}
+		return &llmv1.StreamChunk{Delta: &llmv1.StreamChunk_Thinking{Thinking: &threadv1.ThinkingContent{Text: p.Text}}}
 	case p.Text != "":
-		return &pb.StreamChunk{Delta: &pb.StreamChunk_Text{Text: &pb.TextContent{Text: p.Text}}}
+		return &llmv1.StreamChunk{Delta: &llmv1.StreamChunk_Text{Text: &threadv1.TextContent{Text: p.Text}}}
 	case p.FunctionCall != nil:
 		fc := p.FunctionCall
 		args := "{}"
@@ -92,7 +93,7 @@ func partToChunk(p *genai.Part) *pb.StreamChunk {
 				args = string(b)
 			}
 		}
-		return &pb.StreamChunk{Delta: &pb.StreamChunk_ToolCall{ToolCall: &pb.ToolCallContent{
+		return &llmv1.StreamChunk{Delta: &llmv1.StreamChunk_ToolCall{ToolCall: &threadv1.ToolCallContent{
 			Id:        synthCallID(fc.ID, fc.Name),
 			Name:      fc.Name,
 			Arguments: args,

@@ -3,7 +3,8 @@ package vertex
 import (
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/genai"
 )
 
@@ -14,13 +15,13 @@ func TestEncode_HoistsSystemInstructionAndParams(t *testing.T) {
 	c := &completer{model: "gemini-2.5-pro"}
 	maxTok := int32(256)
 	temp := float32(0.3)
-	req := &pb.CompletionRequest{
-		Messages: []*pb.LLMMessage{
-			{Role: pb.Role_ROLE_SYSTEM, Content: []*pb.ContentBlock{
-				{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "be terse"}}},
+	req := &llmv1.CompletionRequest{
+		Messages: []*llmv1.LLMMessage{
+			{Role: threadv1.Role_ROLE_SYSTEM, Content: []*threadv1.ContentBlock{
+				{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "be terse"}}},
 			}},
-			{Role: pb.Role_ROLE_USER, Content: []*pb.ContentBlock{
-				{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "hi"}}},
+			{Role: threadv1.Role_ROLE_USER, Content: []*threadv1.ContentBlock{
+				{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "hi"}}},
 			}},
 		},
 		MaxTokens:   &maxTok,
@@ -48,13 +49,13 @@ func TestEncode_HoistsSystemInstructionAndParams(t *testing.T) {
 // FunctionDeclarations with the JSON schema passed through as a parsed object.
 func TestEncode_ToolDeclarations(t *testing.T) {
 	c := &completer{model: "gemini-2.5-pro"}
-	req := &pb.CompletionRequest{
-		Messages: []*pb.LLMMessage{
-			{Role: pb.Role_ROLE_USER, Content: []*pb.ContentBlock{
-				{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "hi"}}},
+	req := &llmv1.CompletionRequest{
+		Messages: []*llmv1.LLMMessage{
+			{Role: threadv1.Role_ROLE_USER, Content: []*threadv1.ContentBlock{
+				{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "hi"}}},
 			}},
 		},
-		Tools: []*pb.ToolDeclaration{
+		Tools: []*llmv1.ToolDeclaration{
 			{Name: "read", Description: "read a file", ParametersJson: `{"type":"object","properties":{"path":{"type":"string"}}}`},
 		},
 	}

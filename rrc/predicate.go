@@ -88,3 +88,62 @@ type PredExcludeMessageIDs struct {
 }
 
 func (PredExcludeMessageIDs) predicateMarker() {}
+
+// CandidateAttrs is the attribute view EvalPredicate judges a candidate
+// chunk by. Metadata is the open key space PredHasMetadata queries
+// (e.g. "model_id"); "thread_id" is answered from the ThreadID field.
+type CandidateAttrs struct {
+	MessageID string
+	ThreadID  string
+	Metadata  map[string]string
+}
+
+// EvalPredicate is the canonical in-memory evaluator for the Predicate
+// algebra. Oracle backends delegate here (typically as a post-filter
+// over retrieval pages) so every backend shares identical semantics —
+// a backend hand-reimplementing the algebra drifts silently. A nil
+// predicate matches everything; an unknown predicate type matches
+// nothing (precision-first default).
+func EvalPredicate(p Predicate, a CandidateAttrs) bool {
+	if p == nil {
+		return true
+	}
+	switch p := p.(type) {
+	case PredAll:
+		return true
+	case PredThread:
+		return a.ThreadID == p.ThreadID
+	case PredScope:
+		return p.Scope == ScopeAll || a.ThreadID == p.CurrentThread
+	case PredExcludeMessageIDs:
+		for _, id := range p.MessageIDs {
+			if a.MessageID == id {
+				return false
+			}
+		}
+		return true
+	case PredAnd:
+		for _, child := range p.Children {
+			if !EvalPredicate(child, a) {
+				return false
+			}
+		}
+		return true
+	case PredOr:
+		for _, child := range p.Children {
+			if EvalPredicate(child, a) {
+				return true
+			}
+		}
+		return false
+	case PredNot:
+		return !EvalPredicate(p.Inner, a)
+	case PredHasMetadata:
+		if p.Key == "thread_id" {
+			return a.ThreadID == p.Value
+		}
+		return a.Metadata[p.Key] == p.Value
+	default:
+		return false
+	}
+}

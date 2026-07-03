@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -33,16 +33,16 @@ func TestVec0Cosine_RoundTrip(t *testing.T) {
 	// Schema requires a thread + messages to exist before
 	// InsertChunkEmbedding can populate chunk_vectors (FK lookup
 	// against messages for thread_id / role).
-	if err := db.CreateThread(&pb.Thread{
+	if err := db.CreateThread(&threadv1.Thread{
 		Id: "tCos", Name: "cosine probe", CreatedAt: timestamppb.Now(),
 	}); err != nil {
 		t.Fatalf("CreateThread: %v", err)
 	}
 	for _, id := range []string{"q", "near", "far"} {
-		msg := &pb.Message{
-			Id: id, ThreadId: "tCos", Role: pb.Role_ROLE_USER,
-			Content: []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{
-				Text: &pb.TextContent{Text: id},
+		msg := &threadv1.Message{
+			Id: id, ThreadId: "tCos", Role: threadv1.Role_ROLE_USER,
+			Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{
+				Text: &threadv1.TextContent{Text: id},
 			}}},
 			Position: 0, CreatedAt: timestamppb.Now(),
 		}

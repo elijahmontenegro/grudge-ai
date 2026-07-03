@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/elijahmontenegro/grudge/service/sandbox"
+	"github.com/elijahmontenegro/grudge/sandbox"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

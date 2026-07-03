@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/elijahmontenegro/grudge/service/sandbox"
+	"github.com/elijahmontenegro/grudge/sandbox"
 	"google.golang.org/adk/tool"
 )
 

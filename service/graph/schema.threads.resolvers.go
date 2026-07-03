@@ -13,14 +13,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // CreateThread is the resolver for the createThread field.
-func (r *mutationResolver) CreateThread(ctx context.Context, name *string, workingDirs []string, sandboxed *bool) (*v1.Thread, error) {
+func (r *mutationResolver) CreateThread(ctx context.Context, name *string, workingDirs []string, sandboxed *bool) (*threadv1.Thread, error) {
 	threadName := ""
 	if name != nil {
 		threadName = *name
@@ -41,7 +41,7 @@ func (r *mutationResolver) CreateThread(ctx context.Context, name *string, worki
 	if sandboxed != nil {
 		sbx = *sandboxed
 	}
-	t := &v1.Thread{
+	t := &threadv1.Thread{
 		Id:          fmt.Sprintf("thread-%d", time.Now().UnixNano()),
 		Name:        threadName,
 		WorkingDirs: workingDirs,
@@ -56,7 +56,7 @@ func (r *mutationResolver) CreateThread(ctx context.Context, name *string, worki
 }
 
 // UpdateThread is the resolver for the updateThread field.
-func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*v1.Thread, error) {
+func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*threadv1.Thread, error) {
 	t, err := r.db.GetThread(id)
 	if err != nil {
 		return nil, err
@@ -123,7 +123,7 @@ func (r *mutationResolver) SaveViewState(ctx context.Context, threadID string, s
 }
 
 // Threads is the resolver for the threads field.
-func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*v1.Thread, error) {
+func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*threadv1.Thread, error) {
 	incArch := false
 	if includeArchived != nil {
 		incArch = *includeArchived
@@ -132,7 +132,7 @@ func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*
 	if err != nil {
 		return nil, err
 	}
-	result := make([]*v1.Thread, len(pbThreads))
+	result := make([]*threadv1.Thread, len(pbThreads))
 	for i, t := range pbThreads {
 		result[i] = t
 	}
@@ -140,7 +140,7 @@ func (r *queryResolver) Threads(ctx context.Context, includeArchived *bool) ([]*
 }
 
 // Thread is the resolver for the thread field.
-func (r *queryResolver) Thread(ctx context.Context, id string) (*v1.Thread, error) {
+func (r *queryResolver) Thread(ctx context.Context, id string) (*threadv1.Thread, error) {
 	t, err := r.db.GetThread(id)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -186,7 +186,7 @@ func (r *queryResolver) RecentActivity(ctx context.Context, limit *int) ([]*Acti
 		if lastMsg == nil {
 			continue
 		}
-		summary := rrc.TextFromBlocks(lastMsg.Content)
+		summary := pbtext.TextFromBlocks(lastMsg.Content)
 		if len(summary) > 80 {
 			summary = summary[:77] + "..."
 		}
@@ -224,7 +224,7 @@ func (r *subscriptionResolver) ThreadStateChanges(ctx context.Context) (<-chan *
 }
 
 // CreatedAt is the resolver for the createdAt field.
-func (r *threadResolver) CreatedAt(ctx context.Context, obj *v1.Thread) (*time.Time, error) {
+func (r *threadResolver) CreatedAt(ctx context.Context, obj *threadv1.Thread) (*time.Time, error) {
 	if obj.CreatedAt != nil {
 		t := obj.CreatedAt.AsTime()
 		return &t, nil
@@ -233,7 +233,7 @@ func (r *threadResolver) CreatedAt(ctx context.Context, obj *v1.Thread) (*time.T
 }
 
 // ArchivedAt is the resolver for the archivedAt field.
-func (r *threadResolver) ArchivedAt(ctx context.Context, obj *v1.Thread) (*time.Time, error) {
+func (r *threadResolver) ArchivedAt(ctx context.Context, obj *threadv1.Thread) (*time.Time, error) {
 	if obj.ArchivedAt != nil {
 		t := obj.ArchivedAt.AsTime()
 		return &t, nil
@@ -242,14 +242,14 @@ func (r *threadResolver) ArchivedAt(ctx context.Context, obj *v1.Thread) (*time.
 }
 
 // MessageCount is the resolver for the messageCount field.
-func (r *threadResolver) MessageCount(ctx context.Context, obj *v1.Thread) (int, error) {
+func (r *threadResolver) MessageCount(ctx context.Context, obj *threadv1.Thread) (int, error) {
 	return r.db.MessageCount(obj.Id), nil
 }
 
 // Status resolves the live agent status for a thread from
 // agent_state. Threads with no row default to Idle so a brand-new
 // thread reads cleanly without an explicit status insert.
-func (r *threadResolver) Status(ctx context.Context, obj *v1.Thread) (AgentStatus, error) {
+func (r *threadResolver) Status(ctx context.Context, obj *threadv1.Thread) (AgentStatus, error) {
 	st, _ := r.db.GetAgentState(obj.Id)
 	if st == nil {
 		return AgentStatusIdle, nil
@@ -266,7 +266,7 @@ func (r *threadResolver) Status(ctx context.Context, obj *v1.Thread) (AgentStatu
 
 // Mode resolves the live agent mode for a thread from agent_state.
 // Defaults to Normal when no row exists.
-func (r *threadResolver) Mode(ctx context.Context, obj *v1.Thread) (AgentMode, error) {
+func (r *threadResolver) Mode(ctx context.Context, obj *threadv1.Thread) (AgentMode, error) {
 	st, _ := r.db.GetAgentState(obj.Id)
 	if st == nil {
 		return AgentModeNormal, nil

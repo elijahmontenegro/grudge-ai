@@ -61,31 +61,16 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 			return nil, err
 		}
 		s.Engine = cfg
-		// Apply the complete snapshot to a freshly built engine.
-		live := r.substrate.Engine().Config()
-		if cfg.LossRatio > 0 { // 0 = unset → keep current stance
-			live.LossRatio = cfg.LossRatio
-		}
-		// Deprecated (no longer gate selection); copied for back-compat.
-		live.EdgeThreshold = cfg.EdgeThreshold
-		live.ScoreFloor = cfg.ScoreFloor
-		live.ZScoreThreshold = cfg.ZScoreThreshold
-		live.MinBatchStdDev = cfg.MinBatchStdDev
-		live.LocalContextSize = cfg.LocalContextSize
-		live.RerankTopK = cfg.RerankTopK
-		live.ContextBudgetTokens = cfg.ContextBudgetTokens
-		live.DiversityLambda = cfg.DiversityLambda
-		live.BudgetHeadroomPct = cfg.BudgetHeadroomPct
-		live.PerMsgDelimiterTokens = cfg.PerMsgDelimiterTokens
+		// Apply the complete snapshot onto the live engine config.
+		live := cfg.ApplyTo(r.substrate.Engine().Config())
 		if err := r.substrate.UpdateEngineConfig(ctx, live); err != nil {
 			return nil, fmt.Errorf("update engine config: %w", err)
 		}
-		log.Printf("[Settings] Engine config applied live: lossRatio=%.3f minStd=%.3f local=%d topK=%d budget=%d lambda=%.2f headroom=%.2f delim=%d (deprecated: thr=%.3f floor=%.3f z=%.2f)",
+		log.Printf("[Settings] Engine config applied live: lossRatio=%.3f minStd=%.3f local=%d topK=%d budget=%d lambda=%.2f headroom=%.2f delim=%d",
 			live.LossRatio, live.MinBatchStdDev,
 			live.LocalContextSize, live.RerankTopK,
 			live.ContextBudgetTokens,
-			live.DiversityLambda, live.BudgetHeadroomPct, live.PerMsgDelimiterTokens,
-			live.EdgeThreshold, live.ScoreFloor, live.ZScoreThreshold)
+			live.DiversityLambda, live.BudgetHeadroomPct, live.PerMsgDelimiterTokens)
 	}
 	if err := r.cfg.Save(); err != nil {
 		return nil, err
@@ -124,21 +109,7 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	// config file. This lets the UI reflect the actual operating
 	// config (including any defaults that kicked in when Settings had
 	// zero-value engine fields).
-	// Serialize only LIVE engine keys. The deprecated flat-threshold
-	// fields are omitted so the client never sees (and can never
-	// round-trip) knobs that do nothing; the save decoder tolerates them
-	// from old config files but the wire stays clean.
-	engineCfg := r.substrate.Engine().Config()
-	engine, err := json.Marshal(map[string]any{
-		"loss_ratio":               engineCfg.LossRatio,
-		"min_batch_stddev":         engineCfg.MinBatchStdDev,
-		"local_context_size":       engineCfg.LocalContextSize,
-		"rerank_top_k":             engineCfg.RerankTopK,
-		"context_budget_tokens":    engineCfg.ContextBudgetTokens,
-		"diversity_lambda":         engineCfg.DiversityLambda,
-		"budget_headroom_pct":      engineCfg.BudgetHeadroomPct,
-		"per_msg_delimiter_tokens": engineCfg.PerMsgDelimiterTokens,
-	})
+	engine, err := json.Marshal(config.EngineConfigFromRRC(r.substrate.Engine().Config()))
 	if err != nil {
 		return nil, fmt.Errorf("marshal engine config: %w", err)
 	}

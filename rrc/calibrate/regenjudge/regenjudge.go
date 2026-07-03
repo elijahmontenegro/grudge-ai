@@ -1,8 +1,10 @@
 // Package regenjudge is the live CounterfactualJudge: it decides whether a
 // candidate is a true prerequisite of a turn by regenerative counterfactual
 // coherence. It lives in its own package (not calibrate) so the calibrate
-// math stays free of any LLM/core dependency; the offline fit command wires
-// this in, tests inject a fake.
+// math stays free of any LLM dependency. Nothing wires it in yet: it is
+// the committed path for provenance-mass calibration (replaying a real
+// corpus to label mass-bearing candidates), pending a corpus with
+// provenance history. Tests inject a fake judge.
 //
 // Ground-truth definition (see calibrate.CounterfactualJudge): a candidate is
 // a prerequisite iff the turn's continuation is materially better with it
@@ -16,18 +18,27 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/elijahmontenegro/grudge/core"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/rrc"
 )
+
+// Completer is the one-method completion contract the judge needs.
+// Declared locally (rather than importing core.Completer, which also
+// carries Stream) so the rrc stratum never imports core — any
+// core.Completer satisfies it structurally.
+type Completer interface {
+	Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error)
+}
 
 // TurnContext supplies the material a judgment needs for one (turn,
 // candidate) pair: the local discourse the turn was interpreted from and the
 // candidate message under test. The offline harness builds these by replaying
 // the lossless corpus.
 type TurnContext struct {
-	LocalContext []*pb.Message // the active discourse of the turn
-	Candidate    *pb.Message   // the message whose prerequisite-ness is judged
+	LocalContext []*threadv1.Message // the active discourse of the turn
+	Candidate    *threadv1.Message   // the message whose prerequisite-ness is judged
 }
 
 // ContextProvider resolves a (turnID, candidateID) into the material a
@@ -43,11 +54,11 @@ type ContextProvider interface {
 // verdict on with-vs-without is what avoids scoring a historical target that
 // was produced without the candidate.
 type Judge struct {
-	completer core.Completer
+	completer Completer
 	provider  ContextProvider
 }
 
-func New(completer core.Completer, provider ContextProvider) *Judge {
+func New(completer Completer, provider ContextProvider) *Judge {
 	return &Judge{completer: completer, provider: provider}
 }
 
@@ -61,10 +72,10 @@ func (j *Judge) IsPrerequisite(ctx context.Context, turnID, candidateID string) 
 		return false, fmt.Errorf("regenjudge resolve turn=%s candidate=%s: %w", turnID, candidateID, err)
 	}
 	prompt := buildPrompt(tc)
-	req := &pb.CompletionRequest{
-		Messages: []*pb.LLMMessage{
-			{Role: pb.Role_ROLE_SYSTEM, Content: rrc.BlocksFromText(systemInstruction)},
-			{Role: pb.Role_ROLE_USER, Content: rrc.BlocksFromText(prompt)},
+	req := &llmv1.CompletionRequest{
+		Messages: []*llmv1.LLMMessage{
+			{Role: threadv1.Role_ROLE_SYSTEM, Content: pbtext.BlocksFromText(systemInstruction)},
+			{Role: threadv1.Role_ROLE_USER, Content: pbtext.BlocksFromText(prompt)},
 		},
 	}
 	resp, err := j.completer.Complete(ctx, req)
@@ -99,11 +110,11 @@ func buildPrompt(tc TurnContext) string {
 // parseVerdict reads the model's answer as yes/no, defaulting to NO (the
 // precision-first default: when the judge is unclear, do not label a
 // candidate a prerequisite).
-func parseVerdict(resp *pb.CompletionResponse) bool {
+func parseVerdict(resp *llmv1.CompletionResponse) bool {
 	if resp == nil || resp.Message == nil {
 		return false
 	}
-	text := strings.ToLower(rrc.TextFromBlocks(resp.Message.Content))
+	text := strings.ToLower(pbtext.TextFromBlocks(resp.Message.Content))
 	text = strings.TrimSpace(text)
 	// Look for a leading yes; default no.
 	return strings.HasPrefix(text, "yes")

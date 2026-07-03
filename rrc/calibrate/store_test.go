@@ -6,8 +6,8 @@ import (
 )
 
 // TestSaveLoad_RoundTrip proves the producer→persist→load contract the
-// running system depends on: cmd/calibrate Saves a fitted calibrator,
-// substrate.Build Loads it. A calibrator for the same scorer loads and
+// running system depends on: the Holder's background fit Saves a fitted
+// calibrator, substrate.Build Loads it. A calibrator for the same scorer loads and
 // predicts identically; one for a different scorer is refused (so a scorer
 // swap can't silently mis-gate); an absent file is a normal (false, nil) boot
 // path, not an error.

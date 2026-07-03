@@ -3,13 +3,14 @@ package rrc
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"sort"
 	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc/chunk"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 )
 
 // Assemble scores one bounded Local Context, selects deep-history
@@ -33,17 +34,17 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	}
 	protocol := NewProtocolIndex(req.Corpus)
 
-	local := append([]*pb.Message(nil), req.LocalContext...)
+	local := append([]*threadv1.Message(nil), req.LocalContext...)
 	pinned := pinnedLocalIDs(local)
 	var localGroups []DeliveryGroup
-	var localWire []*pb.LLMMessage
+	var localWire []*llmv1.LLMMessage
 	for {
 		groups, err := closeRoots(protocol, local, nil)
 		if err != nil {
 			return AssembleResult{}, err
 		}
 		wire := groupsToWire(groups, nil)
-		total := wireTokens(req.System, nil, wire, req.FixedTokens, req.PerMsgDelim)
+		total := e.wireTokens(req.System, nil, wire, req.FixedTokens, req.PerMsgDelim)
 		if req.Budget <= 0 || total <= effectiveBudget {
 			localGroups, localWire = groups, wire
 			break
@@ -64,9 +65,9 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	}
 
 	var (
-		edges                 []*pb.Edge
+		edges                 []*rrcv1.Edge
 		prerequisiteSelection PrerequisiteSelectionTelemetry
-		selected              *pb.SelectionResult
+		selected              *rrcv1.SelectionResult
 		selectMs              int64
 		mmrMs                 int64
 	)
@@ -83,13 +84,13 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	case serializedLocal != nil:
 		e.mu.Lock()
 		var err error
-		edges, prerequisiteSelection, err = e.SelectPrerequisites(ctx, serializedLocal, req.Anchor, req.Corpus, req.Scope, req.ThreadID)
+		edges, prerequisiteSelection, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Corpus, req.Scope, req.ThreadID)
 		if err != nil {
 			e.mu.Unlock()
 			return AssembleResult{}, fmt.Errorf("assemble SelectPrerequisites: %w", err)
 		}
 		selectStart := time.Now()
-		selected, err = e.Select(req.Anchor.Id, req.Scope, req.ThreadID)
+		selected, err = e.selectLocked(req.Anchor.Id, req.Scope, req.ThreadID)
 		selectMs = time.Since(selectStart).Milliseconds()
 		if err != nil {
 			e.mu.Unlock()
@@ -105,14 +106,14 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 			ranked, mmrErr := e.ApplyMMR(ctx, selected.Selected, e.cfg.DiversityLambda)
 			mmrMs = time.Since(mmrStart).Milliseconds()
 			if mmrErr != nil {
-				log.Printf("RRC: MMR rerank skipped localContext=%s: %v", serializedLocal.Fingerprint, mmrErr)
+				e.logger.Warn("RRC: MMR rerank skipped", "localContext", serializedLocal.Fingerprint, "err", mmrErr)
 			} else {
 				selected.Selected = ranked
 			}
 		}
 		e.mu.Unlock()
 	default:
-		selected = &pb.SelectionResult{
+		selected = &rrcv1.SelectionResult{
 			EventId:         "sel-" + req.Anchor.Id,
 			Scope:           req.Scope,
 			ThreadId:        req.ThreadID,
@@ -130,14 +131,14 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 			localIDs[m.Id] = true
 		}
 	}
-	corpusByID := make(map[string]*pb.Message, len(req.Corpus))
+	corpusByID := make(map[string]*threadv1.Message, len(req.Corpus))
 	for _, m := range req.Corpus {
 		corpusByID[m.Id] = m
 	}
 
 	shedStart := time.Now()
 	var finalSelected []DeliveryGroup
-	var finalWire []*pb.LLMMessage
+	var finalWire []*llmv1.LLMMessage
 	var total int
 	for {
 		var groups []DeliveryGroup
@@ -164,13 +165,13 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 		})
 
 		selectedWire := groupsToWire(groups, localIDs)
-		finalWire = make([]*pb.LLMMessage, 0, 1+len(selectedWire)+len(localWire))
+		finalWire = make([]*llmv1.LLMMessage, 0, 1+len(selectedWire)+len(localWire))
 		if req.System != nil {
 			finalWire = append(finalWire, req.System)
 		}
 		finalWire = append(finalWire, selectedWire...)
 		finalWire = append(finalWire, localWire...)
-		total = wireTokens(nil, finalWire, nil, req.FixedTokens, req.PerMsgDelim)
+		total = e.wireTokens(nil, finalWire, nil, req.FixedTokens, req.PerMsgDelim)
 		if req.Budget <= 0 || total <= effectiveBudget {
 			finalSelected = groups
 			break
@@ -199,6 +200,8 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 		SerializedLocalContext: serializedLocal,
 		Edges:                  edges,
 		Shed:                   shedIDs,
+		Delivered:              finalSelected,
+		LocalGroups:            localGroups,
 		Telemetry: AssembleTelemetry{
 			SelectedCount:         len(finalSelected),
 			LocalContextCount:     len(local),
@@ -216,12 +219,12 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 
 type AssembleRequest struct {
 	SerializedLocalContext *SerializedLocalContext
-	Anchor                 *pb.Message
-	Corpus                 []*pb.Message
-	LocalContext           []*pb.Message
-	Scope                  pb.SelectionScope
+	Anchor                 *threadv1.Message
+	Corpus                 []*threadv1.Message
+	LocalContext           []*threadv1.Message
+	Scope                  threadv1.SelectionScope
 	ThreadID               string
-	System                 *pb.LLMMessage
+	System                 *llmv1.LLMMessage
 	Budget                 int
 	HeadroomPct            float64
 	PerMsgDelim            int
@@ -234,16 +237,23 @@ type AssembleRequest struct {
 	// and one selection event; a context-overflow retry only re-runs
 	// shed-to-fit (dropping whole delivery groups via ExcludeIDs), never
 	// re-selection. Leave nil for the first attempt.
-	PriorSelection *pb.SelectionResult
+	PriorSelection *rrcv1.SelectionResult
 }
 
 type AssembleResult struct {
-	Wire                   []*pb.LLMMessage
-	Selection              *pb.SelectionResult
+	Wire                   []*llmv1.LLMMessage
+	Selection              *rrcv1.SelectionResult
 	SerializedLocalContext *SerializedLocalContext
-	Edges                  []*pb.Edge
+	Edges                  []*rrcv1.Edge
 	Shed                   []string
 	Telemetry              AssembleTelemetry
+
+	// Delivered holds the selected delivery groups that survived
+	// shed-to-fit — the structured form of what Wire flattened, so a
+	// consumer can see which group each wire message belongs to.
+	// LocalGroups holds the Local Context's protocol-closed groups.
+	Delivered   []DeliveryGroup
+	LocalGroups []DeliveryGroup
 }
 
 type AssembleTelemetry struct {
@@ -259,7 +269,7 @@ type AssembleTelemetry struct {
 	ShedMs                int64
 }
 
-func closeRoots(index *ProtocolIndex, roots []*pb.Message, scores map[string]float64) ([]DeliveryGroup, error) {
+func closeRoots(index *ProtocolIndex, roots []*threadv1.Message, scores map[string]float64) ([]DeliveryGroup, error) {
 	groups := make([]DeliveryGroup, 0, len(roots))
 	for _, root := range roots {
 		score := math.Inf(1)
@@ -275,12 +285,12 @@ func closeRoots(index *ProtocolIndex, roots []*pb.Message, scores map[string]flo
 	return mergeDeliveryGroups(groups), nil
 }
 
-func groupsToWire(groups []DeliveryGroup, already map[string]bool) []*pb.LLMMessage {
+func groupsToWire(groups []DeliveryGroup, already map[string]bool) []*llmv1.LLMMessage {
 	seen := make(map[string]bool)
 	for id := range already {
 		seen[id] = true
 	}
-	var messages []*pb.Message
+	var messages []*threadv1.Message
 	for _, group := range groups {
 		for _, m := range group.Messages {
 			if seen[m.Id] {
@@ -299,25 +309,25 @@ func groupsToWire(groups []DeliveryGroup, already map[string]bool) []*pb.LLMMess
 		}
 		return messages[i].Id < messages[j].Id
 	})
-	out := make([]*pb.LLMMessage, 0, len(messages))
+	out := make([]*llmv1.LLMMessage, 0, len(messages))
 	for _, m := range messages {
 		out = append(out, messageToLLM(m))
 	}
 	return out
 }
 
-func wireTokens(system *pb.LLMMessage, head, tail []*pb.LLMMessage, fixed, delim int) int {
+func (e *Engine) wireTokens(system *llmv1.LLMMessage, head, tail []*llmv1.LLMMessage, fixed, delim int) int {
 	total := fixed
 	if system != nil {
-		head = append([]*pb.LLMMessage{system}, head...)
+		head = append([]*llmv1.LLMMessage{system}, head...)
 	}
 	for _, m := range append(head, tail...) {
-		total += chunk.EstimateTokens(TextFromBlocks(m.Content)) + delim
+		total += e.cfg.Chunk.Estimate(pbtext.TextFromBlocks(m.Content)) + delim
 	}
 	return total
 }
 
-func pinnedLocalIDs(local []*pb.Message) map[string]bool {
+func pinnedLocalIDs(local []*threadv1.Message) map[string]bool {
 	pinned := make(map[string]bool)
 	if len(local) == 0 {
 		return pinned
@@ -329,17 +339,17 @@ func pinnedLocalIDs(local []*pb.Message) map[string]bool {
 		if !hasTextBlock(m.Content) {
 			continue
 		}
-		if m.Role == pb.Role_ROLE_USER && !haveUser {
+		if m.Role == threadv1.Role_ROLE_USER && !haveUser {
 			pinned[m.Id], haveUser = true, true
 		}
-		if m.Role == pb.Role_ROLE_ASSISTANT && !haveAssistant {
+		if m.Role == threadv1.Role_ROLE_ASSISTANT && !haveAssistant {
 			pinned[m.Id], haveAssistant = true, true
 		}
 	}
 	return pinned
 }
 
-func oldestUnpinned(local []*pb.Message, pinned map[string]bool) string {
+func oldestUnpinned(local []*threadv1.Message, pinned map[string]bool) string {
 	for _, m := range local {
 		if !pinned[m.Id] {
 			return m.Id
@@ -348,8 +358,8 @@ func oldestUnpinned(local []*pb.Message, pinned map[string]bool) string {
 	return ""
 }
 
-func removeMessage(messages []*pb.Message, id string) []*pb.Message {
-	out := make([]*pb.Message, 0, len(messages)-1)
+func removeMessage(messages []*threadv1.Message, id string) []*threadv1.Message {
+	out := make([]*threadv1.Message, 0, len(messages)-1)
 	for _, m := range messages {
 		if m.Id != id {
 			out = append(out, m)
@@ -393,7 +403,7 @@ func mergeDeliveryGroups(groups []DeliveryGroup) []DeliveryGroup {
 	return out
 }
 
-func closureKey(messages []*pb.Message) string {
+func closureKey(messages []*threadv1.Message) string {
 	var key string
 	for _, m := range messages {
 		key += m.ThreadId + "\x00" + m.Id + "\x00"
@@ -420,7 +430,7 @@ func closureCount(groups []DeliveryGroup) int {
 	return n
 }
 
-func messageIDs(messages []*pb.Message) []string {
+func messageIDs(messages []*threadv1.Message) []string {
 	ids := make([]string, len(messages))
 	for i, m := range messages {
 		ids[i] = m.Id
@@ -440,6 +450,6 @@ func sameIDs(a, b []string) bool {
 	return true
 }
 
-func messageToLLM(msg *pb.Message) *pb.LLMMessage {
-	return &pb.LLMMessage{Role: msg.Role, Content: msg.Content}
+func messageToLLM(msg *threadv1.Message) *llmv1.LLMMessage {
+	return &llmv1.LLMMessage{Role: msg.Role, Content: msg.Content}
 }

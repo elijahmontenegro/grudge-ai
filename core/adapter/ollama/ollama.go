@@ -19,8 +19,9 @@ import (
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/core/adapter/internal/util"
-	"github.com/elijahmontenegro/grudge/core/internal/httpc"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/core/httpc"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // dumpBudget caps how many distinct 5xx request bodies we dump per
@@ -118,7 +119,7 @@ type completer struct {
 	streamClient *httpc.Client
 }
 
-func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error) {
+func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
 	cr := chatRequest{
 		Model:    c.model,
 		Messages: toLlamaMsgs(req.Messages),
@@ -150,15 +151,15 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 		return nil, err
 	}
 
-	msg := &pb.LLMMessage{Role: pb.Role_ROLE_ASSISTANT}
+	msg := &llmv1.LLMMessage{Role: threadv1.Role_ROLE_ASSISTANT}
 	if resp.Message.Thinking != "" {
-		msg.Content = append(msg.Content, &pb.ContentBlock{
-			Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: resp.Message.Thinking}},
+		msg.Content = append(msg.Content, &threadv1.ContentBlock{
+			Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: resp.Message.Thinking}},
 		})
 	}
 	if resp.Message.Content != "" {
-		msg.Content = append(msg.Content, &pb.ContentBlock{
-			Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: resp.Message.Content}},
+		msg.Content = append(msg.Content, &threadv1.ContentBlock{
+			Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: resp.Message.Content}},
 		})
 	}
 	for _, tc := range resp.Message.ToolCalls {
@@ -166,17 +167,17 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 		if len(tc.Function.Arguments) > 0 {
 			argsStr = string(tc.Function.Arguments)
 		}
-		msg.Content = append(msg.Content, &pb.ContentBlock{
-			Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallContent{
+		msg.Content = append(msg.Content, &threadv1.ContentBlock{
+			Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{
 				Id:        tc.ID,
 				Name:      tc.Function.Name,
 				Arguments: argsStr,
 			}},
 		})
 	}
-	return &pb.CompletionResponse{
+	return &llmv1.CompletionResponse{
 		Message: msg,
-		Usage: &pb.Usage{
+		Usage: &llmv1.Usage{
 			PromptTokens:     int32(resp.PromptEval),
 			CompletionTokens: int32(resp.EvalCount),
 		},
@@ -184,8 +185,8 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 	}, nil
 }
 
-func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
-	return func(yield func(*pb.StreamChunk, error) bool) {
+func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
+	return func(yield func(*llmv1.StreamChunk, error) bool) {
 		cr := chatRequest{
 			Model:    c.model,
 			Messages: toLlamaMsgs(req.Messages),
@@ -231,20 +232,20 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			var chunk chatResponse
 			if err := dec.Decode(&chunk); err != nil {
 				if err != io.EOF {
-					yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
+					yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 				}
 				return
 			}
 			if chunk.Message.Thinking != "" {
-				if !yield(&pb.StreamChunk{
-					Delta: &pb.StreamChunk_Thinking{Thinking: &pb.ThinkingContent{Text: chunk.Message.Thinking}},
+				if !yield(&llmv1.StreamChunk{
+					Delta: &llmv1.StreamChunk_Thinking{Thinking: &threadv1.ThinkingContent{Text: chunk.Message.Thinking}},
 				}, nil) {
 					return
 				}
 			}
 			if chunk.Message.Content != "" {
-				if !yield(&pb.StreamChunk{
-					Delta: &pb.StreamChunk_Text{Text: &pb.TextContent{Text: chunk.Message.Content}},
+				if !yield(&llmv1.StreamChunk{
+					Delta: &llmv1.StreamChunk_Text{Text: &threadv1.TextContent{Text: chunk.Message.Content}},
 				}, nil) {
 					return
 				}
@@ -254,8 +255,8 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 				if len(tc.Function.Arguments) > 0 {
 					argsStr = string(tc.Function.Arguments)
 				}
-				if !yield(&pb.StreamChunk{
-					Delta: &pb.StreamChunk_ToolCall{ToolCall: &pb.ToolCallContent{
+				if !yield(&llmv1.StreamChunk{
+					Delta: &llmv1.StreamChunk_ToolCall{ToolCall: &threadv1.ToolCallContent{
 						Id:        tc.ID,
 						Name:      tc.Function.Name,
 						Arguments: argsStr,
@@ -265,9 +266,9 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 				}
 			}
 			if chunk.Done {
-				yield(&pb.StreamChunk{
+				yield(&llmv1.StreamChunk{
 					Done: true,
-					Usage: &pb.Usage{
+					Usage: &llmv1.Usage{
 						PromptTokens:     int32(chunk.PromptEval),
 						CompletionTokens: int32(chunk.EvalCount),
 					},

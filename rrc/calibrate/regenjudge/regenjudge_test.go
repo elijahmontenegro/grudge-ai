@@ -5,9 +5,9 @@ import (
 	"iter"
 	"testing"
 
-	"github.com/elijahmontenegro/grudge/core"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 )
 
@@ -16,17 +16,17 @@ var _ calibrate.CounterfactualJudge = (*Judge)(nil)
 
 type fakeCompleter struct{ reply string }
 
-func (f fakeCompleter) Complete(_ context.Context, _ *pb.CompletionRequest) (*pb.CompletionResponse, error) {
-	return &pb.CompletionResponse{Message: &pb.LLMMessage{
-		Role:    pb.Role_ROLE_ASSISTANT,
-		Content: rrc.BlocksFromText(f.reply),
+func (f fakeCompleter) Complete(_ context.Context, _ *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
+	return &llmv1.CompletionResponse{Message: &llmv1.LLMMessage{
+		Role:    threadv1.Role_ROLE_ASSISTANT,
+		Content: pbtext.BlocksFromText(f.reply),
 	}}, nil
 }
-func (f fakeCompleter) Stream(_ context.Context, _ *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
-	return func(yield func(*pb.StreamChunk, error) bool) {}
+func (f fakeCompleter) Stream(_ context.Context, _ *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
+	return func(yield func(*llmv1.StreamChunk, error) bool) {}
 }
 
-var _ core.Completer = fakeCompleter{}
+var _ Completer = fakeCompleter{}
 
 type mapProvider map[string]TurnContext
 
@@ -36,8 +36,8 @@ func (m mapProvider) Resolve(turnID, candidateID string) (TurnContext, error) {
 
 func tc() TurnContext {
 	return TurnContext{
-		LocalContext: []*pb.Message{{Role: pb.Role_ROLE_USER, Content: rrc.BlocksFromText("current discourse")}},
-		Candidate:    &pb.Message{Role: pb.Role_ROLE_USER, Content: rrc.BlocksFromText("earlier message")},
+		LocalContext: []*threadv1.Message{{Role: threadv1.Role_ROLE_USER, Content: pbtext.BlocksFromText("current discourse")}},
+		Candidate:    &threadv1.Message{Role: threadv1.Role_ROLE_USER, Content: pbtext.BlocksFromText("earlier message")},
 	}
 }
 

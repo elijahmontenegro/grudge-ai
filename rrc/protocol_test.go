@@ -5,23 +5,23 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
-func storedCall(id, threadID, callID string, position int64) *pb.Message {
-	return &pb.Message{
-		Id: id, ThreadId: threadID, Position: position, Role: pb.Role_ROLE_ASSISTANT,
-		Content: []*pb.ContentBlock{{Block: &pb.ContentBlock_ToolCall{
-			ToolCall: &pb.ToolCallContent{Id: callID, Name: "read", Arguments: `{"path":"x"}`},
+func storedCall(id, threadID, callID string, position int64) *threadv1.Message {
+	return &threadv1.Message{
+		Id: id, ThreadId: threadID, Position: position, Role: threadv1.Role_ROLE_ASSISTANT,
+		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolCall{
+			ToolCall: &threadv1.ToolCallContent{Id: callID, Name: "read", Arguments: `{"path":"x"}`},
 		}}},
 	}
 }
 
-func storedResult(id, threadID, callID string, position int64) *pb.Message {
-	return &pb.Message{
-		Id: id, ThreadId: threadID, Position: position, Role: pb.Role_ROLE_ASSISTANT,
-		Content: []*pb.ContentBlock{{Block: &pb.ContentBlock_ToolResult{
-			ToolResult: &pb.ToolResultContent{ToolCallId: callID, Content: "body"},
+func storedResult(id, threadID, callID string, position int64) *threadv1.Message {
+	return &threadv1.Message{
+		Id: id, ThreadId: threadID, Position: position, Role: threadv1.Role_ROLE_ASSISTANT,
+		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolResult{
+			ToolResult: &threadv1.ToolResultContent{ToolCallId: callID, Content: "body"},
 		}}},
 	}
 }
@@ -30,7 +30,7 @@ func TestProtocolClosurePairsExactCounterpart(t *testing.T) {
 	call := storedCall("call", "t1", "op-1", 2)
 	result := storedResult("result", "t1", "op-1", 3)
 	other := storedResult("other", "t1", "op-2", 1)
-	index := NewProtocolIndex([]*pb.Message{other, result, call})
+	index := NewProtocolIndex([]*threadv1.Message{other, result, call})
 
 	group, err := index.CloseGroup(result, 0.9)
 	if err != nil {
@@ -50,7 +50,7 @@ func TestProtocolClosurePairsExactCounterpart(t *testing.T) {
 func TestProtocolClosureDoesNotCrossThreads(t *testing.T) {
 	call := storedCall("call", "t1", "same-id", 0)
 	wrongThread := storedResult("result", "t2", "same-id", 0)
-	_, err := NewProtocolIndex([]*pb.Message{call, wrongThread}).CloseGroup(call, 1)
+	_, err := NewProtocolIndex([]*threadv1.Message{call, wrongThread}).CloseGroup(call, 1)
 	if err == nil || !strings.Contains(err.Error(), "requires exact tool result") {
 		t.Fatalf("expected missing exact counterpart error, got %v", err)
 	}
@@ -58,7 +58,7 @@ func TestProtocolClosureDoesNotCrossThreads(t *testing.T) {
 
 func TestProtocolClosureMissingCounterpartFails(t *testing.T) {
 	call := storedCall("call", "t1", "missing", 0)
-	_, err := NewProtocolIndex([]*pb.Message{call}).CloseGroup(call, 1)
+	_, err := NewProtocolIndex([]*threadv1.Message{call}).CloseGroup(call, 1)
 	if err == nil {
 		t.Fatal("missing counterpart must be an integrity error")
 	}
@@ -66,11 +66,11 @@ func TestProtocolClosureMissingCounterpartFails(t *testing.T) {
 
 func TestProtocolClosureKeepsWholeStoredMessages(t *testing.T) {
 	call := storedCall("call", "t1", "op", 0)
-	call.Content = append(call.Content, &pb.ContentBlock{Block: &pb.ContentBlock_Thinking{
-		Thinking: &pb.ThinkingContent{Text: "reasoning attached to the call"},
+	call.Content = append(call.Content, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Thinking{
+		Thinking: &threadv1.ThinkingContent{Text: "reasoning attached to the call"},
 	}})
 	result := storedResult("result", "t1", "op", 1)
-	group, err := NewProtocolIndex([]*pb.Message{call, result}).CloseGroup(result, 1)
+	group, err := NewProtocolIndex([]*threadv1.Message{call, result}).CloseGroup(result, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestProtocolClosureAmbiguousResultFails(t *testing.T) {
 	call := storedCall("call", "t1", "op", 0)
 	result1 := storedResult("r1", "t1", "op", 1)
 	result2 := storedResult("r2", "t1", "op", 2) // duplicate tool_call_id
-	index := NewProtocolIndex([]*pb.Message{call, result1, result2})
+	index := NewProtocolIndex([]*threadv1.Message{call, result1, result2})
 
 	_, err := index.CloseGroup(call, 1)
 	if err == nil || !strings.Contains(err.Error(), "multiple results") {
@@ -100,7 +100,7 @@ func TestProtocolClosureAmbiguousCallFails(t *testing.T) {
 	call1 := storedCall("c1", "t1", "op", 0)
 	call2 := storedCall("c2", "t1", "op", 1) // duplicate call id
 	result := storedResult("r", "t1", "op", 2)
-	index := NewProtocolIndex([]*pb.Message{call1, call2, result})
+	index := NewProtocolIndex([]*threadv1.Message{call1, call2, result})
 
 	_, err := index.CloseGroup(result, 1)
 	if err == nil || !strings.Contains(err.Error(), "multiple calls") {
@@ -121,29 +121,30 @@ func TestProtocolClosureBypassesAcceptanceGate(t *testing.T) {
 	mc.SetScore("read x", "current context", 0.95)
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.DiversityLambda = 0
 	cfg.MinBatchStdDev = 0
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	ctx := context.Background()
 
 	// A prior tool call (the prerequisite) + its result counterpart.
-	call := &pb.Message{
-		Id: "mcall", ThreadId: "t1", Position: 0, Role: pb.Role_ROLE_ASSISTANT,
-		Content: []*pb.ContentBlock{{Block: &pb.ContentBlock_ToolCall{
-			ToolCall: &pb.ToolCallContent{Id: "op", Name: "read", Arguments: "read x"},
+	call := &threadv1.Message{
+		Id: "mcall", ThreadId: "t1", Position: 0, Role: threadv1.Role_ROLE_ASSISTANT,
+		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolCall{
+			ToolCall: &threadv1.ToolCallContent{Id: "op", Name: "read", Arguments: "read x"},
 		}}},
 	}
 	o.Register("mcall", "read x")
 	result := storedResult("mresult", "t1", "op", 1)
 	anchor := addMsg(o, "q", 2, "t1", "current context")
-	corpus := []*pb.Message{call, result, anchor}
+	corpus := []*threadv1.Message{call, result, anchor}
 
 	res, err := e.Assemble(ctx, AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
 		Corpus:                 corpus,
-		LocalContext:           []*pb.Message{anchor},
-		Scope:                  pb.SelectionScope_SELECTION_SCOPE_THREAD,
+		LocalContext:           []*threadv1.Message{anchor},
+		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
 	})
 	if err != nil {

@@ -3,7 +3,8 @@ package storage
 import (
 	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -23,7 +24,7 @@ import (
 // timestamp without having to remember a field. Without this, the
 // runner's five message-construction sites all stored epoch-zero
 // rows because they didn't set the field.
-func (d *DB) InsertMessage(msg *pb.Message, chunks []Chunk) error {
+func (d *DB) InsertMessage(msg *threadv1.Message, chunks []Chunk) error {
 	if msg.CreatedAt == nil || (msg.CreatedAt.Seconds == 0 && msg.CreatedAt.Nanos == 0) {
 		msg.CreatedAt = timestamppb.Now()
 	}
@@ -63,8 +64,8 @@ func (d *DB) InsertMessage(msg *pb.Message, chunks []Chunk) error {
 }
 
 // GetMessage retrieves a single message by ID.
-func (d *DB) GetMessage(id string) (*pb.Message, error) {
-	msg := &pb.Message{}
+func (d *DB) GetMessage(id string) (*threadv1.Message, error) {
+	msg := &threadv1.Message{}
 	var roleInt int
 	var content []byte
 	var createdAt time.Time
@@ -76,14 +77,14 @@ func (d *DB) GetMessage(id string) (*pb.Message, error) {
 		return nil, err
 	}
 
-	msg.Role = pb.Role(roleInt)
+	msg.Role = threadv1.Role(roleInt)
 	msg.CreatedAt = timestamppb.New(createdAt)
 	msg.Content, err = unmarshalContentBlocks(content)
 	return msg, err
 }
 
 // ListMessages returns messages for a thread, ordered by position.
-func (d *DB) ListMessages(threadID string, limit, offset int) ([]*pb.Message, error) {
+func (d *DB) ListMessages(threadID string, limit, offset int) ([]*threadv1.Message, error) {
 	query := `SELECT id, thread_id, role, content, position, created_at, turn_id
 	          FROM messages WHERE thread_id = ? ORDER BY position ASC`
 	args := []any{threadID}
@@ -98,9 +99,9 @@ func (d *DB) ListMessages(threadID string, limit, offset int) ([]*pb.Message, er
 	}
 	defer rows.Close()
 
-	var messages []*pb.Message
+	var messages []*threadv1.Message
 	for rows.Next() {
-		msg := &pb.Message{}
+		msg := &threadv1.Message{}
 		var roleInt int
 		var content []byte
 		var createdAt time.Time
@@ -108,7 +109,7 @@ func (d *DB) ListMessages(threadID string, limit, offset int) ([]*pb.Message, er
 		if err := rows.Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt, &msg.TurnId); err != nil {
 			return nil, err
 		}
-		msg.Role = pb.Role(roleInt)
+		msg.Role = threadv1.Role(roleInt)
 		msg.CreatedAt = timestamppb.New(createdAt)
 		msg.Content, err = unmarshalContentBlocks(content)
 		if err != nil {
@@ -122,7 +123,7 @@ func (d *DB) ListMessages(threadID string, limit, offset int) ([]*pb.Message, er
 // ThreadCorpus returns all messages for a thread (full corpus, no pagination).
 // For branched threads, includes the parent's messages up to the branch point
 // (referenced, not copied — per spec: "messages 1..N-1 are immutable, referenced not copied").
-func (d *DB) ThreadCorpus(threadID string) ([]*pb.Message, error) {
+func (d *DB) ThreadCorpus(threadID string) ([]*threadv1.Message, error) {
 	// Check if this is a branch
 	var parentID *string
 	var branchPos *int64
@@ -130,7 +131,7 @@ func (d *DB) ThreadCorpus(threadID string) ([]*pb.Message, error) {
 		`SELECT parent_thread_id, branch_point_position FROM threads WHERE id = ?`, threadID,
 	).Scan(&parentID, &branchPos)
 
-	var corpus []*pb.Message
+	var corpus []*threadv1.Message
 
 	// Include parent prefix if this is a branch
 	if parentID != nil && *parentID != "" && branchPos != nil {
@@ -160,7 +161,7 @@ func (d *DB) ThreadCorpus(threadID string) ([]*pb.Message, error) {
 // SELECTION_SCOPE_ALL_THREADS; otherwise RRC can only ever score the
 // query against messages from its own thread and cross-thread edges
 // never form.
-func (d *DB) AllCorpus() ([]*pb.Message, error) {
+func (d *DB) AllCorpus() ([]*threadv1.Message, error) {
 	rows, err := d.Query(
 		`SELECT id, thread_id, role, content, position, created_at, turn_id
 		 FROM messages ORDER BY thread_id, position`,
@@ -169,16 +170,16 @@ func (d *DB) AllCorpus() ([]*pb.Message, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var corpus []*pb.Message
+	var corpus []*threadv1.Message
 	for rows.Next() {
-		msg := &pb.Message{}
+		msg := &threadv1.Message{}
 		var roleInt int
 		var content []byte
 		var createdAt time.Time
 		if err := rows.Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt, &msg.TurnId); err != nil {
 			return nil, err
 		}
-		msg.Role = pb.Role(roleInt)
+		msg.Role = threadv1.Role(roleInt)
 		msg.CreatedAt = timestamppb.New(createdAt)
 		msg.Content, _ = unmarshalContentBlocks(content)
 		corpus = append(corpus, msg)
@@ -187,8 +188,8 @@ func (d *DB) AllCorpus() ([]*pb.Message, error) {
 }
 
 // LatestMessage returns the most recent message in a thread, or nil if empty.
-func (d *DB) LatestMessage(threadID string) *pb.Message {
-	msg := &pb.Message{}
+func (d *DB) LatestMessage(threadID string) *threadv1.Message {
+	msg := &threadv1.Message{}
 	var roleInt int
 	var content []byte
 	var createdAt time.Time
@@ -199,7 +200,7 @@ func (d *DB) LatestMessage(threadID string) *pb.Message {
 	if err != nil {
 		return nil
 	}
-	msg.Role = pb.Role(roleInt)
+	msg.Role = threadv1.Role(roleInt)
 	msg.CreatedAt = timestamppb.New(createdAt)
 	msg.Content, _ = unmarshalContentBlocks(content)
 	return msg
@@ -213,14 +214,14 @@ func (d *DB) MessageCount(threadID string) int {
 }
 
 // marshalContentBlocks encodes repeated ContentBlock as a proto wrapper.
-func marshalContentBlocks(blocks []*pb.ContentBlock) ([]byte, error) {
+func marshalContentBlocks(blocks []*threadv1.ContentBlock) ([]byte, error) {
 	// Use LLMMessage as a wrapper since it has repeated ContentBlock
-	wrapper := &pb.LLMMessage{Content: blocks}
+	wrapper := &llmv1.LLMMessage{Content: blocks}
 	return proto.Marshal(wrapper)
 }
 
-func unmarshalContentBlocks(data []byte) ([]*pb.ContentBlock, error) {
-	wrapper := &pb.LLMMessage{}
+func unmarshalContentBlocks(data []byte) ([]*threadv1.ContentBlock, error) {
+	wrapper := &llmv1.LLMMessage{}
 	if err := proto.Unmarshal(data, wrapper); err != nil {
 		return nil, err
 	}

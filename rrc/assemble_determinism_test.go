@@ -4,7 +4,8 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
 
@@ -16,7 +17,13 @@ type charEstimator struct{}
 
 func (charEstimator) Estimate(text string) int { return (len(text) + 3) / 4 }
 
-func init() { chunk.SetDefaultEstimator(charEstimator{}) }
+// testChunkConfig is chunk.DefaultConfig with the deterministic test
+// estimator installed (the estimator now lives on Config, not a global).
+func testChunkConfig() chunk.Config {
+	cfg := chunk.DefaultConfig()
+	cfg.Estimator = charEstimator{}
+	return cfg
+}
 
 // TestAssemble_Deterministic — fixed corpus + fixed scorer outputs
 // + fixed config produce identical wire payloads across runs.
@@ -34,7 +41,7 @@ func TestAssemble_Deterministic(t *testing.T) {
 	o := newMockChunkOracle()
 
 	cfg := DefaultConfig()
-	cfg.ZScoreThreshold = 0
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
 	cfg.LocalContextSize = 1
 	cfg.DiversityLambda = 0 // disable MMR — focus the test on Selection
@@ -43,7 +50,7 @@ func TestAssemble_Deterministic(t *testing.T) {
 	prior2 := addMsg(o, "m2", 1, "t1", "beta")
 	prior3 := addMsg(o, "m3", 2, "t1", "gamma")
 	anchor := addMsg(o, "q", 3, "t1", "current context")
-	corpus := []*pb.Message{prior1, prior2, prior3, anchor}
+	corpus := []*threadv1.Message{prior1, prior2, prior3, anchor}
 
 	first := runAssemble(t, cfg, mc, o, corpus, anchor)
 	second := runAssemble(t, cfg, mc, o, corpus, anchor)
@@ -52,8 +59,8 @@ func TestAssemble_Deterministic(t *testing.T) {
 		t.Fatalf("wire length differs: first=%d second=%d", len(first.Wire), len(second.Wire))
 	}
 	for i := range first.Wire {
-		ft := TextFromBlocks(first.Wire[i].Content)
-		st := TextFromBlocks(second.Wire[i].Content)
+		ft := pbtext.TextFromBlocks(first.Wire[i].Content)
+		st := pbtext.TextFromBlocks(second.Wire[i].Content)
 		if ft != st {
 			t.Errorf("wire[%d] differs across runs:\n  first:  %q\n  second: %q", i, ft, st)
 		}
@@ -77,15 +84,15 @@ func TestAssemble_Deterministic(t *testing.T) {
 // the assemble output. Each call constructs a new engine — the
 // determinism test compares cross-engine outputs, which is the
 // stricter contract (state from one call mustn't leak into another).
-func runAssemble(t *testing.T, cfg EngineConfig, mc *mockScorer, o *mockChunkOracle, corpus []*pb.Message, anchor *pb.Message) AssembleResult {
+func runAssemble(t *testing.T, cfg EngineConfig, mc *mockScorer, o *mockChunkOracle, corpus []*threadv1.Message, anchor *threadv1.Message) AssembleResult {
 	t.Helper()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	res, err := e.Assemble(context.Background(), AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
 		Corpus:                 corpus,
-		LocalContext:           []*pb.Message{anchor},
-		Scope:                  pb.SelectionScope_SELECTION_SCOPE_THREAD,
+		LocalContext:           []*threadv1.Message{anchor},
+		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
 	})
 	if err != nil {

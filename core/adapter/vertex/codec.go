@@ -4,22 +4,23 @@ import (
 	"encoding/json"
 
 	"github.com/elijahmontenegro/grudge/core/genaicodec"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/genai"
 )
 
-// encode converts a pb.CompletionRequest into the genai SDK's (contents,
+// encode converts a llmv1.CompletionRequest into the genai SDK's (contents,
 // config) pair. The Content/Part mapping is shared via core/genaicodec; this
 // adds the request-level concerns genaicodec doesn't cover: hoisting the
 // system message out of the turn list (genai has no system role — it travels
 // via GenerateContentConfig.SystemInstruction), generation params, and tool
 // declarations.
-func (c *completer) encode(req *pb.CompletionRequest) ([]*genai.Content, *genai.GenerateContentConfig) {
+func (c *completer) encode(req *llmv1.CompletionRequest) ([]*genai.Content, *genai.GenerateContentConfig) {
 	cfg := &genai.GenerateContentConfig{}
 
 	var contents []*genai.Content
 	for _, m := range req.Messages {
-		if m.Role == pb.Role_ROLE_SYSTEM {
+		if m.Role == threadv1.Role_ROLE_SYSTEM {
 			// Hoist system content into SystemInstruction rather than a turn.
 			cfg.SystemInstruction = genaicodec.ProtoToContent(m)
 			continue

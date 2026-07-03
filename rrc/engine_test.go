@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -116,23 +117,22 @@ func (o *mockChunkOracle) NearestChunks(_ context.Context, _ string, k int, _ Pr
 	return out, nil
 }
 
-// DiversityRerank in the mock is a pass-through: every candidate has
-// the same zero vector (mockChunkOracle has no real embeddings) so
-// the cosine similarity term is 0 across the board and the MMR
-// formula reduces to scaling by λ. Tests that genuinely exercise MMR
-// behavior live against the storage-backed oracle; rrc engine tests
-// just want a deterministic identity.
-func (o *mockChunkOracle) DiversityRerank(_ context.Context, candidates []*pb.SelectedMessage, _ map[string]float64, _ float64) ([]*pb.SelectedMessage, error) {
-	return candidates, nil
+// RepresentativeVectors in the mock returns no vectors: the engine's
+// ApplyMMR treats an empty representation map as "diversity penalty
+// unmeasurable" and leaves the input unchanged — a deterministic
+// identity for tests that don't exercise MMR. Tests that do use
+// vectorOracle below.
+func (o *mockChunkOracle) RepresentativeVectors(_ context.Context, _ []string) (map[string][]float32, error) {
+	return nil, nil
 }
 
 // --- Helpers ---
 
-func makeMsg(id string, position int64, threadID string, text string) *pb.Message {
-	return &pb.Message{
+func makeMsg(id string, position int64, threadID string, text string) *threadv1.Message {
+	return &threadv1.Message{
 		Id:        id,
-		Role:      pb.Role_ROLE_USER,
-		Content:   []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: text}}}},
+		Role:      threadv1.Role_ROLE_USER,
+		Content:   []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: text}}}},
 		Position:  position,
 		ThreadId:  threadID,
 		CreatedAt: timestamppb.Now(),
@@ -142,40 +142,36 @@ func makeMsg(id string, position int64, threadID string, text string) *pb.Messag
 // addMsg is a convenience constructor that also registers the text
 // with the oracle — every test that feeds messages to OnMessage must
 // have the oracle know about them.
-func addMsg(o *mockChunkOracle, id string, position int64, threadID string, text string) *pb.Message {
+func addMsg(o *mockChunkOracle, id string, position int64, threadID string, text string) *threadv1.Message {
 	m := makeMsg(id, position, threadID, text)
 	o.Register(id, text)
 	return m
 }
 
 // testEngine wires a fresh engine with the mock scorer and oracle.
-// cfg pins EdgeThreshold=0.5 (legacy test fixtures use 0.3/0.5/0.8
-// score values calibrated to that boundary; the production default
-// is higher, calibrated against the real reranker's distribution),
-// and disables the adaptive gates (ZScoreThreshold=0, MinBatchStdDev=0)
-// so the legacy tests exercise basic threshold gating only. The
-// adaptive gates have their own dedicated test suite further down.
+// The fixtures use 0.3/0.5/0.8 score values calibrated to a 0.5
+// accept boundary, and the flat-spread gate is disabled
+// (MinBatchStdDev=0) so these tests exercise acceptance gating only.
+// The spread gate has its own dedicated test suite further down.
 func testEngine(mc *mockScorer, o *mockChunkOracle) *Engine {
 	cfg := DefaultConfig()
-	// Legacy fixtures assert accept/reject at a 0.5 similarity boundary.
-	// Post-A4 acceptance is calibrated, so install a bootstrap calibrator
-	// centered at 0.5 (Predict(0.5,0)=0.5=LossRatio → the boundary) with the
-	// mass term off, reproducing the old flat-0.5 semantics through the new
-	// path. steep=40 makes it effectively a hard step so 0.5-vs-0.49 tests
-	// stay crisp.
+	cfg.Chunk.Estimator = charEstimator{}
+	// Fixtures assert accept/reject at a 0.5 similarity boundary, so
+	// install a bootstrap calibrator centered at 0.5
+	// (Predict(0.5,0)=0.5=LossRatio → the boundary) with the mass term
+	// off. steep=40 makes it effectively a hard step so 0.5-vs-0.49
+	// tests stay crisp.
 	cfg.Calibrator = calibrate.Bootstrap(0.5, 40.0, 0)
-	cfg.EdgeThreshold = 0.5
-	cfg.ZScoreThreshold = 0
 	cfg.MinBatchStdDev = 0
 	return NewEngine(cfg, mc, WithChunkOracle(o))
 }
 
-func testSerializedLocalContext(anchor *pb.Message) *SerializedLocalContext {
+func testSerializedLocalContext(anchor *threadv1.Message) *SerializedLocalContext {
 	return &SerializedLocalContext{
 		EventID:     "sel-" + anchor.Id,
 		Fingerprint: "test-" + anchor.Id,
 		MessageIDs:  []string{anchor.Id},
-		Chunks:      []SerializedLocalContextChunk{{Index: 0, Text: strings.TrimSpace(TextFromBlocks(anchor.Content))}},
+		Chunks:      []SerializedLocalContextChunk{{Index: 0, Text: strings.TrimSpace(pbtext.TextFromBlocks(anchor.Content))}},
 	}
 }
 
@@ -183,26 +179,25 @@ func testSerializedLocalContext(anchor *pb.Message) *SerializedLocalContext {
 
 func TestNewEngine(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
 	e := NewEngine(cfg, newMockScorer())
 
 	if e.scorer == nil {
 		t.Fatal("scorer should not be nil")
 	}
-	// Assert the calibrated default (0.60 — see DefaultConfig comment
-	// in config.go for the eval-derived rationale). If the default
-	// changes, this assertion updates to match; the test exists to
-	// document the contract that DefaultConfig returns the shipped
-	// calibration, not a magic number from a particular era.
-	if e.cfg.EdgeThreshold != 0.60 {
-		t.Fatalf("expected default threshold 0.60, got %f", e.cfg.EdgeThreshold)
+	// The acceptance contract lives in the calibrator + LossRatio, not
+	// a flat threshold. Document that DefaultConfig ships the
+	// precision-first stance.
+	if e.cfg.LossRatio != 0.5 {
+		t.Fatalf("expected default LossRatio 0.5, got %f", e.cfg.LossRatio)
 	}
 }
 
-func TestOnMessage_EmptyCorpus(t *testing.T) {
+func TestSelectPrereqs_EmptyCorpus(t *testing.T) {
 	e := testEngine(newMockScorer(), newMockChunkOracle())
 	msg := makeMsg("m1", 0, "t1", "hello")
 
-	edges, _, err := e.OnMessage(context.Background(), msg, nil)
+	edges, _, err := e.selectViaFixture(context.Background(), msg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,24 +206,23 @@ func TestOnMessage_EmptyCorpus(t *testing.T) {
 	}
 }
 
-func TestOnMessage_NilScorer(t *testing.T) {
+func TestSelectPrereqs_NilScorer(t *testing.T) {
 	// A nil scorer is allowed: the engine takes the Layer-1
 	// retrieval score from ChunkRef.RetrievalScore as the candidate's
-	// score directly. Edges form whenever that score clears
-	// EdgeThreshold. The adaptive gates (MinBatchStdDev, ZScoreThreshold)
-	// only fire in reranker mode.
+	// score directly and runs it through calibrated acceptance. The
+	// flat-spread gate (MinBatchStdDev) only fires in reranker mode.
 	cfg := DefaultConfig()
-	cfg.EdgeThreshold = 0.5
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0 // gate doesn't run, but pin the disable for clarity
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, nil, WithChunkOracle(o))
 	msg := addMsg(o, "m1", 1, "t1", "hello")
 	prior := addMsg(o, "m0", 0, "t1", "hi")
 	// The mock oracle's NearestChunks needs to surface prior with a
-	// RetrievalScore above EdgeThreshold for an edge to form.
+	// RetrievalScore above the accept boundary for an edge to form.
 	o.SetRetrievalScore("hi", 0.8)
 
-	edges, _, err := e.OnMessage(context.Background(), msg, []*pb.Message{prior})
+	edges, _, err := e.selectViaFixture(context.Background(), msg, []*threadv1.Message{prior})
 	if err != nil {
 		t.Fatalf("nil scorer should not error, got %v", err)
 	}
@@ -240,23 +234,23 @@ func TestOnMessage_NilScorer(t *testing.T) {
 	}
 }
 
-func TestOnMessage_NilOracle(t *testing.T) {
+func TestSelectPrereqs_NilOracle(t *testing.T) {
 	// Symmetric to nil scorer: no oracle means OnMessage cannot
 	// resolve chunks. Same failure class — surface, don't silently
 	// produce zero edges.
 	e := NewEngine(DefaultConfig(), newMockScorer())
 	msg := makeMsg("m1", 1, "t1", "hello")
-	corpus := []*pb.Message{makeMsg("m0", 0, "t1", "hi")}
+	corpus := []*threadv1.Message{makeMsg("m0", 0, "t1", "hi")}
 
-	_, _, err := e.OnMessage(context.Background(), msg, corpus)
+	_, _, err := e.selectViaFixture(context.Background(), msg, corpus)
 	if !errors.Is(err, ErrScorerUnavailable) {
 		t.Fatalf("expected ErrScorerUnavailable, got %v", err)
 	}
 }
 
-func TestOnMessage_BelowThreshold_SameThread(t *testing.T) {
-	// Edge formation gates on raw CE — below EdgeThreshold produces
-	// no edge regardless of thread relationship.
+func TestSelectPrereqs_BelowThreshold_SameThread(t *testing.T) {
+	// Edge formation gates on raw CE — below the accept boundary
+	// produces no edge regardless of thread relationship.
 	mc := newMockScorer()
 	mc.SetScore("hi", "hello", 0.3) // reranker 0.3
 	o := newMockChunkOracle()
@@ -265,17 +259,17 @@ func TestOnMessage_BelowThreshold_SameThread(t *testing.T) {
 	m0 := addMsg(o, "m0", 0, "t1", "hi")
 	m1 := addMsg(o, "m1", 1, "t1", "hello")
 
-	edges, _, err := e.OnMessage(context.Background(), m1, []*pb.Message{m0})
+	edges, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// CE=0.3 < EdgeThreshold=0.5 → no edge.
+	// CE=0.3 < 0.5 accept boundary → no edge.
 	if len(edges) != 0 {
 		t.Fatalf("below-threshold CE should produce no edge, got %d", len(edges))
 	}
 }
 
-func TestOnMessage_BelowThreshold_CrossThread(t *testing.T) {
+func TestSelectPrereqs_BelowThreshold_CrossThread(t *testing.T) {
 	mc := newMockScorer()
 	mc.SetScore("hi", "hello", 0.3)
 	o := newMockChunkOracle()
@@ -284,7 +278,7 @@ func TestOnMessage_BelowThreshold_CrossThread(t *testing.T) {
 	m0 := addMsg(o, "m0", 0, "t-other", "hi")
 	m1 := addMsg(o, "m1", 1, "t1", "hello")
 
-	edges, _, err := e.OnMessage(context.Background(), m1, []*pb.Message{m0})
+	edges, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +288,7 @@ func TestOnMessage_BelowThreshold_CrossThread(t *testing.T) {
 	}
 }
 
-func TestOnMessage_AboveThreshold(t *testing.T) {
+func TestSelectPrereqs_AboveThreshold(t *testing.T) {
 	mc := newMockScorer()
 	mc.SetScore("what is a tomato cake", "tell me more about tomato cake", 0.8)
 	o := newMockChunkOracle()
@@ -303,11 +297,11 @@ func TestOnMessage_AboveThreshold(t *testing.T) {
 	m0 := addMsg(o, "m0", 0, "t1", "what is a tomato cake")
 	m1 := addMsg(o, "m1", 1, "t1", "tell me more about tomato cake")
 
-	edges, _, err := e.OnMessage(context.Background(), m1, []*pb.Message{m0})
+	edges, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// CE=0.8 ≥ EdgeThreshold=0.5 → edge.
+	// CE=0.8 ≥ 0.5 accept boundary → edge.
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(edges))
 	}
@@ -319,12 +313,12 @@ func TestOnMessage_AboveThreshold(t *testing.T) {
 	if edge.CrossEncoderScore != 0.8 {
 		t.Fatalf("expected CE score 0.8, got %f", edge.CrossEncoderScore)
 	}
-	if edge.Source != pb.EdgeSource_EDGE_SOURCE_CROSS_ENCODER {
+	if edge.Source != rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER {
 		t.Fatalf("expected CE source, got %v", edge.Source)
 	}
 }
 
-func TestOnMessage_MultipleCorpusMessages(t *testing.T) {
+func TestSelectPrereqs_MultipleCorpusMessages(t *testing.T) {
 	mc := newMockScorer()
 	mc.SetScore("hello", "how are you", 0.7)
 	mc.SetScore("nice weather", "how are you", 0.2)
@@ -332,14 +326,14 @@ func TestOnMessage_MultipleCorpusMessages(t *testing.T) {
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
-	corpus := []*pb.Message{
+	corpus := []*threadv1.Message{
 		addMsg(o, "m0", 0, "t1", "hello"),
 		addMsg(o, "m1", 1, "t1", "nice weather"),
 		addMsg(o, "m2", 2, "t1", "tell me a joke"),
 	}
 	prompt := addMsg(o, "m3", 3, "t1", "how are you")
 
-	edges, _, err := e.OnMessage(context.Background(), prompt, corpus)
+	edges, _, err := e.selectViaFixture(context.Background(), prompt, corpus)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -354,7 +348,7 @@ func TestOnMessage_MultipleCorpusMessages(t *testing.T) {
 func TestSelect_NoEdges(t *testing.T) {
 	e := testEngine(newMockScorer(), newMockChunkOracle())
 
-	result, err := e.Select("m0", pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	result, err := e.Select("m0", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,24 +371,24 @@ func TestSelect_LinearChain(t *testing.T) {
 	e := testEngine(mc, o)
 
 	ctx := context.Background()
-	msgs := []*pb.Message{
+	msgs := []*threadv1.Message{
 		addMsg(o, "m0", 0, "t1", "a"),
 		addMsg(o, "m1", 1, "t1", "b"),
 		addMsg(o, "m2", 2, "t1", "c"),
 		addMsg(o, "m3", 3, "t1", "d"),
 	}
 
-	if _, _, err := e.OnMessage(ctx, msgs[1], msgs[:1]); err != nil {
+	if _, _, err := e.selectViaFixture(ctx, msgs[1], msgs[:1]); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.OnMessage(ctx, msgs[2], msgs[:2]); err != nil {
+	if _, _, err := e.selectViaFixture(ctx, msgs[2], msgs[:2]); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.OnMessage(ctx, msgs[3], msgs[:3]); err != nil {
+	if _, _, err := e.selectViaFixture(ctx, msgs[3], msgs[:3]); err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := e.Select("m3", pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	result, err := e.Select("m3", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,18 +410,18 @@ func TestSelect_LinearChain(t *testing.T) {
 	}
 }
 
-func TestSelect_ScoreFloorCutoff(t *testing.T) {
+func TestSelect_ProbabilityFloorCutoff(t *testing.T) {
 	// DAG-direct edge insert; independent of OnMessage path.
 	e := testEngine(newMockScorer(), newMockChunkOracle())
 
-	// Below the ScoreFloor of DefaultConfig (0.3).
-	e.dag.AddEdge(&pb.Edge{
+	// Edge probability below the LossRatio floor (0.5).
+	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m0", ToMessageId: "m1",
 		Score:        0.1,
 		FromThreadId: "t1", ToThreadId: "t1",
 	})
 
-	result, err := e.Select("m1", pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	result, err := e.Select("m1", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,20 +434,20 @@ func TestSelect_ThreadScope(t *testing.T) {
 	e := testEngine(newMockScorer(), newMockChunkOracle())
 
 	// Edges set CrossEncoderScore directly — extractSubgraph reads it
-	// via edgeScoreUnderConfig as the gating signal. CE=1.0 ≥ 0.5
-	// EdgeThreshold → both edges qualify.
-	e.dag.AddEdge(&pb.Edge{
+	// via edgeScoreUnderConfig as the gating signal. CE=1.0 clears
+	// acceptance decisively → both edges qualify.
+	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m0", ToMessageId: "m2",
 		Score: 0.8, CrossEncoderScore: 1.0,
 		FromThreadId: "t1", ToThreadId: "t1",
 	})
-	e.dag.AddEdge(&pb.Edge{
+	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m1", ToMessageId: "m2",
 		Score: 0.9, CrossEncoderScore: 1.0,
 		FromThreadId: "t2", ToThreadId: "t1",
 	})
 
-	result, err := e.Select("m2", pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	result, err := e.Select("m2", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +458,7 @@ func TestSelect_ThreadScope(t *testing.T) {
 		t.Fatalf("expected m0 selected, got %s", result.Selected[0].MessageId)
 	}
 
-	result, err = e.Select("m2", pb.SelectionScope_SELECTION_SCOPE_ALL_THREADS, "t1")
+	result, err = e.Select("m2", threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS, "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,7 +475,7 @@ func TestFork(t *testing.T) {
 
 	m0 := addMsg(o, "m0", 0, "t1", "hello")
 	m1 := addMsg(o, "m1", 1, "t1", "world")
-	if _, _, err := e.OnMessage(context.Background(), m1, []*pb.Message{m0}); err != nil {
+	if _, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -503,14 +497,14 @@ func TestMerge(t *testing.T) {
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
-	e.dag.AddEdge(&pb.Edge{
+	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m0", ToMessageId: "m1",
 		Score: 0.8, FromThreadId: "t1", ToThreadId: "t1",
 	})
 
 	fork := e.Fork()
 
-	fork.dag.AddEdge(&pb.Edge{
+	fork.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m1", ToMessageId: "m2",
 		Score: 0.7, FromThreadId: "t1", ToThreadId: "t1",
 	})
@@ -536,7 +530,7 @@ func TestMerge(t *testing.T) {
 
 func TestDAG_DualIndex(t *testing.T) {
 	dag := newDAG()
-	edge := &pb.Edge{
+	edge := &rrcv1.Edge{
 		FromMessageId: "a", ToMessageId: "b",
 		Score: 0.8, FromThreadId: "t1", ToThreadId: "t1",
 	}
@@ -590,23 +584,23 @@ func TestSelect_TransitiveReduction(t *testing.T) {
 	// Diamond: m0 -> m2, m0 -> m1 -> m2. Direct m0->m2 is redundant.
 	// CrossEncoderScore set directly because extractSubgraph
 	// re-projects under current config.
-	e.dag.AddEdge(&pb.Edge{
+	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m0", ToMessageId: "m2",
 		Score: 0.6, CrossEncoderScore: 1.0,
 		FromThreadId: "t1", ToThreadId: "t1",
 	})
-	e.dag.AddEdge(&pb.Edge{
+	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m1", ToMessageId: "m2",
 		Score: 0.8, CrossEncoderScore: 1.0,
 		FromThreadId: "t1", ToThreadId: "t1",
 	})
-	e.dag.AddEdge(&pb.Edge{
+	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m0", ToMessageId: "m1",
 		Score: 0.7, CrossEncoderScore: 1.0,
 		FromThreadId: "t1", ToThreadId: "t1",
 	})
 
-	result, err := e.Select("m2", pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	result, err := e.Select("m2", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,27 +612,31 @@ func TestSelect_TransitiveReduction(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.EdgeThreshold != 0.60 {
-		t.Fatalf("expected threshold 0.60 (eval-calibrated), got %f", cfg.EdgeThreshold)
+	cfg.Chunk.Estimator = charEstimator{}
+	if cfg.LossRatio != 0.5 {
+		t.Fatalf("expected LossRatio 0.5 (precision-first stance), got %f", cfg.LossRatio)
 	}
-	if cfg.ScoreFloor != 0.3 {
-		t.Fatalf("expected floor 0.3, got %f", cfg.ScoreFloor)
+	if cfg.MinBatchStdDev != 0.05 {
+		t.Fatalf("expected MinBatchStdDev 0.05 (flat-spread guard), got %f", cfg.MinBatchStdDev)
 	}
-	if cfg.ZScoreThreshold != 0 {
-		t.Fatalf("expected ZScoreThreshold 0 (z-gate disabled — score distribution is bimodal), got %f", cfg.ZScoreThreshold)
+	// The bootstrap calibrator centers the accept boundary near the
+	// old 0.60 operating point: Predict(0.60, 0) ≈ LossRatio.
+	p := cfg.Calibrator.Predict(0.60, 0)
+	if p < 0.45 || p > 0.55 {
+		t.Fatalf("bootstrap calibrator should put sim=0.60/mass=0 at the accept boundary, got P=%f", p)
 	}
 }
 
-func TestOnMessage_ScoreCachePopulated(t *testing.T) {
+func TestSelectPrereqs_ScoreCachePopulated(t *testing.T) {
 	mc := newMockScorer()
-	mc.SetScore("a", "b", 0.3) // reranker 0.3 — below the EdgeThreshold fused cutoff
+	mc.SetScore("a", "b", 0.3) // reranker 0.3 — below the accept boundary
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
 	m0 := addMsg(o, "m0", 0, "t1", "a")
 	m1 := addMsg(o, "m1", 1, "t1", "b")
 
-	if _, _, err := e.OnMessage(context.Background(), m1, []*pb.Message{m0}); err != nil {
+	if _, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -655,7 +653,7 @@ func TestOnMessage_ScoreCachePopulated(t *testing.T) {
 	}
 }
 
-func TestOnMessage_SkipsSelf(t *testing.T) {
+func TestSelectPrereqs_SkipsSelf(t *testing.T) {
 	mc := newMockScorer()
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
@@ -663,7 +661,7 @@ func TestOnMessage_SkipsSelf(t *testing.T) {
 	m0 := addMsg(o, "m0", 0, "t1", "hello")
 	// Corpus includes the message itself — should be filtered out and
 	// no scorer call should happen.
-	edges, _, err := e.OnMessage(context.Background(), m0, []*pb.Message{m0})
+	edges, _, err := e.selectViaFixture(context.Background(), m0, []*threadv1.Message{m0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -675,12 +673,14 @@ func TestOnMessage_SkipsSelf(t *testing.T) {
 	}
 }
 
-// --- Three-gate discrimination tests ---
+// --- Gate discrimination tests ---
 //
 // Gates stack:
-//   Gate 1 (absolute): fused < EdgeThreshold → skip
-//   Gate 2 (z-score):  (fused - batchMean) / batchStddev < ZScoreThreshold → skip
-//   Gate 3 (batch):    batchStddev < MinBatchStdDev → zero edges for the whole batch
+//   Gate 1 (acceptance): calibrated P(prereq|sim,mass) < LossRatio → skip
+//   Gate 3 (batch):      batchStddev < MinBatchStdDev → zero edges for the whole batch
+//
+// (Gate 2, the z-score relative-standout test, was subsumed by
+// calibration and removed in A4.)
 //
 // Batch stats are computed over candidates that actually got rescored
 // (either fresh Rerank call or cached score), not over priors that
@@ -694,6 +694,7 @@ func TestOnMessage_SkipsSelf(t *testing.T) {
 // distribution directly.
 func threeGateConfig() EngineConfig {
 	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
 	// Bootstrap calibrator centered at 0.5 with the mass term off, so the
 	// legacy fixtures' 0.1/0.4/0.5/0.6 CE values map to accept/reject at the
 	// same boundary through A4's calibrated path (Predict(0.5,0)=0.5). steep
@@ -702,8 +703,6 @@ func threeGateConfig() EngineConfig {
 	// The z-score gate (Gate 2) was subsumed by calibration and removed;
 	// Gate-2-specific tests are updated to the calibrated model.
 	cfg.Calibrator = calibrate.Bootstrap(0.5, 40.0, 0)
-	cfg.EdgeThreshold = 0.5
-	cfg.ZScoreThreshold = 1.0
 	cfg.MinBatchStdDev = 0.05
 	return cfg
 }
@@ -712,12 +711,12 @@ func threeGateEngine(mc *mockScorer, o *mockChunkOracle) *Engine {
 	return NewEngine(threeGateConfig(), mc, WithChunkOracle(o))
 }
 
-func TestOnMessage_Gate1_AbsoluteThreshold(t *testing.T) {
-	// CE-only gating: one clears EdgeThreshold=0.5, one doesn't.
+func TestSelectPrereqs_Gate1_AbsoluteThreshold(t *testing.T) {
+	// CE-only gating: one clears the 0.5 accept boundary, one doesn't.
 	// Note CE=0.1 rather than 0.0: the engine's aggregation uses a
 	// strict `>` against zero-init, so CE=0.0 is treated as unscored
 	// and the candidate never enters the batch. Any non-zero CE
-	// below the threshold exercises gate 1 correctly.
+	// below the boundary exercises gate 1 correctly.
 	mc := newMockScorer()
 	mc.SetScore("low", "query", 0.1)
 	mc.SetScore("high", "query", 0.5)
@@ -728,15 +727,13 @@ func TestOnMessage_Gate1_AbsoluteThreshold(t *testing.T) {
 	m1 := addMsg(o, "m1", 0, "tB", "high")
 	q := addMsg(o, "q", 0, "tQ", "query")
 
-	edges, _, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1})
+	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Batch stats over [0.1, 0.5]: mean=0.3, stddev=0.2.
 	// Gate 3: 0.2 > 0.05 — no fire.
 	// Gate 1: 0.1 < 0.5 fails, 0.5 not<0.5 passes.
-	// Gate 2: z(0.5) = (0.5-0.3)/0.2 = 1.0 exactly; `z<1.0` is false,
-	// so high passes gate 2 too.
 	if len(edges) != 1 {
 		t.Fatalf("expected 1 edge (low gated by gate 1), got %d", len(edges))
 	}
@@ -745,13 +742,14 @@ func TestOnMessage_Gate1_AbsoluteThreshold(t *testing.T) {
 	}
 }
 
-func TestOnMessage_CrossThreadGatesUniformly(t *testing.T) {
+func TestSelectPrereqs_CrossThreadGatesUniformly(t *testing.T) {
 	// After the WeightTemp removal, edge formation is a single CE
 	// gate that applies uniformly to same-thread and cross-thread
 	// candidates — no asymmetric distribution, no second threshold.
-	// CE=0.6 clears 0.5 EdgeThreshold from either thread relationship.
+	// CE=0.6 clears the default accept boundary (bootstrap centered at
+	// 0.60) from either thread relationship.
 	cfg := DefaultConfig()
-	cfg.ZScoreThreshold = 0
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
 
 	mc := newMockScorer()
@@ -769,12 +767,12 @@ func TestOnMessage_CrossThreadGatesUniformly(t *testing.T) {
 	mSame := addMsg(o, "mSame", 0, "tQ", "same")
 	q := addMsg(o, "q", 1, "tQ", "q")
 
-	edges, _, err := e.OnMessage(context.Background(), q, []*pb.Message{mCross, mSame})
+	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{mCross, mSame})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(edges) != 2 {
-		t.Fatalf("CE=0.6 should clear EdgeThreshold=0.5 for both thread relationships, got %d edges", len(edges))
+		t.Fatalf("CE=0.6 should clear acceptance for both thread relationships, got %d edges", len(edges))
 	}
 	// Sub-threshold CE rejected uniformly too.
 	mc2 := newMockScorer()
@@ -785,7 +783,7 @@ func TestOnMessage_CrossThreadGatesUniformly(t *testing.T) {
 	addMsg(o2, "lowCross", 0, "tOther", "low-cross")
 	addMsg(o2, "lowSame", 0, "tQ", "low-same")
 	q2 := addMsg(o2, "q2", 1, "tQ", "q2")
-	rejected, _, err := e2.OnMessage(context.Background(), q2, []*pb.Message{
+	rejected, _, err := e2.selectViaFixture(context.Background(), q2, []*threadv1.Message{
 		makeMsg("lowCross", 0, "tOther", "low-cross"),
 		makeMsg("lowSame", 0, "tQ", "low-same"),
 	})
@@ -793,11 +791,11 @@ func TestOnMessage_CrossThreadGatesUniformly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(rejected) != 0 {
-		t.Fatalf("CE=0.4 should be gated by EdgeThreshold=0.5, got %d edges", len(rejected))
+		t.Fatalf("CE=0.4 should be gated by calibrated acceptance, got %d edges", len(rejected))
 	}
 }
 
-func TestOnMessage_ZScoreGateRemoved_ClusterAllAccepted(t *testing.T) {
+func TestSelectPrereqs_ZScoreGateRemoved_ClusterAllAccepted(t *testing.T) {
 	// A4 removed the z-score "relative standout" gate: it was a statistical
 	// patch for a flat threshold's brittleness, and calibrated probability
 	// subsumes that job. So a cluster of candidates that all clear the
@@ -817,7 +815,7 @@ func TestOnMessage_ZScoreGateRemoved_ClusterAllAccepted(t *testing.T) {
 	m2 := addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
-	edges, _, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1, m2})
+	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1, m2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -826,36 +824,7 @@ func TestOnMessage_ZScoreGateRemoved_ClusterAllAccepted(t *testing.T) {
 	}
 }
 
-func TestOnMessage_Gate2_Disabled(t *testing.T) {
-	// ZScoreThreshold=0 disables gate 2 — every gate-1 clearer
-	// survives. Spread CE values wide enough that gate 3's stddev
-	// floor (0.05 from threeGateConfig) doesn't fire.
-	cfg := threeGateConfig()
-	cfg.ZScoreThreshold = 0
-	mc := newMockScorer()
-	mc.SetScore("a", "q", 0.6)
-	mc.SetScore("b", "q", 0.7)
-	mc.SetScore("c", "q", 0.8)
-	o := newMockChunkOracle()
-	e := NewEngine(cfg, mc, WithChunkOracle(o))
-
-	m0 := addMsg(o, "m0", 0, "tQ", "a")
-	m1 := addMsg(o, "m1", 0, "tQ", "b")
-	m2 := addMsg(o, "m2", 0, "tQ", "c")
-	q := addMsg(o, "q", 0, "tQ", "q")
-
-	edges, _, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1, m2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Batch [0.6, 0.7, 0.8]: mean=0.7, stddev≈0.0816 > 0.05 → gate 3
-	// no fire. Gate 1: all ≥ 0.5 pass. Gate 2 disabled. 3 edges.
-	if len(edges) != 3 {
-		t.Fatalf("gate 2 disabled should pass all gate-1 clearers, got %d", len(edges))
-	}
-}
-
-func TestOnMessage_Gate3_BatchIndiscriminate(t *testing.T) {
+func TestSelectPrereqs_Gate3_BatchIndiscriminate(t *testing.T) {
 	// Tight cluster of above-threshold candidates — stddev falls
 	// below MinBatchStdDev. Gate 3 fires for the whole batch: zero
 	// edges even though every candidate clears gate 1.
@@ -871,19 +840,19 @@ func TestOnMessage_Gate3_BatchIndiscriminate(t *testing.T) {
 	m2 := addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
-	edges, _, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1, m2})
+	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1, m2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Batch [0.51, 0.52, 0.53]: stddev ≈ 0.00816 < MinBatchStdDev=0.05.
 	// Gate 3 short-circuits → no edges (even though all three clear
-	// EdgeThreshold=0.5).
+	// the 0.5 accept boundary).
 	if len(edges) != 0 {
 		t.Fatalf("tight cluster must return zero edges via gate 3, got %d", len(edges))
 	}
 }
 
-func TestOnMessage_Gate3_Disabled(t *testing.T) {
+func TestSelectPrereqs_Gate3_Disabled(t *testing.T) {
 	// MinBatchStdDev=0 disables gate 3 (the batch-flatness kill, which
 	// survived A4 — it's orthogonal to acceptance). With gate 3 off, a tight
 	// cluster that all clears the calibrated floor forms edges for every
@@ -903,7 +872,7 @@ func TestOnMessage_Gate3_Disabled(t *testing.T) {
 	m2 := addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
-	edges, _, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1, m2})
+	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1, m2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -912,31 +881,30 @@ func TestOnMessage_Gate3_Disabled(t *testing.T) {
 	}
 }
 
-func TestOnMessage_Gate2_SingleCandidateNoOp(t *testing.T) {
-	// Single-candidate batch has stddev=0 — gate 2's `batchStddev > 0`
-	// guard makes it a no-op. Gate 3 would normally fire on stddev=0
-	// but here MinBatchStdDev=0 in this test to isolate the single-
-	// candidate case.
+func TestSelectPrereqs_SingleCandidateAccepted(t *testing.T) {
+	// Single-candidate batch has stddev=0. Gate 3 would normally fire
+	// on stddev=0, but MinBatchStdDev=0 in this test to isolate the
+	// single-candidate acceptance case.
 	cfg := threeGateConfig()
 	cfg.MinBatchStdDev = 0
 	mc := newMockScorer()
-	mc.SetScore("a", "q", 0.5) // CE=0.5 ≥ EdgeThreshold=0.5 → passes gate 1
+	mc.SetScore("a", "q", 0.5) // CE=0.5 sits exactly at the accept boundary → passes
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
 	m0 := addMsg(o, "m0", 0, "tA", "a")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
-	edges, _, err := e.OnMessage(context.Background(), q, []*pb.Message{m0})
+	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(edges) != 1 {
-		t.Fatalf("single-candidate should pass gate 2 (no-op), got %d edges", len(edges))
+		t.Fatalf("single candidate clearing acceptance should form an edge, got %d edges", len(edges))
 	}
 }
 
-func TestOnMessage_RescoredFilterInvariant(t *testing.T) {
+func TestSelectPrereqs_RescoredFilterInvariant(t *testing.T) {
 	// Batch stats must be computed over rescored priors only. Priors
 	// beyond RerankTopK with no cached score contribute no CE and
 	// must be excluded from mean/stddev — otherwise synthetic zeros
@@ -962,7 +930,7 @@ func TestOnMessage_RescoredFilterInvariant(t *testing.T) {
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	priors := []*pb.Message{
+	priors := []*threadv1.Message{
 		addMsg(o, "m0", 0, "t1", "a"),
 		addMsg(o, "m1", 1, "t1", "b"),
 		addMsg(o, "m2", 2, "t1", "c"),
@@ -971,7 +939,7 @@ func TestOnMessage_RescoredFilterInvariant(t *testing.T) {
 	}
 	q := addMsg(o, "q", 5, "t1", "q")
 
-	edges, _, err := e.OnMessage(context.Background(), q, priors)
+	edges, _, err := e.selectViaFixture(context.Background(), q, priors)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -982,7 +950,7 @@ func TestOnMessage_RescoredFilterInvariant(t *testing.T) {
 	}
 }
 
-func TestOnMessage_CachedScoresCountAsRescored(t *testing.T) {
+func TestSelectPrereqs_CachedScoresCountAsRescored(t *testing.T) {
 	// A prior with a cached score counts as "rescored" for batch
 	// aggregation — no fresh Rerank call needed, but it still enters
 	// candidates and batch stats. Verifies the aggregation path
@@ -1005,7 +973,7 @@ func TestOnMessage_CachedScoresCountAsRescored(t *testing.T) {
 	// see the cached value instead of calling Rerank on this pair.
 	e.scores.setLocalContext("fixture-q", 0, "m0", 0, 0.8)
 
-	_, _, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1})
+	_, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1059,72 +1027,17 @@ func (o *vectorOracle) EnsureVector(_ context.Context, ref ChunkRef) ([]float32,
 	return nil, nil
 }
 
-// DiversityRerank: real MMR using vectorOracle's stored vectors as
-// representative vectors. Mirrors the storage-backed oracle's
-// implementation so the test assertions exercise the same algorithm
-// that production runs — just against in-memory vectors instead of
-// vec0 rows.
-func (o *vectorOracle) DiversityRerank(_ context.Context, candidates []*pb.SelectedMessage, originalScores map[string]float64, lambda float64) ([]*pb.SelectedMessage, error) {
-	if len(candidates) <= 1 {
-		return candidates, nil
-	}
-	remaining := make([]*pb.SelectedMessage, len(candidates))
-	for i, s := range candidates {
-		remaining[i] = proto.Clone(s).(*pb.SelectedMessage)
-	}
-	sort.SliceStable(remaining, func(i, j int) bool {
-		return originalScores[remaining[i].MessageId] > originalScores[remaining[j].MessageId]
-	})
-	out := make([]*pb.SelectedMessage, 0, len(candidates))
-	out = append(out, remaining[0])
-	remaining = remaining[1:]
-	for len(remaining) > 0 {
-		bestIdx := -1
-		bestScore := math.Inf(-1)
-		for i, cand := range remaining {
-			candVec := o.vectors[cand.MessageId]
-			var maxSim float64
-			for _, kept := range out {
-				keptVec := o.vectors[kept.MessageId]
-				if len(candVec) == 0 || len(keptVec) == 0 {
-					continue
-				}
-				if s := testCosine(candVec, keptVec); s > maxSim {
-					maxSim = s
-				}
-			}
-			effective := lambda*originalScores[cand.MessageId] - (1.0-lambda)*maxSim
-			if effective > bestScore {
-				bestScore = effective
-				bestIdx = i
-			}
+// RepresentativeVectors: the vectorOracle's stored vectors are the
+// representatives directly — the minimal backend seam the engine's
+// MMR loop consumes.
+func (o *vectorOracle) RepresentativeVectors(_ context.Context, ids []string) (map[string][]float32, error) {
+	out := make(map[string][]float32, len(ids))
+	for _, id := range ids {
+		if v, ok := o.vectors[id]; ok {
+			out[id] = v
 		}
-		pick := remaining[bestIdx]
-		pick.EffectiveScore = float32(bestScore)
-		out = append(out, pick)
-		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
 	}
 	return out, nil
-}
-
-// testCosine is the test-side cosine similarity. Production lives at
-// service/search.cosineSim; duplicated here so the rrc package's test
-// suite can verify MMR ordering without importing service code.
-func testCosine(a, b []float32) float64 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-	var dot, normA, normB float64
-	for i := range a {
-		dot += float64(a[i]) * float64(b[i])
-		normA += float64(a[i]) * float64(a[i])
-		normB += float64(b[i]) * float64(b[i])
-	}
-	denom := math.Sqrt(normA) * math.Sqrt(normB)
-	if denom == 0 {
-		return 0
-	}
-	return dot / denom
 }
 
 // TestApplyMMR_ReordersNearDuplicates verifies the load-bearing
@@ -1135,6 +1048,7 @@ func testCosine(a, b []float32) float64 {
 // above most of them in the reordered output.
 func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.DiversityLambda = 0.7
 
 	o := newVectorOracle()
@@ -1146,7 +1060,7 @@ func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 	o.set("distinct", []float32{0, 1, 0})
 	e := NewEngine(cfg, newMockScorer(), WithChunkOracle(o))
 
-	selected := []*pb.SelectedMessage{
+	selected := []*rrcv1.SelectedMessage{
 		{MessageId: "dup1", EffectiveScore: 0.95},
 		{MessageId: "dup2", EffectiveScore: 0.94},
 		{MessageId: "dup3", EffectiveScore: 0.93},
@@ -1191,7 +1105,7 @@ func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 func TestApplyMMR_NoOracleError(t *testing.T) {
 	e := NewEngine(DefaultConfig(), newMockScorer())
 	// No SetChunkOracle call.
-	_, err := e.ApplyMMR(context.Background(), []*pb.SelectedMessage{
+	_, err := e.ApplyMMR(context.Background(), []*rrcv1.SelectedMessage{
 		{MessageId: "a", EffectiveScore: 0.5},
 		{MessageId: "b", EffectiveScore: 0.4},
 	}, 0.7)
@@ -1200,12 +1114,8 @@ func TestApplyMMR_NoOracleError(t *testing.T) {
 	}
 }
 
-// TestApplyMMR_DelegationParity asserts the oracle's DiversityRerank
-// (called directly, bypassing engine.ApplyMMR's thin wrapper)
-// produces the same ordering and effective scores as the engine
-// method for a fixed input. Pins Phase 4's "algorithmic move, not
-// change" — if a future edit drifts the oracle's algorithm from
-// what the engine used to compute in-line, this catches it.
+// TestApplyMMR_ExactScores pins the MMR arithmetic on the engine-owned
+// greedy loop (the oracle contributes only representative vectors).
 //
 // Setup: three candidates. orig[anchor]=0.95 (highest, becomes the
 // MMR anchor). vec(near)==vec(anchor) (cosine 1.0, maximum penalty).
@@ -1217,26 +1127,21 @@ func TestApplyMMR_NoOracleError(t *testing.T) {
 //
 // far beats near despite the original-score gap (0.50 < 0.90).
 // Expected ordering: [anchor, far, near].
-func TestApplyMMR_DelegationParity(t *testing.T) {
+func TestApplyMMR_ExactScores(t *testing.T) {
 	o := newVectorOracle()
 	o.set("anchor", []float32{1, 0, 0})
 	o.set("near", []float32{1, 0, 0})
 	o.set("far", []float32{0, 1, 0})
 
-	selected := []*pb.SelectedMessage{
+	selected := []*rrcv1.SelectedMessage{
 		{MessageId: "anchor", EffectiveScore: 0.95},
 		{MessageId: "near", EffectiveScore: 0.90},
 		{MessageId: "far", EffectiveScore: 0.50},
 	}
-	originalScores := map[string]float64{
-		"anchor": 0.95,
-		"near":   0.90,
-		"far":    0.50,
-	}
-
-	out, err := o.DiversityRerank(context.Background(), selected, originalScores, 0.5)
+	e := NewEngine(DefaultConfig(), newMockScorer(), WithChunkOracle(o))
+	out, err := e.ApplyMMR(context.Background(), selected, 0.5)
 	if err != nil {
-		t.Fatalf("DiversityRerank error: %v", err)
+		t.Fatalf("ApplyMMR error: %v", err)
 	}
 	if len(out) != 3 {
 		t.Fatalf("expected 3 candidates, got %d", len(out))
@@ -1271,7 +1176,7 @@ func TestApplyMMR_DelegationParity(t *testing.T) {
 // collapse to the non-MMR paths the caller already has.
 func TestApplyMMR_LambdaExtremesNoOp(t *testing.T) {
 	e := NewEngine(DefaultConfig(), newMockScorer(), WithChunkOracle(newVectorOracle()))
-	selected := []*pb.SelectedMessage{
+	selected := []*rrcv1.SelectedMessage{
 		{MessageId: "a", EffectiveScore: 0.9},
 		{MessageId: "b", EffectiveScore: 0.8},
 	}

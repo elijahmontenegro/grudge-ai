@@ -7,7 +7,10 @@ import (
 	"testing"
 )
 
-func TestLoadRejectsLegacyRadiusSetting(t *testing.T) {
+// TestLoadRejectsUnknownEngineKey pins the DisallowUnknownFields
+// contract: any key the engine schema doesn't declare is a config
+// error, not something to silently carry.
+func TestLoadRejectsUnknownEngineKey(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
 	t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
@@ -16,13 +19,13 @@ func TestLoadRejectsLegacyRadiusSetting(t *testing.T) {
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data := `{"providers":{},"permissions":{},"mcp_servers":[],"hooks":[],"preferences":{},"engine":{"radius_size":10}}`
+	data := `{"providers":{},"permissions":{},"mcp_servers":[],"hooks":[],"preferences":{},"engine":{"no_such_knob":10}}`
 	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	_, err := Load()
 	if err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("legacy radius_size must fail, got %v", err)
+		t.Fatalf("unknown engine key must fail, got %v", err)
 	}
 }
 

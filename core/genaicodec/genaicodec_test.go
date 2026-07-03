@@ -3,22 +3,23 @@ package genaicodec
 import (
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // TestRoundTrip_TextThinkingToolCallToolResult confirms proto→genai→proto
 // preserves each content block type and the fields adapters correlate on
 // (tool-call id, tool-result id, thinking flag).
 func TestRoundTrip_TextThinkingToolCallToolResult(t *testing.T) {
-	orig := &pb.LLMMessage{
-		Role: pb.Role_ROLE_ASSISTANT,
-		Content: []*pb.ContentBlock{
-			{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "hello"}}},
-			{Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: "reasoning"}}},
-			{Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallContent{
+	orig := &llmv1.LLMMessage{
+		Role: threadv1.Role_ROLE_ASSISTANT,
+		Content: []*threadv1.ContentBlock{
+			{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "hello"}}},
+			{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: "reasoning"}}},
+			{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{
 				Id: "call-1", Name: "read", Arguments: `{"path":"x"}`,
 			}}},
-			{Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultContent{
+			{Block: &threadv1.ContentBlock_ToolResult{ToolResult: &threadv1.ToolResultContent{
 				ToolCallId: "call-1", Content: `{"answers":{"a":"b"}}`,
 			}}},
 		},
@@ -26,7 +27,7 @@ func TestRoundTrip_TextThinkingToolCallToolResult(t *testing.T) {
 
 	got := ContentToProto(ProtoToContent(orig))
 
-	if got.Role != pb.Role_ROLE_ASSISTANT {
+	if got.Role != threadv1.Role_ROLE_ASSISTANT {
 		t.Fatalf("role not preserved: %v", got.Role)
 	}
 	if len(got.Content) != 4 {
@@ -56,13 +57,13 @@ func TestRoundTrip_TextThinkingToolCallToolResult(t *testing.T) {
 // system role → carried as "user"; the SDK-side system instruction is
 // separate).
 func TestRoleMapping(t *testing.T) {
-	if RoleToGenai(pb.Role_ROLE_SYSTEM) != "user" {
+	if RoleToGenai(threadv1.Role_ROLE_SYSTEM) != "user" {
 		t.Fatal("system should map to user carrier for genai")
 	}
-	if RoleToGenai(pb.Role_ROLE_ASSISTANT) != "model" {
+	if RoleToGenai(threadv1.Role_ROLE_ASSISTANT) != "model" {
 		t.Fatal("assistant should map to model")
 	}
-	if RoleToProto("model") != pb.Role_ROLE_ASSISTANT {
+	if RoleToProto("model") != threadv1.Role_ROLE_ASSISTANT {
 		t.Fatal("model should map to assistant")
 	}
 }

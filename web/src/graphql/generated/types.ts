@@ -86,7 +86,6 @@ export type Edge = {
   fromMessageId: Scalars['ID']['output'];
   score: Scalars['Float']['output'];
   source: Scalars['String']['output'];
-  temporalProximity: Scalars['Float']['output'];
   toMessageId: Scalars['ID']['output'];
 };
 
@@ -380,7 +379,6 @@ export type SelectedMessage = {
   effectiveScore: Scalars['Float']['output'];
   hopDepth: Scalars['Int']['output'];
   messageId: Scalars['ID']['output'];
-  temporalProximity: Scalars['Float']['output'];
   threadId: Scalars['ID']['output'];
 };
 

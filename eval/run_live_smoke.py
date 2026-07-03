@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import requests
 
-PAIRS_FILE = Path(__file__).parent / "pairs.json"
+PAIRS_FILE = Path(__file__).parent.parent / "rrc" / "calibrate" / "seed" / "pairs.json"
 TEI_URL = "http://localhost:8080"
 VLLM_URL = "http://localhost:8000"
 RERANK_TOP_K = 64

@@ -1,7 +1,6 @@
 package core
 
 import (
-	"encoding/json"
 	"fmt"
 )
 
@@ -70,25 +69,4 @@ func NewProvider(cfg ProviderConfig) (any, error) {
 			ErrUnsupported, cfg.Adapter)
 	}
 	return factory(cfg)
-}
-
-// NewProviderFromJSON decodes raw JSON into ProviderConfig and
-// invokes NewProvider. Convenience for callers that read provider
-// config from settings files or HTTP requests.
-func NewProviderFromJSON(raw json.RawMessage) (any, error) {
-	var cfg ProviderConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, fmt.Errorf("core.NewProviderFromJSON: %w", err)
-	}
-	return NewProvider(cfg)
-}
-
-// RegisteredProviders returns the names of all registered adapters.
-// Used by settings UIs to enumerate options.
-func RegisteredProviders() []string {
-	out := make([]string, 0, len(providerRegistry))
-	for name := range providerRegistry {
-		out = append(out, name)
-	}
-	return out
 }

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/elijahmontenegro/grudge/service/internal/adoc"
+	"github.com/elijahmontenegro/grudge/adoc"
 )
 
 // Templates are baked into the binary. The composition root
@@ -31,7 +31,7 @@ type Assembler struct {
 type TemplateData struct {
 	UserName    string
 	ThreadName  string
-	Sandboxed   bool     // true when Bash + file tools run inside the Docker workspace
+	Sandboxed   bool // true when Bash + file tools run inside the Docker workspace
 	WorkingDirs []string
 	AgentsMD    []string // contents of AGENTS.md files from mounted dirs
 	PlanContent string   // compiled plan content (per-turn)

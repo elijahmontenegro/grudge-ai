@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // SpawnSubagent creates an ephemeral thread fork for a subtask.
@@ -23,7 +23,7 @@ func (r *Runner) SpawnSubagent(ctx context.Context, task string, forkThreadID st
 		return nil, fmt.Errorf("create fork runner: %w", err)
 	}
 
-	if _, err := fork.SendMessage(ctx, task, pb.SelectionScope_SELECTION_SCOPE_THREAD); err != nil {
+	if _, err := fork.SendMessage(ctx, task, threadv1.SelectionScope_SELECTION_SCOPE_THREAD); err != nil {
 		return nil, fmt.Errorf("subagent first message: %w", err)
 	}
 
@@ -36,4 +36,3 @@ func (r *Runner) SpawnSubagent(ctx context.Context, task string, forkThreadID st
 func (r *Runner) MergeSubagent(fork *Runner) error {
 	return r.engine.Merge(fork.engine)
 }
-

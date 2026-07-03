@@ -1,7 +1,8 @@
 package rrc
 
 import (
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -46,7 +47,7 @@ type Contributor struct {
 // cross-encoder edge for the same pair). Self-edges (contributor == anchor)
 // and empty ids are skipped. Callers hold no lock; RecordProvenance takes
 // the engine mutex like the other DAG mutators.
-func (e *Engine) RecordProvenance(anchor *pb.Message, contributors []Contributor) []*pb.Edge {
+func (e *Engine) RecordProvenance(anchor *threadv1.Message, contributors []Contributor) []*rrcv1.Edge {
 	if anchor == nil || len(contributors) == 0 {
 		return nil
 	}
@@ -54,25 +55,47 @@ func (e *Engine) RecordProvenance(anchor *pb.Message, contributors []Contributor
 	defer e.mu.Unlock()
 
 	seen := make(map[string]bool, len(contributors))
-	var edges []*pb.Edge
+	var edges []*rrcv1.Edge
 	for _, c := range contributors {
 		if c.MessageID == "" || c.MessageID == anchor.Id || seen[c.MessageID] {
 			continue
 		}
 		seen[c.MessageID] = true
-		edge := &pb.Edge{
+		edge := &rrcv1.Edge{
 			FromMessageId: c.MessageID,
 			ToMessageId:   anchor.Id,
 			Score:         float32(c.Weight),
-			Source:        pb.EdgeSource_EDGE_SOURCE_PROVENANCE,
+			Source:        rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE,
 			DetectedAt:    timestamppb.Now(),
 			FromThreadId:  c.ThreadID,
 			ToThreadId:    anchor.ThreadId,
 		}
-		e.dag.AddEdge(edge)
+		if !e.admitEdge(edge) {
+			continue
+		}
 		edges = append(edges, edge)
 	}
 	return edges
+}
+
+// AddEdges admits externally constructed edges into the live DAG under
+// the engine mutex — the runtime counterpart of the construction-time
+// WithLoadedEdges. Each edge passes through the edge filter (when
+// installed); the returned slice holds the edges actually admitted.
+func (e *Engine) AddEdges(edges []*rrcv1.Edge) []*rrcv1.Edge {
+	if len(edges) == 0 {
+		return nil
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	admitted := make([]*rrcv1.Edge, 0, len(edges))
+	for _, edge := range edges {
+		if edge == nil || !e.admitEdge(edge) {
+			continue
+		}
+		admitted = append(admitted, edge)
+	}
+	return admitted
 }
 
 // provenanceReach walks provenance edges backward from the active-discourse
@@ -103,7 +126,7 @@ func (e *Engine) RecordProvenance(anchor *pb.Message, contributors []Contributor
 // only caller), provenanceReach does NOT take e.mu — it runs under the lock
 // Assemble already holds around SelectPrerequisites. Taking e.mu here would
 // self-deadlock against that outer lock.
-func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope pb.SelectionScope) (map[string]float64, bool) {
+func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, bool) {
 	cone := make(map[string]bool, len(coneIDs))
 	for _, id := range coneIDs {
 		cone[id] = true
@@ -119,7 +142,7 @@ func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope pb
 	var frontier []reachItem
 	for _, id := range coneIDs {
 		for _, edge := range e.dag.Prerequisites(id) {
-			if edge.Source != pb.EdgeSource_EDGE_SOURCE_PROVENANCE {
+			if edge.Source != rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 				continue
 			}
 			if !scopeAllows(edge, coneThreadID, scope) {
@@ -154,7 +177,7 @@ func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope pb
 			break
 		}
 		for _, edge := range e.dag.Prerequisites(item.id) {
-			if edge.Source != pb.EdgeSource_EDGE_SOURCE_PROVENANCE {
+			if edge.Source != rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 				continue
 			}
 			if !scopeAllows(edge, coneThreadID, scope) {

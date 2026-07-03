@@ -2,13 +2,13 @@ package substrate
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 	"github.com/elijahmontenegro/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/storage"
 )
 
@@ -44,8 +44,7 @@ func init() {
 // TestHolder_SelfCalibratesInBackground is the self-service guarantee: a
 // substrate booted with a scorer but no fitted calibrator fits one from the
 // embedded seed set in the background, persists it, and live-swaps it in —
-// zero user action. This is the runtime path; cmd/calibrate is only the dev
-// tool.
+// zero user action.
 func TestHolder_SelfCalibratesInBackground(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := &config.Config{
@@ -62,7 +61,7 @@ func TestHolder_SelfCalibratesInBackground(t *testing.T) {
 	}
 	defer db.Close()
 
-	h := NewHolder(cfg, db, nil)
+	h := NewHolder(cfg, db, holderTestEstimator{}, nil)
 	if err := h.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -83,7 +82,7 @@ func TestHolder_SelfCalibratesInBackground(t *testing.T) {
 	}
 
 	// The artifact exists and is bound to this scorer.
-	calPath := filepath.Join(dataDir, CalibratorFilename)
+	calPath := datadir.CalibratorPath(dataDir)
 	cal, ok, err := calibrate.Load(calPath, "fake-reranker-1")
 	if err != nil || !ok {
 		t.Fatalf("persisted artifact not loadable for scorer: ok=%v err=%v", ok, err)
@@ -146,7 +145,7 @@ func TestHolder_RestartLoadsFitDoesNotRefit(t *testing.T) {
 	defer db.Close()
 
 	// First boot: wait for the background fit.
-	h1 := NewHolder(cfg, db, nil)
+	h1 := NewHolder(cfg, db, holderTestEstimator{}, nil)
 	if err := h1.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap 1: %v", err)
 	}
@@ -160,7 +159,7 @@ func TestHolder_RestartLoadsFitDoesNotRefit(t *testing.T) {
 
 	// Second boot (fresh holder, same data dir): fitted immediately at
 	// Bootstrap — no background window on the bootstrap calibrator.
-	h2 := NewHolder(cfg, db, nil)
+	h2 := NewHolder(cfg, db, holderTestEstimator{}, nil)
 	if err := h2.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap 2: %v", err)
 	}
@@ -180,12 +179,18 @@ func TestHolder_NoScorerNoCalibration(t *testing.T) {
 	}
 	defer db.Close()
 
-	h := NewHolder(cfg, db, nil)
+	h := NewHolder(cfg, db, holderTestEstimator{}, nil)
 	if err := h.Bootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
-	if _, ok, _ := calibrate.Load(filepath.Join(dataDir, CalibratorFilename), ""); ok {
+	if _, ok, _ := calibrate.Load(datadir.CalibratorPath(dataDir), ""); ok {
 		t.Fatal("no scorer configured: no calibrator artifact should be produced")
 	}
 }
+
+// holderTestEstimator: the token estimator is a Holder construction
+// dependency (it lands on every built engine's chunk.Config).
+type holderTestEstimator struct{}
+
+func (holderTestEstimator) Estimate(s string) int { return len(s)/4 + 1 }

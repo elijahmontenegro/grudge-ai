@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
 
@@ -13,23 +13,22 @@ type testEstimator struct{}
 func (testEstimator) Estimate(s string) int { return len(s)/4 + 1 }
 
 func TestChunksForIndexesEveryMessageShape(t *testing.T) {
-	chunk.SetDefaultEstimator(testEstimator{})
 	tests := []struct {
 		name    string
-		message *pb.Message
+		message *threadv1.Message
 		want    string
 	}{
 		{
 			name:    "empty",
-			message: &pb.Message{Id: "empty", Role: pb.Role_ROLE_ASSISTANT},
+			message: &threadv1.Message{Id: "empty", Role: threadv1.Role_ROLE_ASSISTANT},
 			want:    "role=assistant",
 		},
 		{
 			name: "image",
-			message: &pb.Message{
-				Id: "image", Role: pb.Role_ROLE_USER,
-				Content: []*pb.ContentBlock{{
-					Block: &pb.ContentBlock_Image{Image: &pb.ImageContent{
+			message: &threadv1.Message{
+				Id: "image", Role: threadv1.Role_ROLE_USER,
+				Content: []*threadv1.ContentBlock{{
+					Block: &threadv1.ContentBlock_Image{Image: &threadv1.ImageContent{
 						MediaType: "image/png", Data: []byte{1, 2, 3},
 					}},
 				}},
@@ -38,10 +37,10 @@ func TestChunksForIndexesEveryMessageShape(t *testing.T) {
 		},
 		{
 			name: "tool result",
-			message: &pb.Message{
-				Id: "result", Role: pb.Role_ROLE_USER,
-				Content: []*pb.ContentBlock{{
-					Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultContent{
+			message: &threadv1.Message{
+				Id: "result", Role: threadv1.Role_ROLE_USER,
+				Content: []*threadv1.ContentBlock{{
+					Block: &threadv1.ContentBlock_ToolResult{ToolResult: &threadv1.ToolResultContent{
 						ToolCallId: "call-1", Content: "done",
 					}},
 				}},
@@ -52,7 +51,7 @@ func TestChunksForIndexesEveryMessageShape(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			chunks := chunksFor(test.message, chunk.DefaultConfig())
+			chunks := chunksFor(test.message, chunk.Config{MaxChars: 2000, OverlapChars: 200, Estimator: testEstimator{}})
 			if len(chunks) == 0 {
 				t.Fatal("message was not indexed")
 			}

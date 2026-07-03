@@ -8,8 +8,8 @@ import (
 	"net/http"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/core/httpc"
 	"github.com/elijahmontenegro/grudge/core/httpc/retry"
-	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 )
 
 // Config for the TEI (Hugging Face Text Embeddings Inference) provider.

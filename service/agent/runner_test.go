@@ -7,9 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc/chunk"
-	"github.com/elijahmontenegro/grudge/rrc/tiktoken"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/service/storage"
 
 	"google.golang.org/adk/model"
@@ -18,15 +16,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func init() {
-	// chunk.Split is called from storage.InsertMessage; the
-	// estimator must be installed before any test exercises that path.
-	est, err := tiktoken.New()
-	if err != nil {
-		panic("runner_test: tiktoken.New: " + err.Error())
-	}
-	chunk.SetDefaultEstimator(est)
-}
+// runnerTestEstimator: the estimator lives on chunk.Config now; the
+// runner tests thread it through the engine configs they build.
+type runnerTestEstimator struct{}
+
+func (runnerTestEstimator) Estimate(s string) int { return len(s)/4 + 1 }
 
 // --- Test runner + event fixtures ---
 
@@ -41,7 +35,7 @@ func newTestRunner(t *testing.T, threadID string) *Runner {
 		t.Fatalf("storage.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := db.CreateThread(&pb.Thread{
+	if err := db.CreateThread(&threadv1.Thread{
 		Id: threadID, Name: "test", CreatedAt: timestamppb.Now(),
 	}); err != nil {
 		t.Fatalf("CreateThread: %v", err)
@@ -118,7 +112,7 @@ func textEvent(text string, thought bool) *session.Event {
 
 // corpusOf returns the stored corpus for the runner's thread. Helper
 // shared by tests that check message ordering and dedup.
-func corpusOf(t *testing.T, r *Runner) []*pb.Message {
+func corpusOf(t *testing.T, r *Runner) []*threadv1.Message {
 	t.Helper()
 	msgs, err := r.db.ThreadCorpus(r.threadID)
 	if err != nil {

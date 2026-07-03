@@ -1,36 +1,37 @@
 // Package genaicodec maps between the google.golang.org/genai SDK content
 // types and grudge's proto content model. It is shared by every adapter that
-// speaks the genai SDK (the Vertex adapter) and by the service-side ADK
-// bridge, so the Content/Part <-> pb.LLMMessage translation lives in exactly
-// one place rather than being copied per consumer.
+// speaks the genai SDK (the Vertex adapter) and by the ADK bridge
+// (adkbridge), so the Content/Part <-> llmv1.LLMMessage translation lives in
+// exactly one place rather than being copied per consumer.
 //
-// It is public (not core/internal) because service/agent/internal/adk sits
-// outside core's internal boundary and must import it. It depends only on the
-// generated proto types and the genai SDK — no service, storage, or engine
+// It is public (not core/internal) because adkbridge sits outside core's
+// internal boundary and must import it. It depends only on the generated
+// proto types and the genai SDK — no service, storage, or engine
 // dependency — so it is unit-testable in isolation.
 package genaicodec
 
 import (
 	"encoding/json"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/genai"
 )
 
 // ContentToProto converts a single genai.Content to a proto LLMMessage.
-func ContentToProto(c *genai.Content) *pb.LLMMessage {
-	msg := &pb.LLMMessage{
+func ContentToProto(c *genai.Content) *llmv1.LLMMessage {
+	msg := &llmv1.LLMMessage{
 		Role: RoleToProto(c.Role),
 	}
 	for _, p := range c.Parts {
 		if p.Text != "" {
 			if p.Thought {
-				msg.Content = append(msg.Content, &pb.ContentBlock{
-					Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: p.Text}},
+				msg.Content = append(msg.Content, &threadv1.ContentBlock{
+					Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: p.Text}},
 				})
 			} else {
-				msg.Content = append(msg.Content, &pb.ContentBlock{
-					Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: p.Text}},
+				msg.Content = append(msg.Content, &threadv1.ContentBlock{
+					Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: p.Text}},
 				})
 			}
 		}
@@ -41,8 +42,8 @@ func ContentToProto(c *genai.Content) *pb.LLMMessage {
 					argsJSON = string(b)
 				}
 			}
-			msg.Content = append(msg.Content, &pb.ContentBlock{
-				Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallContent{
+			msg.Content = append(msg.Content, &threadv1.ContentBlock{
+				Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{
 					Id:        p.FunctionCall.ID,
 					Name:      p.FunctionCall.Name,
 					Arguments: argsJSON,
@@ -65,8 +66,8 @@ func ContentToProto(c *genai.Content) *pb.LLMMessage {
 					respText = string(b)
 				}
 			}
-			msg.Content = append(msg.Content, &pb.ContentBlock{
-				Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultContent{
+			msg.Content = append(msg.Content, &threadv1.ContentBlock{
+				Block: &threadv1.ContentBlock_ToolResult{ToolResult: &threadv1.ToolResultContent{
 					ToolCallId: p.FunctionResponse.ID,
 					Content:    respText,
 				}},
@@ -77,17 +78,17 @@ func ContentToProto(c *genai.Content) *pb.LLMMessage {
 }
 
 // ProtoToContent converts a proto LLMMessage to a genai.Content.
-func ProtoToContent(msg *pb.LLMMessage) *genai.Content {
+func ProtoToContent(msg *llmv1.LLMMessage) *genai.Content {
 	c := &genai.Content{
 		Role: RoleToGenai(msg.Role),
 	}
 	for _, b := range msg.Content {
 		switch v := b.Block.(type) {
-		case *pb.ContentBlock_Text:
+		case *threadv1.ContentBlock_Text:
 			c.Parts = append(c.Parts, &genai.Part{Text: v.Text.Text})
-		case *pb.ContentBlock_Thinking:
+		case *threadv1.ContentBlock_Thinking:
 			c.Parts = append(c.Parts, &genai.Part{Text: v.Thinking.Text, Thought: true})
-		case *pb.ContentBlock_ToolCall:
+		case *threadv1.ContentBlock_ToolCall:
 			var args map[string]any
 			if v.ToolCall.Arguments != "" {
 				json.Unmarshal([]byte(v.ToolCall.Arguments), &args)
@@ -99,7 +100,7 @@ func ProtoToContent(msg *pb.LLMMessage) *genai.Content {
 					Args: args,
 				},
 			})
-		case *pb.ContentBlock_ToolResult:
+		case *threadv1.ContentBlock_ToolResult:
 			// Re-hydrate the stored JSON back into a map so the model
 			// sees the original tool schema (e.g. `{answers: {...}}`
 			// for AskUserQuestion), not a synthetic `{result: ""}`.
@@ -125,30 +126,30 @@ func ProtoToContent(msg *pb.LLMMessage) *genai.Content {
 }
 
 // ExtractThinking returns the thinking blocks from a genai Content.
-func ExtractThinking(c *genai.Content) []*pb.ThinkingContent {
-	var thinking []*pb.ThinkingContent
+func ExtractThinking(c *genai.Content) []*threadv1.ThinkingContent {
+	var thinking []*threadv1.ThinkingContent
 	if c == nil {
 		return thinking
 	}
 	for _, p := range c.Parts {
 		if p.Thought && p.Text != "" {
-			thinking = append(thinking, &pb.ThinkingContent{Text: p.Text})
+			thinking = append(thinking, &threadv1.ThinkingContent{Text: p.Text})
 		}
 	}
 	return thinking
 }
 
 // RoleToProto maps a genai role string to the proto Role enum.
-func RoleToProto(role string) pb.Role {
+func RoleToProto(role string) threadv1.Role {
 	switch role {
 	case "user":
-		return pb.Role_ROLE_USER
+		return threadv1.Role_ROLE_USER
 	case "model":
-		return pb.Role_ROLE_ASSISTANT
+		return threadv1.Role_ROLE_ASSISTANT
 	case "system":
-		return pb.Role_ROLE_SYSTEM
+		return threadv1.Role_ROLE_SYSTEM
 	default:
-		return pb.Role_ROLE_USER
+		return threadv1.Role_ROLE_USER
 	}
 }
 
@@ -156,13 +157,13 @@ func RoleToProto(role string) pb.Role {
 // "system" role — the system instruction travels via
 // GenerateContentConfig.SystemInstruction, not a content role — so SYSTEM
 // maps to "user" as a carrier.
-func RoleToGenai(role pb.Role) string {
+func RoleToGenai(role threadv1.Role) string {
 	switch role {
-	case pb.Role_ROLE_USER:
+	case threadv1.Role_ROLE_USER:
 		return "user"
-	case pb.Role_ROLE_ASSISTANT:
+	case threadv1.Role_ROLE_ASSISTANT:
 		return "model"
-	case pb.Role_ROLE_SYSTEM:
+	case threadv1.Role_ROLE_SYSTEM:
 		return "user"
 	default:
 		return "user"

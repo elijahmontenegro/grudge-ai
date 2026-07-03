@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/service/hooks"
+	"github.com/elijahmontenegro/grudge/service/mcp"
 	"github.com/elijahmontenegro/grudge/service/secrets"
 )
 
@@ -18,15 +21,19 @@ import (
 type Settings struct {
 	Providers   map[string]ProviderConfig `json:"providers"`
 	Permissions map[string]string         `json:"permissions"`
-	MCPServers  []MCPServer               `json:"mcp_servers"`
-	Hooks       []HookConfig              `json:"hooks"`
+	MCPServers  []mcp.ServerConfig        `json:"mcp_servers"`
+	Hooks       []hooks.HookConfig        `json:"hooks"`
 	Preferences map[string]string         `json:"preferences"`
 	Engine      EngineConfig              `json:"engine"`
 }
 
-// EngineConfig holds live-tunable RRC engine parameters. Mirrors
-// rrc.EngineConfig but lives in the config package to avoid a
-// service→rrc cycle at settings-serialization time. Zero-value
+// EngineConfig is the explicit settings wire schema for the RRC
+// engine's live-tunable knobs. It deliberately mirrors the tunable
+// subset of rrc.EngineConfig rather than serializing it directly: the
+// wire contract (required keys, DisallowUnknownFields, validation)
+// lives here, and construction-time fields on the rrc side (Calibrator,
+// Chunk.Estimator) never leak into the settings file. ApplyTo /
+// EngineConfigFromRRC are the only conversion points. Zero-value
 // Engine means "use the rrc default" — handled at the service
 // boundary.
 type EngineConfig struct {
@@ -35,15 +42,6 @@ type EngineConfig struct {
 	// clears LossRatio (plus the budget's marginal token price). This is
 	// the knob that actually gates edge formation and DAG traversal.
 	LossRatio float64 `json:"loss_ratio"`
-
-	// EdgeThreshold, ScoreFloor, ZScoreThreshold are DEPRECATED: retained
-	// so existing settings files still parse and so telemetry keeps
-	// reporting them, but they no longer gate anything (A4 replaced the
-	// flat cutoffs with calibrated expected value). Setting them has no
-	// effect on selection; tune LossRatio instead.
-	EdgeThreshold   float64 `json:"edge_threshold"`
-	ScoreFloor      float64 `json:"score_floor"`
-	ZScoreThreshold float64 `json:"z_score_threshold"`
 
 	MinBatchStdDev        float64 `json:"min_batch_stddev"`
 	LocalContextSize      int     `json:"local_context_size"`
@@ -66,13 +64,9 @@ func (e *EngineConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	// Only LIVE knobs are required. The deprecated threshold keys
-	// (edge_threshold, score_floor, z_score_threshold) are tolerated when
-	// present — old config files carry them and DisallowUnknownFields
-	// would otherwise reject those files — but never demanded: requiring
-	// dead keys forces every client to ship corpses forever. loss_ratio is
-	// likewise optional (absent = keep the default stance) so pre-A4
-	// config files still parse.
+	// loss_ratio is optional (absent = keep the default stance); every
+	// other live knob is required — a partial engine config is a config
+	// error, not a request for defaults.
 	required := []string{
 		"min_batch_stddev", "local_context_size", "rerank_top_k",
 		"context_budget_tokens", "diversity_lambda",
@@ -87,10 +81,42 @@ func (e *EngineConfig) UnmarshalJSON(data []byte) error {
 	return e.Validate()
 }
 
+// ApplyTo copies this settings snapshot's live knobs onto base
+// (typically rrc.DefaultConfig() or the currently-live engine config)
+// and returns it. LossRatio 0 means "unset — keep base's stance".
+// The single conversion point from settings to engine config.
+func (e EngineConfig) ApplyTo(base rrc.EngineConfig) rrc.EngineConfig {
+	if e.LossRatio > 0 {
+		base.LossRatio = e.LossRatio
+	}
+	base.MinBatchStdDev = e.MinBatchStdDev
+	base.LocalContextSize = e.LocalContextSize
+	base.RerankTopK = e.RerankTopK
+	base.ContextBudgetTokens = e.ContextBudgetTokens
+	base.DiversityLambda = e.DiversityLambda
+	base.BudgetHeadroomPct = e.BudgetHeadroomPct
+	base.PerMsgDelimiterTokens = e.PerMsgDelimiterTokens
+	return base
+}
+
+// EngineConfigFromRRC captures the live engine config's tunable knobs
+// as a settings snapshot. The single conversion point from engine
+// config to settings.
+func EngineConfigFromRRC(ec rrc.EngineConfig) EngineConfig {
+	return EngineConfig{
+		LossRatio:             ec.LossRatio,
+		MinBatchStdDev:        ec.MinBatchStdDev,
+		LocalContextSize:      ec.LocalContextSize,
+		RerankTopK:            ec.RerankTopK,
+		ContextBudgetTokens:   ec.ContextBudgetTokens,
+		DiversityLambda:       ec.DiversityLambda,
+		BudgetHeadroomPct:     ec.BudgetHeadroomPct,
+		PerMsgDelimiterTokens: ec.PerMsgDelimiterTokens,
+	}
+}
+
 func (e EngineConfig) Validate() error {
-	if e.EdgeThreshold < 0 ||
-		e.ScoreFloor < 0 ||
-		e.ZScoreThreshold < 0 || e.MinBatchStdDev < 0 ||
+	if e.MinBatchStdDev < 0 ||
 		e.LocalContextSize <= 0 || e.RerankTopK <= 0 ||
 		e.ContextBudgetTokens < 0 ||
 		e.DiversityLambda < 0 || e.DiversityLambda > 1 ||
@@ -147,21 +173,6 @@ func (p ProviderConfig) ToCore() core.ProviderConfig {
 		APIKey:  apiKey,
 		Options: p.Options,
 	}
-}
-
-// MCPServer configures an MCP endpoint.
-type MCPServer struct {
-	Name     string `json:"name"`
-	Endpoint string `json:"endpoint"`
-	Enabled  bool   `json:"enabled"`
-}
-
-// HookConfig defines a lifecycle event hook.
-type HookConfig struct {
-	Event   string `json:"event"`
-	Command string `json:"command"`
-	Match   string `json:"match"`
-	Timeout string `json:"timeout"`
 }
 
 // Paths holds resolved XDG base directories.
@@ -239,9 +250,6 @@ func defaultSettings() Settings {
 		},
 		Preferences: make(map[string]string),
 		Engine: EngineConfig{
-			EdgeThreshold:         0.60,
-			ScoreFloor:            0.3,
-			ZScoreThreshold:       0,
 			MinBatchStdDev:        0.05,
 			LocalContextSize:      10,
 			RerankTopK:            64,

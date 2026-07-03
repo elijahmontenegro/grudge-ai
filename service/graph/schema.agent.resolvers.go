@@ -13,8 +13,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
+	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -60,10 +61,10 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 		if err != nil {
 			return false, fmt.Errorf("load corpus: %w", err)
 		}
-		msg := &v1.Message{
+		msg := &threadv1.Message{
 			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-			Role:      v1.Role_ROLE_USER,
-			Content:   rrc.BlocksFromText(*correction),
+			Role:      threadv1.Role_ROLE_USER,
+			Content:   pbtext.BlocksFromText(*correction),
 			Position:  int64(len(corpus)),
 			ThreadId:  threadID,
 			CreatedAt: timestamppb.Now(),
@@ -305,7 +306,7 @@ func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feed
 // re-renders with the edited version. The model will see the new content on
 // its next FileRead of plan.adoc.
 func (r *mutationResolver) UpdatePlanSource(ctx context.Context, threadID string, content string) (bool, error) {
-	planDir, err := storage.PlanDirForThread(r.cfg.DataDir, threadID)
+	planDir, err := datadir.PlanDirForThread(r.cfg.DataDir, threadID)
 	if err != nil {
 		return false, err
 	}

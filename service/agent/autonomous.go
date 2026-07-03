@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // AutonomousState tracks the state of an autonomous run for a thread.
@@ -86,12 +86,12 @@ func (a *AutonomousState) waitIfPaused(ctx context.Context) error {
 // user decides: resume (with optional correction) or stop. This matches
 // how the same class of failure is handled in normal (non-autonomous)
 // sends — spec calls for symmetric error handling.
-func (r *Runner) RunAutonomous(ctx context.Context, prompt string, duration time.Duration, attachments ...*pb.AttachmentContent) error {
+func (r *Runner) RunAutonomous(ctx context.Context, prompt string, duration time.Duration, attachments ...*threadv1.AttachmentContent) error {
 	r.mu.Lock()
 	r.autoState = newAutonomousState()
 	r.mu.Unlock()
 
-	if _, err := r.SendMessage(ctx, prompt, pb.SelectionScope_SELECTION_SCOPE_THREAD, attachments...); err != nil {
+	if _, err := r.SendMessage(ctx, prompt, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, attachments...); err != nil {
 		// Kickoff error: if a handler is wired, pause and surface; otherwise
 		// the loop can't start so return as before.
 		if r.OnAutonomousError != nil {
@@ -147,7 +147,7 @@ func (r *Runner) RunAutonomous(ctx context.Context, prompt string, duration time
 			// before the loop increments it, producing an off-by-one in
 			// every autonomous trace row.
 			r.SetTickRound(round + 1)
-			if _, err := r.SendMessage(ctx, "", pb.SelectionScope_SELECTION_SCOPE_THREAD); err != nil {
+			if _, err := r.SendMessage(ctx, "", threadv1.SelectionScope_SELECTION_SCOPE_THREAD); err != nil {
 				if errors.Is(err, ErrNoResponse) {
 					// Per ErrNoResponse's contract (runner.go:455-461):
 					// in autonomous mode a zero-events turn is a no-op

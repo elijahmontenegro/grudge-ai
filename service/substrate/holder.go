@@ -4,17 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
-	"github.com/elijahmontenegro/grudge/eval"
 	"github.com/elijahmontenegro/grudge/rrc"
-	"github.com/elijahmontenegro/grudge/rrc/calibrate"
+	"github.com/elijahmontenegro/grudge/rrc/calibrate/seed"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate/seedfit"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/search"
 	"github.com/elijahmontenegro/grudge/service/storage"
 )
@@ -30,9 +30,10 @@ import (
 // runners.StopAll so existing runners (which captured the old engine
 // pointer at construction) get rebuilt on the next request.
 type Holder struct {
-	cfg      *config.Config
-	db       *storage.DB
-	onReload func()
+	cfg       *config.Config
+	db        *storage.DB
+	estimator chunk.TokenEstimator
+	onReload  func()
 
 	current atomic.Pointer[Substrate]
 	embeds  atomic.Pointer[search.EmbedQueue]
@@ -47,10 +48,12 @@ type Holder struct {
 // NewHolder constructs an empty Holder. Bootstrap must be called
 // before any read of Engine / EmbedQueue / Main / Scorer / Searcher.
 //
-// onReload is invoked after each successful ReloadProviders /
+// estimator is the token estimator every substrate this holder builds
+// runs on (chunking, budget sizing) — a construction dependency, not a
+// setting. onReload is invoked after each successful ReloadProviders /
 // UpdateEngineConfig swap; pass nil if you don't need the hook.
-func NewHolder(cfg *config.Config, db *storage.DB, onReload func()) *Holder {
-	return &Holder{cfg: cfg, db: db, onReload: onReload}
+func NewHolder(cfg *config.Config, db *storage.DB, estimator chunk.TokenEstimator, onReload func()) *Holder {
+	return &Holder{cfg: cfg, db: db, estimator: estimator, onReload: onReload}
 }
 
 // Bootstrap builds the initial Substrate from cfg + db and stores
@@ -140,8 +143,8 @@ func (h *Holder) ReloadProviders(ctx context.Context, opts ...Option) error {
 
 // UpdateEngineConfig swaps in a fresh engine that reuses the current
 // providers but with a different EngineConfig. Path for settings-
-// only edits that don't touch provider URLs / models (threshold
-// tweak, MMR lambda, Local Context size).
+// only edits that don't touch provider URLs / models (loss-ratio
+// stance, MMR lambda, Local Context size).
 //
 // Same swap semantics as ReloadProviders: writes the new config into
 // cfg.Settings.Engine, rebuilds the substrate, atomic stores the
@@ -153,19 +156,7 @@ func (h *Holder) UpdateEngineConfig(ctx context.Context, ec rrc.EngineConfig, op
 	defer h.mu.Unlock()
 
 	old := h.cfg.Settings.Engine
-	h.cfg.Settings.Engine = config.EngineConfig{
-		LossRatio:             ec.LossRatio,
-		EdgeThreshold:         ec.EdgeThreshold,
-		ScoreFloor:            ec.ScoreFloor,
-		ZScoreThreshold:       ec.ZScoreThreshold,
-		MinBatchStdDev:        ec.MinBatchStdDev,
-		LocalContextSize:      ec.LocalContextSize,
-		RerankTopK:            ec.RerankTopK,
-		ContextBudgetTokens:   ec.ContextBudgetTokens,
-		DiversityLambda:       ec.DiversityLambda,
-		BudgetHeadroomPct:     ec.BudgetHeadroomPct,
-		PerMsgDelimiterTokens: ec.PerMsgDelimiterTokens,
-	}
+	h.cfg.Settings.Engine = config.EngineConfigFromRRC(ec)
 	if err := h.buildAndSwap(ctx, opts...); err != nil {
 		h.cfg.Settings.Engine = old
 		return err
@@ -177,7 +168,7 @@ func (h *Holder) UpdateEngineConfig(ctx context.Context, ec rrc.EngineConfig, op
 // On success: stores the new Substrate atomically, rotates the
 // embed queue, fires onReload. On error: leaves prior state intact.
 func (h *Holder) buildAndSwap(ctx context.Context, opts ...Option) error {
-	subs, err := Build(ctx, h.cfg, h.db, opts...)
+	subs, err := Build(ctx, h.cfg, h.db, append([]Option{WithTokenEstimator(h.estimator)}, opts...)...)
 	if err != nil {
 		return fmt.Errorf("rebuild substrate: %w", err)
 	}
@@ -228,7 +219,7 @@ func (h *Holder) maybeCalibrate(subs *Substrate) {
 
 	scorer := subs.Scorer
 	scorerModelID := subs.RerankerModelID
-	calPath := filepath.Join(h.cfg.DataDir, CalibratorFilename)
+	calPath := datadir.CalibratorPath(h.cfg.DataDir)
 	// The seed set carries no mass signal, so the fit carries the current
 	// (bootstrap) calibrator's structural-lift ratio forward rather than
 	// zeroing it — see seedfit.Fit.
@@ -245,19 +236,17 @@ func (h *Holder) maybeCalibrate(subs *Substrate) {
 		defer cancel()
 
 		log.Printf("[Calibrate] no fitted calibrator for scorer=%s — fitting from seed set in background", scorerModelID)
-		res, err := seedfit.Fit(ctx, scorer, eval.Seed(), prior)
+		cal, res, err := seedfit.EnsureFitted(ctx, scorer, scorerModelID, calPath, seed.Pairs(), prior)
 		if err != nil {
 			// Fail loudly, stay on bootstrap. The next reload retries.
 			log.Printf("[Calibrate] seed fit failed (staying on bootstrap): %v", err)
 			return
 		}
-		if err := calibrate.Save(calPath, res.Calibrator, scorerModelID, res.Samples, res.LogLoss); err != nil {
-			log.Printf("[Calibrate] persist failed (staying on bootstrap): %v", err)
-			return
+		if res != nil {
+			log.Printf("[Calibrate] fitted %s over %d samples (%d pos/%d neg, log-loss %.4f): A=%.3f B=%.3f C=%.3f",
+				scorerModelID, res.Samples, res.Positives, res.Negatives, res.LogLoss,
+				cal.A, cal.B, cal.C)
 		}
-		log.Printf("[Calibrate] fitted %s over %d samples (%d pos/%d neg, log-loss %.4f): A=%.3f B=%.3f C=%.3f",
-			scorerModelID, res.Samples, res.Positives, res.Negatives, res.LogLoss,
-			res.Calibrator.A, res.Calibrator.B, res.Calibrator.C)
 
 		// Swap in via the normal rebuild: Build loads the artifact we just
 		// wrote. If the user swapped scorers while we were fitting, Build's

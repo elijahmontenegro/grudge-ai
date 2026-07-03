@@ -12,8 +12,9 @@ import (
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/core/adapter/internal/util"
-	"github.com/elijahmontenegro/grudge/core/internal/httpc"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/core/httpc"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 const apiVersion = "2023-06-01"
@@ -101,7 +102,7 @@ type apiUsage struct {
 	OutputTokens int32 `json:"output_tokens"`
 }
 
-func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error) {
+func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
 	apiReq := toAPIRequest(c.model, req, false)
 
 	body, err := json.Marshal(apiReq)
@@ -128,22 +129,22 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 		return nil, err
 	}
 
-	return &pb.CompletionResponse{
+	return &llmv1.CompletionResponse{
 		Id:    resp.ID,
 		Model: resp.Model,
-		Message: &pb.LLMMessage{
-			Role:    pb.Role_ROLE_ASSISTANT,
+		Message: &llmv1.LLMMessage{
+			Role:    threadv1.Role_ROLE_ASSISTANT,
 			Content: fromAPIContent(resp.Content),
 		},
-		Usage: &pb.Usage{
+		Usage: &llmv1.Usage{
 			PromptTokens:     resp.Usage.InputTokens,
 			CompletionTokens: resp.Usage.OutputTokens,
 		},
 	}, nil
 }
 
-func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
-	return func(yield func(*pb.StreamChunk, error) bool) {
+func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
+	return func(yield func(*llmv1.StreamChunk, error) bool) {
 		apiReq := toAPIRequest(c.model, req, true)
 		body, err := json.Marshal(apiReq)
 		if err != nil {
@@ -183,41 +184,41 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 
 			var event sseEvent
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
+				yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 				return
 			}
 
 			switch event.Type {
 			case "content_block_delta":
 				if event.Delta.Type == "text_delta" {
-					if !yield(&pb.StreamChunk{
-						Delta: &pb.StreamChunk_Text{Text: &pb.TextContent{Text: event.Delta.Text}},
+					if !yield(&llmv1.StreamChunk{
+						Delta: &llmv1.StreamChunk_Text{Text: &threadv1.TextContent{Text: event.Delta.Text}},
 					}, nil) {
 						return
 					}
 				} else if event.Delta.Type == "thinking_delta" {
-					if !yield(&pb.StreamChunk{
-						Delta: &pb.StreamChunk_Thinking{Thinking: &pb.ThinkingContent{Text: event.Delta.Thinking}},
+					if !yield(&llmv1.StreamChunk{
+						Delta: &llmv1.StreamChunk_Thinking{Thinking: &threadv1.ThinkingContent{Text: event.Delta.Thinking}},
 					}, nil) {
 						return
 					}
 				}
 			case "message_delta":
-				yield(&pb.StreamChunk{
+				yield(&llmv1.StreamChunk{
 					Done: true,
-					Usage: &pb.Usage{
+					Usage: &llmv1.Usage{
 						PromptTokens:     event.Usage.InputTokens,
 						CompletionTokens: event.Usage.OutputTokens,
 					},
 				}, nil)
 				return
 			case "error":
-				yield(&pb.StreamChunk{Done: true, Error: util.Ptr(event.Error.Message)}, nil)
+				yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(event.Error.Message)}, nil)
 				return
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
+			yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 		}
 	}
 }
@@ -241,11 +242,11 @@ type sseError struct {
 
 // --- helpers ---
 
-func toAPIRequest(model string, req *pb.CompletionRequest, stream bool) messagesRequest {
+func toAPIRequest(model string, req *llmv1.CompletionRequest, stream bool) messagesRequest {
 	var system string
 	var msgs []apiMessage
 	for _, m := range req.Messages {
-		if m.Role == pb.Role_ROLE_SYSTEM {
+		if m.Role == threadv1.Role_ROLE_SYSTEM {
 			system = textFromBlocks(m.Content)
 			continue
 		}
@@ -269,46 +270,46 @@ func toAPIRequest(model string, req *pb.CompletionRequest, stream bool) messages
 	}
 }
 
-func toAPIContent(blocks []*pb.ContentBlock) []apiContentPart {
+func toAPIContent(blocks []*threadv1.ContentBlock) []apiContentPart {
 	parts := make([]apiContentPart, 0, len(blocks))
 	for _, b := range blocks {
 		switch v := b.Block.(type) {
-		case *pb.ContentBlock_Text:
+		case *threadv1.ContentBlock_Text:
 			parts = append(parts, apiContentPart{Type: "text", Text: v.Text.Text})
-		case *pb.ContentBlock_ToolCall:
+		case *threadv1.ContentBlock_ToolCall:
 			parts = append(parts, apiContentPart{Type: "tool_use", ID: v.ToolCall.Id, Name: v.ToolCall.Name, Input: v.ToolCall.Arguments})
-		case *pb.ContentBlock_ToolResult:
+		case *threadv1.ContentBlock_ToolResult:
 			parts = append(parts, apiContentPart{Type: "tool_result", ToolID: v.ToolResult.ToolCallId, Content: v.ToolResult.Content})
 		}
 	}
 	return parts
 }
 
-func fromAPIContent(parts []apiContentPart) []*pb.ContentBlock {
-	blocks := make([]*pb.ContentBlock, 0, len(parts))
+func fromAPIContent(parts []apiContentPart) []*threadv1.ContentBlock {
+	blocks := make([]*threadv1.ContentBlock, 0, len(parts))
 	for _, p := range parts {
 		switch p.Type {
 		case "text":
-			blocks = append(blocks, &pb.ContentBlock{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: p.Text}}})
+			blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: p.Text}}})
 		case "thinking":
-			blocks = append(blocks, &pb.ContentBlock{Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: p.Text}}})
+			blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: p.Text}}})
 		}
 	}
 	return blocks
 }
 
-func roleStr(r pb.Role) string {
+func roleStr(r threadv1.Role) string {
 	switch r {
-	case pb.Role_ROLE_USER:
+	case threadv1.Role_ROLE_USER:
 		return "user"
-	case pb.Role_ROLE_ASSISTANT:
+	case threadv1.Role_ROLE_ASSISTANT:
 		return "assistant"
 	default:
 		return "user"
 	}
 }
 
-func textFromBlocks(blocks []*pb.ContentBlock) string {
+func textFromBlocks(blocks []*threadv1.ContentBlock) string {
 	var s string
 	for _, b := range blocks {
 		if t := b.GetText(); t != nil {

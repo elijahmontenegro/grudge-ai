@@ -12,8 +12,9 @@ import (
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/core/adapter/internal/util"
-	"github.com/elijahmontenegro/grudge/core/internal/httpc"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/core/httpc"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 const baseURL = "https://generativelanguage.googleapis.com/v1"
@@ -69,7 +70,7 @@ type completer struct {
 	streamClient *httpc.Client
 }
 
-func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error) {
+func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
 	url := fmt.Sprintf("%s/models/%s:generateContent", baseURL, c.model)
 
 	body, err := json.Marshal(toGenerateRequest(req))
@@ -99,21 +100,21 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 		return nil, fmt.Errorf("%w: googleai returned no candidates", core.ErrProviderUnavailable)
 	}
 
-	return &pb.CompletionResponse{
+	return &llmv1.CompletionResponse{
 		Model: c.model,
-		Message: &pb.LLMMessage{
-			Role:    pb.Role_ROLE_ASSISTANT,
+		Message: &llmv1.LLMMessage{
+			Role:    threadv1.Role_ROLE_ASSISTANT,
 			Content: fromGeminiParts(resp.Candidates[0].Content.Parts),
 		},
-		Usage: &pb.Usage{
+		Usage: &llmv1.Usage{
 			PromptTokens:     resp.UsageMeta.PromptTokenCount,
 			CompletionTokens: resp.UsageMeta.CandidatesTokenCount,
 		},
 	}, nil
 }
 
-func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
-	return func(yield func(*pb.StreamChunk, error) bool) {
+func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
+	return func(yield func(*llmv1.StreamChunk, error) bool) {
 		url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", baseURL, c.model)
 
 		body, err := json.Marshal(toGenerateRequest(req))
@@ -151,15 +152,15 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 
 			var chunk generateResponse
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
+				yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 				return
 			}
 
 			if len(chunk.Candidates) > 0 {
 				for _, p := range chunk.Candidates[0].Content.Parts {
 					if p.Text != "" {
-						if !yield(&pb.StreamChunk{
-							Delta: &pb.StreamChunk_Text{Text: &pb.TextContent{Text: p.Text}},
+						if !yield(&llmv1.StreamChunk{
+							Delta: &llmv1.StreamChunk_Text{Text: &threadv1.TextContent{Text: p.Text}},
 						}, nil) {
 							return
 						}
@@ -168,9 +169,9 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			}
 
 			if chunk.UsageMeta.PromptTokenCount > 0 {
-				yield(&pb.StreamChunk{
+				yield(&llmv1.StreamChunk{
 					Done: true,
-					Usage: &pb.Usage{
+					Usage: &llmv1.Usage{
 						PromptTokens:     chunk.UsageMeta.PromptTokenCount,
 						CompletionTokens: chunk.UsageMeta.CandidatesTokenCount,
 					},
@@ -179,7 +180,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
+			yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 		}
 	}
 }

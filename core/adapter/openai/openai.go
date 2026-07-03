@@ -12,8 +12,9 @@ import (
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/core/adapter/internal/util"
-	"github.com/elijahmontenegro/grudge/core/internal/httpc"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/core/httpc"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // Config for the OpenAI provider. Configurable BaseURL supports any
@@ -118,7 +119,7 @@ type apiUsage struct {
 	CompletionTokens int32 `json:"completion_tokens"`
 }
 
-func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error) {
+func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
 	body, err := json.Marshal(toChatRequest(c.model, req, false))
 	if err != nil {
 		return nil, err
@@ -146,22 +147,22 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 		return nil, fmt.Errorf("%w: openai returned no choices", core.ErrProviderUnavailable)
 	}
 
-	return &pb.CompletionResponse{
+	return &llmv1.CompletionResponse{
 		Id:    resp.ID,
 		Model: resp.Model,
-		Message: &pb.LLMMessage{
-			Role:    pb.Role_ROLE_ASSISTANT,
+		Message: &llmv1.LLMMessage{
+			Role:    threadv1.Role_ROLE_ASSISTANT,
 			Content: fromChatMessage(resp.Choices[0].Message),
 		},
-		Usage: &pb.Usage{
+		Usage: &llmv1.Usage{
 			PromptTokens:     resp.Usage.PromptTokens,
 			CompletionTokens: resp.Usage.CompletionTokens,
 		},
 	}, nil
 }
 
-func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
-	return func(yield func(*pb.StreamChunk, error) bool) {
+func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
+	return func(yield func(*llmv1.StreamChunk, error) bool) {
 		body, err := json.Marshal(toChatRequest(c.model, req, true))
 		if err != nil {
 			yield(nil, err)
@@ -187,7 +188,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 		}
 		defer resp.Body.Close()
 
-		var totalUsage *pb.Usage
+		var totalUsage *llmv1.Usage
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -196,18 +197,18 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			}
 			data := line[6:]
 			if data == "[DONE]" {
-				yield(&pb.StreamChunk{Done: true, Usage: totalUsage}, nil)
+				yield(&llmv1.StreamChunk{Done: true, Usage: totalUsage}, nil)
 				return
 			}
 
 			var chunk chatResponse
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
+				yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 				return
 			}
 
 			if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
-				totalUsage = &pb.Usage{
+				totalUsage = &llmv1.Usage{
 					PromptTokens:     chunk.Usage.PromptTokens,
 					CompletionTokens: chunk.Usage.CompletionTokens,
 				}
@@ -220,15 +221,15 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			delta := chunk.Choices[0].Delta
 			content, _ := delta.Content.(string)
 			if content != "" {
-				if !yield(&pb.StreamChunk{
-					Delta: &pb.StreamChunk_Text{Text: &pb.TextContent{Text: content}},
+				if !yield(&llmv1.StreamChunk{
+					Delta: &llmv1.StreamChunk_Text{Text: &threadv1.TextContent{Text: content}},
 				}, nil) {
 					return
 				}
 			}
 			for _, tc := range delta.ToolCalls {
-				if !yield(&pb.StreamChunk{
-					Delta: &pb.StreamChunk_ToolCall{ToolCall: &pb.ToolCallContent{
+				if !yield(&llmv1.StreamChunk{
+					Delta: &llmv1.StreamChunk_ToolCall{ToolCall: &threadv1.ToolCallContent{
 						Id:        tc.ID,
 						Name:      tc.Function.Name,
 						Arguments: tc.Function.Arguments,
@@ -239,7 +240,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
+			yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 		}
 	}
 }
@@ -310,7 +311,7 @@ func (e *embedder) embed(ctx context.Context, texts []string) ([][]float32, erro
 
 // --- helpers ---
 
-func toChatRequest(model string, req *pb.CompletionRequest, stream bool) chatRequest {
+func toChatRequest(model string, req *llmv1.CompletionRequest, stream bool) chatRequest {
 	msgs := make([]chatMessage, 0, len(req.Messages))
 	for _, m := range req.Messages {
 		msgs = append(msgs, toChatMessage(m))
@@ -326,19 +327,19 @@ func toChatRequest(model string, req *pb.CompletionRequest, stream bool) chatReq
 	}
 }
 
-func toChatMessage(m *pb.LLMMessage) chatMessage {
+func toChatMessage(m *llmv1.LLMMessage) chatMessage {
 	role := "user"
 	switch m.Role {
-	case pb.Role_ROLE_ASSISTANT:
+	case threadv1.Role_ROLE_ASSISTANT:
 		role = "assistant"
-	case pb.Role_ROLE_SYSTEM:
+	case threadv1.Role_ROLE_SYSTEM:
 		role = "system"
 	}
 
 	// If only text blocks, use simple string content.
 	allText := true
 	for _, b := range m.Content {
-		if _, ok := b.Block.(*pb.ContentBlock_Text); !ok {
+		if _, ok := b.Block.(*threadv1.ContentBlock_Text); !ok {
 			allText = false
 			break
 		}
@@ -357,24 +358,24 @@ func toChatMessage(m *pb.LLMMessage) chatMessage {
 	return msg
 }
 
-func toMultipart(blocks []*pb.ContentBlock) []map[string]any {
+func toMultipart(blocks []*threadv1.ContentBlock) []map[string]any {
 	parts := make([]map[string]any, 0, len(blocks))
 	for _, b := range blocks {
 		switch v := b.Block.(type) {
-		case *pb.ContentBlock_Text:
+		case *threadv1.ContentBlock_Text:
 			parts = append(parts, map[string]any{"type": "text", "text": v.Text.Text})
 		}
 	}
 	return parts
 }
 
-func fromChatMessage(m chatMessage) []*pb.ContentBlock {
-	var blocks []*pb.ContentBlock
+func fromChatMessage(m chatMessage) []*threadv1.ContentBlock {
+	var blocks []*threadv1.ContentBlock
 	if s, ok := m.Content.(string); ok && s != "" {
-		blocks = append(blocks, &pb.ContentBlock{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: s}}})
+		blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: s}}})
 	}
 	for _, tc := range m.ToolCalls {
-		blocks = append(blocks, &pb.ContentBlock{Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallContent{
+		blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{
 			Id:        tc.ID,
 			Name:      tc.Function.Name,
 			Arguments: tc.Function.Arguments,

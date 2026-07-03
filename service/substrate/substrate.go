@@ -16,19 +16,17 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"path/filepath"
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/datadir"
+	"github.com/elijahmontenegro/grudge/service/oracle"
 	"github.com/elijahmontenegro/grudge/service/search"
 	"github.com/elijahmontenegro/grudge/service/storage"
 )
-
-// CalibratorFilename is the fitted-calibrator artifact under the data dir,
-// produced by the offline `cmd/calibrate` fit and loaded here at boot.
-const CalibratorFilename = "calibrator.json"
 
 // Substrate is the wired-up runtime substrate consumers receive
 // from Build. Every field is non-nil unless the corresponding
@@ -72,6 +70,15 @@ type Option func(*options)
 type options struct {
 	scorer      core.Scorer
 	chunkOracle rrc.ChunkOracle
+	estimator   chunk.TokenEstimator
+}
+
+// WithTokenEstimator supplies the token estimator the engine config
+// carries (chunking, budget sizing, wire estimation). Required: Build
+// fails without one — a substrate with no token units cannot enforce
+// any budget contract.
+func WithTokenEstimator(e chunk.TokenEstimator) Option {
+	return func(o *options) { o.estimator = e }
 }
 
 // WithScorer overrides the scorer substrate would otherwise
@@ -190,36 +197,22 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	// A completely absent Engine block uses canonical defaults. Once
 	// present, the persisted snapshot is authoritative.
 	rrcCfg := rrc.DefaultConfig()
+	if o.estimator == nil {
+		return nil, fmt.Errorf("substrate.Build: no token estimator (pass WithTokenEstimator)")
+	}
+	rrcCfg.Chunk.Estimator = o.estimator
 	if se := cfg.Settings.Engine; se != (config.EngineConfig{}) {
-		// LossRatio is the live acceptance operating point. Absent (0 in an
-		// older settings file) → keep the DefaultConfig stance rather than
-		// accept-everything.
-		if se.LossRatio > 0 {
-			rrcCfg.LossRatio = se.LossRatio
-		}
-		// EdgeThreshold/ScoreFloor/ZScoreThreshold are copied for
-		// settings-file back-compat + telemetry only; they no longer gate
-		// selection (A4). Tuning them has no effect; LossRatio is the knob.
-		rrcCfg.EdgeThreshold = se.EdgeThreshold
-		rrcCfg.ScoreFloor = se.ScoreFloor
-		rrcCfg.ZScoreThreshold = se.ZScoreThreshold
-		rrcCfg.MinBatchStdDev = se.MinBatchStdDev
-		rrcCfg.LocalContextSize = se.LocalContextSize
-		rrcCfg.RerankTopK = se.RerankTopK
-		rrcCfg.ContextBudgetTokens = se.ContextBudgetTokens
-		rrcCfg.DiversityLambda = se.DiversityLambda
-		rrcCfg.BudgetHeadroomPct = se.BudgetHeadroomPct
-		rrcCfg.PerMsgDelimiterTokens = se.PerMsgDelimiterTokens
+		rrcCfg = se.ApplyTo(rrcCfg)
 	}
 
-	// Load a fitted acceptance calibrator if the offline fit
-	// (cmd/calibrate) has produced one for this scorer. Absent → keep the
-	// DefaultConfig bootstrap calibrator (which reproduces the precision-
-	// first operating point). A calibrator fit against a different scorer
-	// is refused (Load returns ok=false), so a scorer swap doesn't
-	// silently mis-gate. This is the seam that makes A4 a real calibrated
-	// cutover rather than a permanent bootstrap.
-	calPath := filepath.Join(cfg.DataDir, CalibratorFilename)
+	// Load a fitted acceptance calibrator if one has been produced for
+	// this scorer (the Holder self-fits in the background on first boot
+	// per scorer). Absent → keep the DefaultConfig bootstrap calibrator
+	// (which reproduces the precision-first operating point). A calibrator
+	// fit against a different scorer is refused (Load returns ok=false),
+	// so a scorer swap doesn't silently mis-gate. This is the seam that
+	// makes A4 a real calibrated cutover rather than a permanent bootstrap.
+	calPath := datadir.CalibratorPath(cfg.DataDir)
 	if cal, ok, err := calibrate.Load(calPath, s.RerankerModelID); err != nil {
 		log.Printf("WARNING: calibrator load failed, using bootstrap: %v", err)
 	} else if ok {
@@ -237,7 +230,7 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		s.ChunkOracle = o.chunkOracle
 	} else if s.Embedder != nil && s.EmbedModelID != "" {
 		s.Searcher = search.NewSearcher(s.Embedder, s.EmbedModelID, db)
-		s.ChunkOracle = search.NewChunkOracle(db, s.Embedder, s.EmbedModelID)
+		s.ChunkOracle = oracle.NewChunkOracle(db, s.Embedder, s.EmbedModelID)
 	}
 
 	// Engine constructed in one shot with everything wired:

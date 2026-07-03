@@ -12,7 +12,6 @@ type Edge {
   score: Float!
   source: String!
   crossEncoderScore: Float!
-  temporalProximity: Float!
 }
 
 type SelectedMessage {
@@ -22,7 +21,6 @@ type SelectedMessage {
   threadId: ID!
   crossThread: Boolean!
   crossEncoderScore: Float!
-  temporalProximity: Float!
 }
 
 type ExcludedMessage {

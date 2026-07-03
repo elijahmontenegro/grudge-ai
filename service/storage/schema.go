@@ -2,8 +2,8 @@ package storage
 
 import "fmt"
 
-const schemaVersion = 2
-const schemaIdentity = "rrc-active-discourse-provenance-self-adapting-dim-v2"
+const schemaVersion = 3
+const schemaIdentity = "rrc-calibrated-acceptance-lean-tables-v3"
 
 // defaultEmbeddingDim is the bootstrap vector width. It is only a
 // bootstrap default: the runtime probe (EnsureEmbeddingDim) reconciles it
@@ -95,8 +95,6 @@ CREATE TABLE edges (
     score REAL NOT NULL,
     source INTEGER NOT NULL,
     cross_encoder_score REAL NOT NULL,
-    qud_weight REAL NOT NULL,
-    temporal_proximity REAL NOT NULL,
     detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     from_thread_id TEXT NOT NULL,
     to_thread_id TEXT NOT NULL,
@@ -115,17 +113,6 @@ CREATE TABLE chunks (
     PRIMARY KEY (message_id, chunk_index)
 );
 CREATE INDEX idx_chunks_message ON chunks(message_id);
-
-CREATE TABLE quds (
-    id TEXT PRIMARY KEY,
-    thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-    question TEXT NOT NULL,
-    established_by TEXT NOT NULL,
-    parent_qud_id TEXT,
-    status INTEGER NOT NULL DEFAULT 1,
-    addressed_by TEXT NOT NULL DEFAULT '[]'
-);
-CREATE INDEX idx_quds_thread ON quds(thread_id);
 
 CREATE TABLE plans (
     id TEXT PRIMARY KEY,
@@ -177,25 +164,22 @@ CREATE TABLE scores (
     candidate_chunk_index INTEGER NOT NULL,
     model_id TEXT NOT NULL,
     score REAL NOT NULL,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (local_context_fingerprint, local_context_chunk_index, candidate_message_id, candidate_chunk_index, model_id),
     FOREIGN KEY (candidate_message_id, candidate_chunk_index)
         REFERENCES chunks(message_id, chunk_index) ON DELETE CASCADE
 );
 CREATE INDEX idx_scores_local_context ON scores(local_context_fingerprint, model_id);
 
+-- selections stores the marshaled pb.SelectionResult per Retrieval
+-- Event. Everything queryable lives inside the result BLOB; the only
+-- lookup keys are event_id and (anchor_message_id, created_at).
 CREATE TABLE selections (
     event_id TEXT PRIMARY KEY,
     anchor_message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    thread_id TEXT NOT NULL,
-    scope INTEGER NOT NULL,
-    local_context_fingerprint TEXT NOT NULL,
-    local_context_message_ids BLOB NOT NULL,
     result BLOB NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_selections_anchor ON selections(anchor_message_id);
-CREATE INDEX idx_selections_thread_created ON selections(thread_id, created_at);
 
 CREATE TABLE tick_traces (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -204,7 +204,7 @@ func Do(ctx context.Context, policy Policy, onEvent func(Event), op func(ctx con
 //  2. Any error exposing `Status() int` (duck-typed) → retry iff
 //     the status is 408, 429, or 5xx. Decoupled from any concrete
 //     error type so adapter-defined status carriers classify the
-//     same as core/internal/httpc.StatusError.
+//     same as core/httpc.StatusError.
 //  3. core.ErrAuth → not retryable (config issue).
 //  4. core.ErrRateLimited → retryable.
 //  5. core.ErrProviderUnavailable → message-pattern classification:

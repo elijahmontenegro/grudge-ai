@@ -3,7 +3,8 @@ package googleai
 import (
 	"strings"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 type generateRequest struct {
@@ -64,18 +65,18 @@ type batchEmbedResponse struct {
 
 // --- helpers ---
 
-func toGenerateRequest(req *pb.CompletionRequest) generateRequest {
+func toGenerateRequest(req *llmv1.CompletionRequest) generateRequest {
 	var sysContent *content
 	var contents []content
 
 	for _, m := range req.Messages {
-		if m.Role == pb.Role_ROLE_SYSTEM {
+		if m.Role == threadv1.Role_ROLE_SYSTEM {
 			text := textFromBlocks(m.Content)
 			sysContent = &content{Parts: []part{{Text: text}}}
 			continue
 		}
 		role := "user"
-		if m.Role == pb.Role_ROLE_ASSISTANT {
+		if m.Role == threadv1.Role_ROLE_ASSISTANT {
 			role = "model"
 		}
 		parts := make([]part, 0, len(m.Content))
@@ -104,17 +105,17 @@ func toGenerateRequest(req *pb.CompletionRequest) generateRequest {
 	}
 }
 
-func fromGeminiParts(parts []part) []*pb.ContentBlock {
-	blocks := make([]*pb.ContentBlock, 0, len(parts))
+func fromGeminiParts(parts []part) []*threadv1.ContentBlock {
+	blocks := make([]*threadv1.ContentBlock, 0, len(parts))
 	for _, p := range parts {
 		if p.Text != "" {
-			blocks = append(blocks, &pb.ContentBlock{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: p.Text}}})
+			blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: p.Text}}})
 		}
 	}
 	return blocks
 }
 
-func textFromBlocks(blocks []*pb.ContentBlock) string {
+func textFromBlocks(blocks []*threadv1.ContentBlock) string {
 	var sb strings.Builder
 	for _, b := range blocks {
 		if t := b.GetText(); t != nil {

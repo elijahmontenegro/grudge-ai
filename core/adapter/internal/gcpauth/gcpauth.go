@@ -1,6 +1,7 @@
-// Package gcpauth centralizes Application Default Credentials wiring shared
-// by the GCP adapters (vertex, gcpranking). Internal to core/adapter so only
-// adapters depend on it.
+// Package gcpauth provides Application Default Credentials wiring for
+// GCP adapters that speak raw HTTP (gcpranking today — vertex does not
+// use it: the genai SDK carries its own ADC). Internal to core/adapter
+// so only adapters depend on it.
 package gcpauth
 
 import (

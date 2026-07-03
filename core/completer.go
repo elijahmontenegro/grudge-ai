@@ -4,7 +4,7 @@ import (
 	"context"
 	"iter"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
 )
 
 // Completer provides language model completion. Stream sets
@@ -19,6 +19,6 @@ import (
 // the iteration. Goroutine lifecycle is bound to the iteration —
 // breaking out of the range stops production.
 type Completer interface {
-	Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error)
-	Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error]
+	Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error)
+	Stream(ctx context.Context, req *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error]
 }

@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 type chatRequest struct {
@@ -65,7 +66,7 @@ type embedResponse struct {
 	Embeddings [][]float32 `json:"embeddings"`
 }
 
-func toLlamaMsgs(msgs []*pb.LLMMessage) []chatMessage {
+func toLlamaMsgs(msgs []*llmv1.LLMMessage) []chatMessage {
 	// Phase 1: extract a flat sequence of "atoms" preserving order:
 	//   - text/thinking content on its role-bearing message
 	//   - each tool_call with its id + name + arguments
@@ -76,7 +77,7 @@ func toLlamaMsgs(msgs []*pb.LLMMessage) []chatMessage {
 		text       string
 		thinking   string
 		toolCall   ollamaToolCall
-		toolResult *pb.ToolResultContent
+		toolResult *threadv1.ToolResultContent
 	}
 	var atoms []atom
 	for _, m := range msgs {
@@ -84,7 +85,7 @@ func toLlamaMsgs(msgs []*pb.LLMMessage) []chatMessage {
 		var textParts []string
 		var thinkParts []string
 		var msgCalls []ollamaToolCall
-		var msgResults []*pb.ToolResultContent
+		var msgResults []*threadv1.ToolResultContent
 		for _, b := range m.Content {
 			if t := b.GetText(); t != nil {
 				textParts = append(textParts, t.Text)
@@ -277,20 +278,20 @@ func toLlamaMsgs(msgs []*pb.LLMMessage) []chatMessage {
 	return out
 }
 
-func roleStr(r pb.Role) string {
+func roleStr(r threadv1.Role) string {
 	switch r {
-	case pb.Role_ROLE_USER:
+	case threadv1.Role_ROLE_USER:
 		return "user"
-	case pb.Role_ROLE_ASSISTANT:
+	case threadv1.Role_ROLE_ASSISTANT:
 		return "assistant"
-	case pb.Role_ROLE_SYSTEM:
+	case threadv1.Role_ROLE_SYSTEM:
 		return "system"
 	default:
 		return "user"
 	}
 }
 
-func providerOpts(req *pb.CompletionRequest) map[string]any {
+func providerOpts(req *llmv1.CompletionRequest) map[string]any {
 	opts := make(map[string]any)
 	if req.Temperature != nil {
 		opts["temperature"] = *req.Temperature
@@ -307,7 +308,7 @@ func providerOpts(req *pb.CompletionRequest) map[string]any {
 	return opts
 }
 
-func toOllamaTools(tools []*pb.ToolDeclaration) []ollamaTool {
+func toOllamaTools(tools []*llmv1.ToolDeclaration) []ollamaTool {
 	if len(tools) == 0 {
 		return nil
 	}

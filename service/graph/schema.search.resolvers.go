@@ -9,37 +9,33 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 )
 
 // Score is the resolver for the score field.
-func (r *edgeResolver) Score(ctx context.Context, obj *v1.Edge) (float64, error) {
+func (r *edgeResolver) Score(ctx context.Context, obj *rrcv1.Edge) (float64, error) {
 	return float64(obj.Score), nil
 }
 
 // Source is the resolver for the source field.
-func (r *edgeResolver) Source(ctx context.Context, obj *v1.Edge) (string, error) {
+func (r *edgeResolver) Source(ctx context.Context, obj *rrcv1.Edge) (string, error) {
 	return obj.Source.String(), nil
 }
 
 // CrossEncoderScore is the resolver for the crossEncoderScore field.
-func (r *edgeResolver) CrossEncoderScore(ctx context.Context, obj *v1.Edge) (float64, error) {
+func (r *edgeResolver) CrossEncoderScore(ctx context.Context, obj *rrcv1.Edge) (float64, error) {
 	return float64(obj.CrossEncoderScore), nil
 }
 
-// TemporalProximity is the resolver for the temporalProximity field.
-func (r *edgeResolver) TemporalProximity(ctx context.Context, obj *v1.Edge) (float64, error) {
-	return float64(obj.TemporalProximity), nil
-}
-
 // Reason is the resolver for the reason field.
-func (r *excludedMessageResolver) Reason(ctx context.Context, obj *v1.ExcludedMessage) (string, error) {
+func (r *excludedMessageResolver) Reason(ctx context.Context, obj *rrcv1.ExcludedMessage) (string, error) {
 	return obj.Reason.String(), nil
 }
 
 // Score is the resolver for the score field.
-func (r *excludedMessageResolver) Score(ctx context.Context, obj *v1.ExcludedMessage) (float64, error) {
+func (r *excludedMessageResolver) Score(ctx context.Context, obj *rrcv1.ExcludedMessage) (float64, error) {
 	return float64(obj.Score), nil
 }
 
@@ -71,7 +67,7 @@ func (r *queryResolver) Search(ctx context.Context, query string, limit *int) ([
 			MessageID:  res.MessageID,
 			ThreadID:   msg.ThreadId,
 			ThreadName: threadName,
-			Snippet:    rrc.TextFromBlocks(msg.Content),
+			Snippet:    pbtext.TextFromBlocks(msg.Content),
 			Score:      res.Score,
 		}
 	}
@@ -81,34 +77,26 @@ func (r *queryResolver) Search(ctx context.Context, query string, limit *int) ([
 // SelectionForMessage returns the SelectionResult that drove the turn
 // which produced the given target message. Pure DB lookup — this is
 // the primary path for auditing any historical turn, live or long past.
-func (r *queryResolver) SelectionForMessage(ctx context.Context, messageID string) (*v1.SelectionResult, error) {
+func (r *queryResolver) SelectionForMessage(ctx context.Context, messageID string) (*rrcv1.SelectionResult, error) {
 	return r.db.GetSelectionForMessage(messageID)
 }
 
 // EffectiveScore is the resolver for the effectiveScore field.
-func (r *selectedMessageResolver) EffectiveScore(ctx context.Context, obj *v1.SelectedMessage) (float64, error) {
+func (r *selectedMessageResolver) EffectiveScore(ctx context.Context, obj *rrcv1.SelectedMessage) (float64, error) {
 	return float64(obj.EffectiveScore), nil
 }
 
 // CrossEncoderScore is the resolver for the crossEncoderScore field.
-func (r *selectedMessageResolver) CrossEncoderScore(ctx context.Context, obj *v1.SelectedMessage) (float64, error) {
+func (r *selectedMessageResolver) CrossEncoderScore(ctx context.Context, obj *rrcv1.SelectedMessage) (float64, error) {
 	if len(obj.ViaEdges) > 0 {
 		return float64(obj.ViaEdges[0].CrossEncoderScore), nil
 	}
 	return 0, nil
 }
 
-// TemporalProximity is the resolver for the temporalProximity field.
-func (r *selectedMessageResolver) TemporalProximity(ctx context.Context, obj *v1.SelectedMessage) (float64, error) {
-	if len(obj.ViaEdges) > 0 {
-		return float64(obj.ViaEdges[0].TemporalProximity), nil
-	}
-	return 0, nil
-}
-
 // Scope is the resolver for the scope field.
-func (r *selectionResultResolver) Scope(ctx context.Context, obj *v1.SelectionResult) (SelectionScope, error) {
-	if obj.Scope == v1.SelectionScope_SELECTION_SCOPE_ALL_THREADS {
+func (r *selectionResultResolver) Scope(ctx context.Context, obj *rrcv1.SelectionResult) (SelectionScope, error) {
+	if obj.Scope == threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS {
 		return SelectionScopeAllThreads, nil
 	}
 	return SelectionScopeThread, nil

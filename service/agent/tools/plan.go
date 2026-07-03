@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/elijahmontenegro/grudge/service/internal/adoc"
+	"github.com/elijahmontenegro/grudge/adoc"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

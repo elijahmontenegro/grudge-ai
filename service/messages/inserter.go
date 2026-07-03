@@ -5,7 +5,7 @@
 // post-insert embed enqueue happen in exactly one place.
 //
 // Pre-Part-B both sides duplicated a chunksFor helper that converted
-// (*pb.Message, chunk.Config) to []storage.Chunk via
+// (*threadv1.Message, chunk.Config) to []storage.Chunk via
 // rrc.TextFromBlocks + chunk.Split. The duplication grew naturally
 // because each layer had its own entry into the insert path. The
 // helper is now a private function in this package; both layers call
@@ -13,7 +13,7 @@
 package messages
 
 import (
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/service/storage"
@@ -43,7 +43,7 @@ func New(db *storage.DB, chunkConfig func() chunk.Config, embedEnq func(messageI
 // embed for the message id. Every message receives a role-aware,
 // block-aware scoring serialization, including tool, image, and
 // empty-content messages.
-func (i *Inserter) Insert(msg *pb.Message) error {
+func (i *Inserter) Insert(msg *threadv1.Message) error {
 	chunks := chunksFor(msg, i.chunkConfig())
 	if err := i.db.InsertMessage(msg, chunks); err != nil {
 		return err
@@ -56,7 +56,7 @@ func (i *Inserter) Insert(msg *pb.Message) error {
 
 // chunksFor splits the message's scoring serialization into
 // storage-shaped chunk rows. Raw message content is stored unchanged.
-func chunksFor(msg *pb.Message, cfg chunk.Config) []storage.Chunk {
+func chunksFor(msg *threadv1.Message, cfg chunk.Config) []storage.Chunk {
 	text := rrc.SerializeMessageForScoring(msg)
 	rcs := chunk.Split(text, cfg)
 	if len(rcs) == 0 {

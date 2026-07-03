@@ -6,12 +6,12 @@ import (
 	"sync/atomic"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // TestAssemble_ConcurrentSameEngine — N concurrent Assemble calls on
 // one engine must serialize cleanly (Assemble takes the engine mutex
-// for the OnMessage→Select→MMR triple) and produce identical wire
+// for the selection→MMR→assembly path) and produce identical wire
 // payloads. Run under -race so any unprotected DAG / scoreCache
 // access trips the detector.
 //
@@ -26,7 +26,7 @@ func TestAssemble_ConcurrentSameEngine(t *testing.T) {
 
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
-	cfg.ZScoreThreshold = 0
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
 	cfg.LocalContextSize = 1
 	cfg.DiversityLambda = 0
@@ -34,7 +34,7 @@ func TestAssemble_ConcurrentSameEngine(t *testing.T) {
 	prior1 := addMsg(o, "m1", 0, "t1", "alpha")
 	prior2 := addMsg(o, "m2", 1, "t1", "beta")
 	anchor := addMsg(o, "q", 2, "t1", "current context")
-	corpus := []*pb.Message{prior1, prior2, anchor}
+	corpus := []*threadv1.Message{prior1, prior2, anchor}
 
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
@@ -47,15 +47,15 @@ func TestAssemble_ConcurrentSameEngine(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			// All goroutines share the same Local Context and corpus —
-			// Engine.Assemble locks internally, so the OnMessage→
+			// Engine.Assemble locks internally, so the selection→
 			// Select→MMR sequence each runs is serialized despite
 			// the shared engine state.
 			results[i], errs[i] = e.Assemble(context.Background(), AssembleRequest{
 				SerializedLocalContext: testSerializedLocalContext(anchor),
 				Anchor:                 anchor,
 				Corpus:                 corpus,
-				LocalContext:           []*pb.Message{anchor},
-				Scope:                  pb.SelectionScope_SELECTION_SCOPE_THREAD,
+				LocalContext:           []*threadv1.Message{anchor},
+				Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 				ThreadID:               "t1",
 			})
 		}(i)
@@ -87,7 +87,7 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 	mc.SetScore("p", "q", 0.9)
 
 	cfg := DefaultConfig()
-	cfg.ZScoreThreshold = 0
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
 	cfg.LocalContextSize = 1
 	cfg.DiversityLambda = 0
@@ -95,7 +95,7 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 	o := newMockChunkOracle()
 	prior := addMsg(o, "p1", 0, "t1", "p")
 	anchor := addMsg(o, "q1", 1, "t1", "q")
-	corpus := []*pb.Message{prior, anchor}
+	corpus := []*threadv1.Message{prior, anchor}
 
 	engineA := NewEngine(cfg, mc, WithChunkOracle(o))
 
@@ -104,8 +104,8 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
 		Corpus:                 corpus,
-		LocalContext:           []*pb.Message{anchor},
-		Scope:                  pb.SelectionScope_SELECTION_SCOPE_THREAD,
+		LocalContext:           []*threadv1.Message{anchor},
+		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
 	})
 	if err != nil {
@@ -135,8 +135,8 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
 		Corpus:                 corpus,
-		LocalContext:           []*pb.Message{anchor},
-		Scope:                  pb.SelectionScope_SELECTION_SCOPE_THREAD,
+		LocalContext:           []*threadv1.Message{anchor},
+		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
 	})
 	if err != nil {
@@ -157,7 +157,7 @@ func TestFork_Concurrent(t *testing.T) {
 	mc.SetScore("a", "b", 0.8)
 
 	cfg := DefaultConfig()
-	cfg.ZScoreThreshold = 0
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
 
 	o := newMockChunkOracle()
@@ -168,9 +168,9 @@ func TestFork_Concurrent(t *testing.T) {
 	if _, err := e.Assemble(context.Background(), AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
-		Corpus:                 []*pb.Message{prior, anchor},
-		LocalContext:           []*pb.Message{anchor},
-		Scope:                  pb.SelectionScope_SELECTION_SCOPE_THREAD,
+		Corpus:                 []*threadv1.Message{prior, anchor},
+		LocalContext:           []*threadv1.Message{anchor},
+		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
 	}); err != nil {
 		t.Fatalf("seed Assemble: %v", err)

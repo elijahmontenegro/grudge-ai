@@ -4,7 +4,8 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 )
 
 // TestAssemble_PriorSelectionReusesNoReselect confirms A5: an Assemble call
@@ -18,6 +19,7 @@ func TestAssemble_PriorSelectionReusesNoReselect(t *testing.T) {
 	mc.SetScore("beta", "current context", 0.65)
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.DiversityLambda = 0
 	cfg.MinBatchStdDev = 0 // isolate reuse from the batch-flatness gate
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
@@ -26,14 +28,14 @@ func TestAssemble_PriorSelectionReusesNoReselect(t *testing.T) {
 	prior1 := addMsg(o, "m1", 0, "t1", "alpha")
 	prior2 := addMsg(o, "m2", 1, "t1", "beta")
 	anchor := addMsg(o, "q", 2, "t1", "current context")
-	corpus := []*pb.Message{prior1, prior2, anchor}
+	corpus := []*threadv1.Message{prior1, prior2, anchor}
 
 	req := AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
 		Corpus:                 corpus,
-		LocalContext:           []*pb.Message{anchor},
-		Scope:                  pb.SelectionScope_SELECTION_SCOPE_THREAD,
+		LocalContext:           []*threadv1.Message{anchor},
+		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
 	}
 
@@ -78,6 +80,7 @@ func TestAssemble_PriorSelectionShedsWholeGroups(t *testing.T) {
 	mc.SetScore("beta", "current context", 0.65)
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.DiversityLambda = 0
 	cfg.MinBatchStdDev = 0 // isolate reuse/shed from the batch-flatness gate
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
@@ -86,14 +89,14 @@ func TestAssemble_PriorSelectionShedsWholeGroups(t *testing.T) {
 	prior1 := addMsg(o, "m1", 0, "t1", "alpha")
 	prior2 := addMsg(o, "m2", 1, "t1", "beta")
 	anchor := addMsg(o, "q", 2, "t1", "current context")
-	corpus := []*pb.Message{prior1, prior2, anchor}
+	corpus := []*threadv1.Message{prior1, prior2, anchor}
 
 	req := AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
 		Corpus:                 corpus,
-		LocalContext:           []*pb.Message{anchor},
-		Scope:                  pb.SelectionScope_SELECTION_SCOPE_THREAD,
+		LocalContext:           []*threadv1.Message{anchor},
+		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
 	}
 	first, err := e.Assemble(ctx, req)
@@ -115,7 +118,7 @@ func TestAssemble_PriorSelectionShedsWholeGroups(t *testing.T) {
 	for _, m := range second.Wire {
 		// The shed message's text must not appear as a selected wire entry.
 		// (Local Context is just the anchor here, so shedID is a selected root.)
-		if m.Role == pb.Role_ROLE_USER && TextFromBlocks(m.Content) == "alpha" && shedID == "m1" {
+		if m.Role == threadv1.Role_ROLE_USER && pbtext.TextFromBlocks(m.Content) == "alpha" && shedID == "m1" {
 			t.Fatalf("shed message %s still present in wire after reuse+exclude", shedID)
 		}
 	}

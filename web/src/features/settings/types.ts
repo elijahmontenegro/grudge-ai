@@ -33,19 +33,13 @@ export interface HookConfig {
   timeout: string
 }
 
-// Matches the LIVE keys of service/config/settings.go:EngineConfig.
+// Matches service/config/settings.go:EngineConfig key-for-key.
 // Tunable at runtime; saves apply to the live engine with no rebuild.
 //
 // loss_ratio is the acceptance operating point — the precision stance
 // (a candidate is accepted when its calibrated P(prerequisite) clears
 // it). It is the one hand-set knob; the calibrator coefficients behind
 // it are learned automatically per scorer.
-//
-// The retired flat-threshold keys (edge_threshold, score_floor,
-// z_score_threshold) are deliberately ABSENT here: the backend
-// tolerates them in old config files but does not require them, and
-// the calibrated acceptance model ignores them entirely. The wire
-// carries only knobs that do something.
 export interface EngineConfig {
   loss_ratio: number
   min_batch_stddev: number

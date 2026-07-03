@@ -2,12 +2,14 @@
 // it scores each (query, candidate) pair with a real scorer, pairs those raw
 // similarity scores with the seed labels (correct = prerequisite, distractor
 // = not), and runs the MLE fit. It is the one implementation of seed-set
-// calibration, shared by the runtime's background auto-calibration
-// (substrate.Holder) and the cmd/calibrate dev tool — so there is exactly one
-// definition of "how a scorer gets calibrated."
+// calibration, consumed by the runtime's background auto-calibration
+// (substrate.Holder) — so there is exactly one definition of "how a
+// scorer gets calibrated."
 //
-// Like regenjudge, it lives in a subpackage because it needs core.Scorer;
-// the calibrate package proper stays pure math.
+// It lives in a subpackage because it needs a live scorer; the calibrate
+// package proper stays pure math. The Scorer contract is declared locally
+// (one method) so the rrc stratum never imports core — any core.Scorer
+// satisfies it structurally.
 package seedfit
 
 import (
@@ -15,9 +17,15 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 )
+
+// Scorer is the one-method scoring contract the fit needs. Structurally
+// identical to rrc.Scorer / core.Scorer, declared here so importing the
+// fit pulls neither.
+type Scorer interface {
+	Score(ctx context.Context, query string, candidates []string) ([]float64, error)
+}
 
 // triple is one labeled seed entry: a query, its true prerequisite, and
 // distractors that merely resemble it.
@@ -43,9 +51,9 @@ type Result struct {
 }
 
 // Fit scores the seed set with scorer and fits the calibrator. seedJSON is
-// the pairs file (eval.Seed() for the embedded copy, or a file read by the
-// dev tool). Mass is 0 for every seed sample — a static eval set carries no
-// provenance signal — so the seed can only inform the similarity axis (A, C).
+// the pairs file (seed.Pairs() for the embedded copy). Mass is 0 for every
+// seed sample — a static eval set carries no provenance signal — so the
+// seed can only inform the similarity axis (A, C).
 //
 // The mass coefficient (B) is therefore NOT taken from this fit. Zero-mass
 // data gives B an identically-zero gradient: the MLE would return B=0, and
@@ -67,7 +75,7 @@ type Result struct {
 // Scoring failures on individual triples abort the fit rather than silently
 // thinning the training set: a half-scored seed produces a calibrator that
 // looks fitted but wasn't, which is worse than falling back to the bootstrap.
-func Fit(ctx context.Context, scorer core.Scorer, seedJSON []byte, prior calibrate.Calibrator) (Result, error) {
+func Fit(ctx context.Context, scorer Scorer, seedJSON []byte, prior calibrate.Calibrator) (Result, error) {
 	if scorer == nil {
 		return Result{}, fmt.Errorf("seedfit: nil scorer")
 	}
@@ -120,4 +128,27 @@ func Fit(ctx context.Context, scorer core.Scorer, seedJSON []byte, prior calibra
 		Negatives:  neg,
 		LogLoss:    cal.LogLoss(samples),
 	}, nil
+}
+
+// EnsureFitted is the load-or-fit-and-save composition: return the
+// persisted calibrator for scorerModelID when one exists at path,
+// otherwise fit from seedJSON (carrying prior's structural-lift ratio),
+// persist the result, and return it. A non-nil Result reports a fresh
+// fit (with its training stats); nil means the persisted artifact was
+// used. This is the single definition of "make sure this scorer has a
+// fitted calibrator" — callers own only trigger policy and lifecycle.
+func EnsureFitted(ctx context.Context, scorer Scorer, scorerModelID, path string, seedJSON []byte, prior calibrate.Calibrator) (calibrate.Calibrator, *Result, error) {
+	if cal, ok, err := calibrate.Load(path, scorerModelID); err != nil {
+		return calibrate.Calibrator{}, nil, err
+	} else if ok {
+		return cal, nil, nil
+	}
+	res, err := Fit(ctx, scorer, seedJSON, prior)
+	if err != nil {
+		return calibrate.Calibrator{}, nil, err
+	}
+	if err := calibrate.Save(path, res.Calibrator, scorerModelID, res.Samples, res.LogLoss); err != nil {
+		return calibrate.Calibrator{}, nil, err
+	}
+	return res.Calibrator, &res, nil
 }

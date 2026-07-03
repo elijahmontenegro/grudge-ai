@@ -9,15 +9,15 @@ import (
 
 // Task is the in-memory task model.
 type Task struct {
-	ID          string            `json:"id"`
-	Subject     string            `json:"subject"`
-	Description string            `json:"description"`
-	ActiveForm  string            `json:"activeForm,omitempty"`
-	Owner       string            `json:"owner,omitempty"`
-	Status      string            `json:"status"` // pending, in_progress, completed
-	Blocks      []string          `json:"blocks"`
-	BlockedBy   []string          `json:"blockedBy"`
-	Metadata    map[string]any    `json:"metadata,omitempty"`
+	ID          string         `json:"id"`
+	Subject     string         `json:"subject"`
+	Description string         `json:"description"`
+	ActiveForm  string         `json:"activeForm,omitempty"`
+	Owner       string         `json:"owner,omitempty"`
+	Status      string         `json:"status"` // pending, in_progress, completed
+	Blocks      []string       `json:"blocks"`
+	BlockedBy   []string       `json:"blockedBy"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
 // TaskStore manages tasks per thread. Thread-safe.

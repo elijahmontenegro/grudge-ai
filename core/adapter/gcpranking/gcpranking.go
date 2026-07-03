@@ -21,8 +21,8 @@ import (
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/core/adapter/internal/gcpauth"
+	"github.com/elijahmontenegro/grudge/core/httpc"
 	"github.com/elijahmontenegro/grudge/core/httpc/retry"
-	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 )
 
 // rankBatchSize caps records per :rank call. The Discovery Engine Ranking API

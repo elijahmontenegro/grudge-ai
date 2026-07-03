@@ -4,7 +4,8 @@ import (
 	"context"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // TestRecordProvenance_WritesWeightedEdges confirms RecordProvenance emits
@@ -25,9 +26,9 @@ func TestRecordProvenance_WritesWeightedEdges(t *testing.T) {
 	if len(edges) != 2 {
 		t.Fatalf("expected 2 provenance edges (self/dup/empty skipped), got %d", len(edges))
 	}
-	byFrom := map[string]*pb.Edge{}
+	byFrom := map[string]*rrcv1.Edge{}
 	for _, ed := range edges {
-		if ed.Source != pb.EdgeSource_EDGE_SOURCE_PROVENANCE {
+		if ed.Source != rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 			t.Fatalf("edge %s->%s source=%v, want PROVENANCE", ed.FromMessageId, ed.ToMessageId, ed.Source)
 		}
 		if ed.ToMessageId != "anchor" {
@@ -55,13 +56,13 @@ func TestRecordProvenance_DoesNotCorruptSelection(t *testing.T) {
 	e := testEngine(mc, o)
 	ctx := context.Background()
 
-	msgs := []*pb.Message{
+	msgs := []*threadv1.Message{
 		addMsg(o, "m0", 0, "t1", "a"),
 		addMsg(o, "m1", 1, "t1", "b"),
 		addMsg(o, "unrelated", 2, "t1", "z"),
 	}
 	// Form the CE edge m0 <- m1.
-	if _, _, err := e.OnMessage(ctx, msgs[1], msgs[:1]); err != nil {
+	if _, _, err := e.selectViaFixture(ctx, msgs[1], msgs[:1]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -69,7 +70,7 @@ func TestRecordProvenance_DoesNotCorruptSelection(t *testing.T) {
 	// extractSubgraph traversed provenance, "unrelated" would surface.
 	e.RecordProvenance(msgs[1], []Contributor{{MessageID: "unrelated", ThreadID: "t1", Weight: 1.0}})
 
-	result, err := e.Select("m1", pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	result, err := e.Select("m1", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,8 +99,7 @@ func TestProvenanceReach_SurfacesAmputatedRoot(t *testing.T) {
 
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
-	cfg.EdgeThreshold = 0.5
-	cfg.ZScoreThreshold = 0
+	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
 	cfg.RerankTopK = 1 // cosine surfaces only ONE candidate — the amputation
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
@@ -124,9 +124,9 @@ func TestProvenanceReach_SurfacesAmputatedRoot(t *testing.T) {
 		MessageIDs:  []string{"q"},
 		Chunks:      []SerializedLocalContextChunk{{Index: 0, Text: "current context"}},
 	}
-	corpus := []*pb.Message{root, noise, anchor}
+	corpus := []*threadv1.Message{root, noise, anchor}
 
-	edges, tel, err := e.SelectPrerequisites(ctx, local, anchor, corpus, pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	edges, tel, err := e.SelectPrerequisites(ctx, local, anchor, corpus, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestProvenanceReach_SurfacesAmputatedRoot(t *testing.T) {
 	// reached the scorer despite being outside top-K cosine.
 	var rootEdged bool
 	for _, ed := range edges {
-		if ed.FromMessageId == "root" && ed.Source == pb.EdgeSource_EDGE_SOURCE_CROSS_ENCODER {
+		if ed.FromMessageId == "root" && ed.Source == rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER {
 			rootEdged = true
 		}
 	}
@@ -163,10 +163,8 @@ func TestCalibratedAcceptance_MassLiftsLowSimilarityRoot(t *testing.T) {
 	if !accept(pWithMass, cfg.LossRatio, 0, 0) {
 		t.Fatalf("low-sim + high-mass root should be accepted (the /\\); P=%.3f", pWithMass)
 	}
-	// And the flat threshold it replaced would have cut the raw 0.15 score.
-	if 0.15 >= cfg.EdgeThreshold {
-		t.Fatal("test premise broken: 0.15 should be below the retired EdgeThreshold")
-	}
+	// The retired flat threshold (0.60) would have cut the raw 0.15
+	// score unconditionally — mass had no voice under it.
 }
 
 // TestCalibratedAcceptance_AbstainsWhenNothingClears confirms abstention
@@ -175,6 +173,7 @@ func TestCalibratedAcceptance_MassLiftsLowSimilarityRoot(t *testing.T) {
 // forcing low-confidence picks.
 func TestCalibratedAcceptance_AbstainsWhenNothingClears(t *testing.T) {
 	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
 	// A field of weak, structureless candidates — none clears the floor.
 	for _, sim := range []float64{0.1, 0.2, 0.3, 0.35} {
 		if accept(cfg.Calibrator.Predict(sim, 0.0), cfg.LossRatio, 0, 0) {
@@ -183,7 +182,7 @@ func TestCalibratedAcceptance_AbstainsWhenNothingClears(t *testing.T) {
 	}
 }
 
-func messageIDsOf(sel []*pb.SelectedMessage) []string {
+func messageIDsOf(sel []*rrcv1.SelectedMessage) []string {
 	out := make([]string, len(sel))
 	for i, s := range sel {
 		out[i] = s.MessageId
@@ -191,7 +190,7 @@ func messageIDsOf(sel []*pb.SelectedMessage) []string {
 	return out
 }
 
-func selectionContains(sel []*pb.SelectedMessage, id string) bool {
+func selectionContains(sel []*rrcv1.SelectedMessage, id string) bool {
 	for _, s := range sel {
 		if s.MessageId == id {
 			return true

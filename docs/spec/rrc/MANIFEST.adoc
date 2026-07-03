@@ -147,13 +147,23 @@ type QUDGraph struct {
 [source,go]
 ----
 type EngineConfig struct {
-    EdgeThreshold float64 // Edge creation threshold (default: 0.5)
-    WeightCE      float64 // Cross-encoder weight (default: 0.7)
-    WeightQUD     float64 // QUD weight (default: 0.2)
-    WeightTemp    float64 // Temporal proximity weight (default: 0.1)
-    ScoreFloor    float64 // Traversal cutoff (default: 0.01)
+    Calibrator calibrate.Calibrator // P(prereq|sim,mass) — fitted per scorer
+    LossRatio  float64              // acceptance stance (default: 0.5)
+
+    MinBatchStdDev        float64 // flat-spread guard (default: 0.05)
+    RerankTopK            int
+    LocalContextSize      int
+    Chunk                 chunk.Config
+    ContextBudgetTokens   int
+    DiversityLambda       float64
+    BudgetHeadroomPct     float64
+    PerMsgDelimiterTokens int
 }
 ----
+
+Acceptance is calibrated expected value against `LossRatio` (plus the
+budget's marginal token price); there is no flat edge threshold or
+traversal floor.
 
 ==== SelectionEntry (internal)
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // DeliveryGroup is an atomic restoration unit. Root is the message that
@@ -14,22 +14,22 @@ type DeliveryGroup struct {
 	RootID   string
 	RootIDs  []string
 	Score    float64
-	Messages []*pb.Message
+	Messages []*threadv1.Message
 }
 
 // ProtocolIndex resolves relational protocol structure from the Store.
 // Counterparts are keyed by their original tool-call IDs and thread; no
 // relevance score or identifier rewriting participates in closure.
 type ProtocolIndex struct {
-	callByKey   map[string]*pb.Message
-	resultByKey map[string]*pb.Message
+	callByKey   map[string]*threadv1.Message
+	resultByKey map[string]*threadv1.Message
 	ambiguous   map[string]bool
 }
 
-func NewProtocolIndex(corpus []*pb.Message) *ProtocolIndex {
+func NewProtocolIndex(corpus []*threadv1.Message) *ProtocolIndex {
 	p := &ProtocolIndex{
-		callByKey:   make(map[string]*pb.Message),
-		resultByKey: make(map[string]*pb.Message),
+		callByKey:   make(map[string]*threadv1.Message),
+		resultByKey: make(map[string]*threadv1.Message),
 		ambiguous:   make(map[string]bool),
 	}
 	for _, m := range corpus {
@@ -57,19 +57,19 @@ func NewProtocolIndex(corpus []*pb.Message) *ProtocolIndex {
 // missing counterpart is an integrity error: silently dropping root would
 // discard gate-passed prerequisite context, while substitution would bind
 // unrelated historical operations.
-func (p *ProtocolIndex) CloseGroup(root *pb.Message, score float64) (DeliveryGroup, error) {
+func (p *ProtocolIndex) CloseGroup(root *threadv1.Message, score float64) (DeliveryGroup, error) {
 	if root == nil {
 		return DeliveryGroup{}, fmt.Errorf("protocol closure: nil root")
 	}
 	seen := map[string]bool{root.Id: true}
-	queue := []*pb.Message{root}
-	messages := []*pb.Message{root}
+	queue := []*threadv1.Message{root}
+	messages := []*threadv1.Message{root}
 
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
 		for _, b := range current.Content {
-			var counterpart *pb.Message
+			var counterpart *threadv1.Message
 			var relation string
 			switch {
 			case b.GetToolCall() != nil:
