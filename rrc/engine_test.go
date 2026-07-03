@@ -153,6 +153,14 @@ func addMsg(o *mockChunkOracle, id string, position int64, threadID string, text
 // accept boundary, and the flat-spread gate is disabled
 // (MinBatchStdDev=0) so these tests exercise acceptance gating only.
 // The spread gate has its own dedicated test suite further down.
+// testConfig is DefaultConfig with the deterministic test estimator —
+// NewEngine's constructor invariant requires one.
+func testConfig() EngineConfig {
+	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
+	return cfg
+}
+
 func testEngine(mc *mockScorer, o *mockChunkOracle) *Engine {
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
@@ -238,7 +246,7 @@ func TestSelectPrereqs_NilOracle(t *testing.T) {
 	// Symmetric to nil scorer: no oracle means OnMessage cannot
 	// resolve chunks. Same failure class — surface, don't silently
 	// produce zero edges.
-	e := NewEngine(DefaultConfig(), newMockScorer())
+	e := NewEngine(testConfig(), newMockScorer())
 	msg := makeMsg("m1", 1, "t1", "hello")
 	corpus := []*threadv1.Message{makeMsg("m0", 0, "t1", "hi")}
 
@@ -1103,7 +1111,7 @@ func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 // engine running MMR is a configuration bug, not an acceptable
 // degradation mode.
 func TestApplyMMR_NoOracleError(t *testing.T) {
-	e := NewEngine(DefaultConfig(), newMockScorer())
+	e := NewEngine(testConfig(), newMockScorer())
 	// No SetChunkOracle call.
 	_, err := e.ApplyMMR(context.Background(), []*rrcv1.SelectedMessage{
 		{MessageId: "a", EffectiveScore: 0.5},
@@ -1138,7 +1146,7 @@ func TestApplyMMR_ExactScores(t *testing.T) {
 		{MessageId: "near", EffectiveScore: 0.90},
 		{MessageId: "far", EffectiveScore: 0.50},
 	}
-	e := NewEngine(DefaultConfig(), newMockScorer(), WithChunkOracle(o))
+	e := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(o))
 	out, err := e.ApplyMMR(context.Background(), selected, 0.5)
 	if err != nil {
 		t.Fatalf("ApplyMMR error: %v", err)
@@ -1175,7 +1183,7 @@ func TestApplyMMR_ExactScores(t *testing.T) {
 // of computing "λ·x + 0" or "0 + (1-λ)·diversity" — those extremes
 // collapse to the non-MMR paths the caller already has.
 func TestApplyMMR_LambdaExtremesNoOp(t *testing.T) {
-	e := NewEngine(DefaultConfig(), newMockScorer(), WithChunkOracle(newVectorOracle()))
+	e := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(newVectorOracle()))
 	selected := []*rrcv1.SelectedMessage{
 		{MessageId: "a", EffectiveScore: 0.9},
 		{MessageId: "b", EffectiveScore: 0.8},
@@ -1192,4 +1200,18 @@ func TestApplyMMR_LambdaExtremesNoOp(t *testing.T) {
 			t.Errorf("lambda=%.1f: scores must not be rewritten on pass-through", lambda)
 		}
 	}
+}
+
+// TestNewEngine_RequiresEstimator pins the constructor invariant: an
+// engine without a token estimator cannot exist. Every Assemble
+// estimates (wire sizing runs before the budget check), so the
+// failure belongs at construction, not mid-flight on the first
+// message.
+func TestNewEngine_RequiresEstimator(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewEngine without an estimator must panic")
+		}
+	}()
+	NewEngine(DefaultConfig(), newMockScorer())
 }

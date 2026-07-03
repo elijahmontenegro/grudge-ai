@@ -22,6 +22,10 @@ type persisted struct {
 }
 
 // Save writes a fitted calibrator to path as JSON, creating parent dirs.
+// The composed load-or-fit-and-save lifecycle lives with the fit source
+// (seedfit.EnsureFitted) — deliberately: this package stays pure
+// math + artifact IO, and the future corpus-replay mass fit is a
+// different lifecycle (watermark-gated refinement), not a load-or-fit.
 func Save(path string, c Calibrator, scorerModelID string, samples int, logLoss float64) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("calibrate.Save: mkdir: %w", err)

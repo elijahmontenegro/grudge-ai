@@ -116,7 +116,16 @@ func WithLoadedScores(scores []PersistedScore) Option {
 	}
 }
 
+// NewEngine constructs an engine. cfg.Chunk.Estimator is a constructor
+// invariant: the engine speaks token units on every Assemble
+// (Local Context serialization chunks, and wire sizing runs before the
+// budget check, so no budget setting makes the estimator optional).
+// Constructing an engine without a tokenizer is a programming error,
+// surfaced here rather than mid-flight on the first message.
 func NewEngine(cfg EngineConfig, scorer Scorer, options ...Option) *Engine {
+	if cfg.Chunk.Estimator == nil {
+		panic("rrc: EngineConfig.Chunk.Estimator is nil — wire a TokenEstimator at construction (e.g. rrc/tiktoken)")
+	}
 	engine := &Engine{
 		scorer: scorer,
 		dag:    newDAG(),
