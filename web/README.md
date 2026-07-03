@@ -18,10 +18,10 @@ root.
 
 ## Build
 
-The web bundle is built into `web/dist/` and then embedded into the Go
-binary via `//go:embed`. The repo root's `task build` does both in one step
-via the `embed-sync` Taskfile target. Don't ship `web/dist/` independently —
-the binary serves the embedded copy.
+The web bundle is built by Vite directly into `service/cmd/grudge/dist/`
+(`vite.config.ts` sets `build.outDir`) and embedded into the Go binary via
+`//go:embed`. The repo root's `task build` does both in one step. There is
+no separate bundle to ship — the binary serves the embedded copy.
 
 ## Folder convention
 

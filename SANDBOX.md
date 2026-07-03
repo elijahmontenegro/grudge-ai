@@ -44,7 +44,7 @@ Runs as non-root user `agent` (UID 1000). `WORKDIR` is `/workspace`.
 
 ## How it's invoked
 
-`service/sandbox/docker.go` calls `docker run --rm -i -v <dir>:<dir> ... grudge-sandbox:latest sh -c <command>` per Bash tool call. Each working directory is bind-mounted at the same path so commands the agent constructs against host paths work unchanged inside.
+`sandbox/docker.go` calls `docker run --rm -i -v <dir>:<dir> ... grudge-sandbox:latest sh -c <command>` per Bash tool call. Each working directory is bind-mounted at the same path so commands the agent constructs against host paths work unchanged inside.
 
 Preflight: `sandbox.CheckReady()` verifies the daemon is reachable and the image exists. Called at boot (logs status) and before every `Exec`.
 
@@ -56,7 +56,7 @@ Threads have a `sandboxed` boolean in the GraphQL `Thread` type. Default is `fal
 
 Edit `containers/sandbox/Dockerfile`, add your packages to the `apt-get install` list, rebuild. The image rebuild is cached per layer, so adding a single package is cheap.
 
-If you need Grudge-specific tooling (e.g., a different Python version per project), create a derived image and point `service/sandbox/docker.go`'s `Image` constant at it. Resist per-thread image selection — it multiplies the build/cache surface and was not worth the complexity when weighed.
+If you need Grudge-specific tooling (e.g., a different Python version per project), create a derived image and point `sandbox/docker.go`'s `Image` constant at it. Resist per-thread image selection — it multiplies the build/cache surface and was not worth the complexity when weighed.
 
 ## Disable the feature entirely
 
