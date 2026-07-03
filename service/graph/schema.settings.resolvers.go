@@ -13,43 +13,54 @@ import (
 	"log"
 
 	"github.com/elijahmontenegro/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/hooks"
+	"github.com/elijahmontenegro/grudge/service/mcp"
 )
 
 // UpdateSettings is the resolver for the updateSettings field.
+//
+// Decode and validate everything FIRST, then apply the whole snapshot
+// in one holder-locked mutation with one rebuild. Writing cfg.Settings
+// fields inline (the old shape) races the background calibration
+// stages, which re-enter Build and read cfg.Settings under the
+// holder's lock at arbitrary moments.
 func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInput) (*Settings, error) {
-	s := &r.cfg.Settings
+	var providers map[string]config.ProviderConfig
 	if input.Providers != nil {
 		// Replace semantics, not merge. `json.Unmarshal` into an
 		// existing map preserves keys the new payload omits; that
 		// meant removing a provider in the UI never actually removed
-		// it from disk. Zero the map first so the input is the
+		// it from disk. Decoding into a fresh map keeps the input the
 		// authoritative state.
-		var next map[string]config.ProviderConfig
-		if err := json.Unmarshal([]byte(*input.Providers), &next); err != nil {
+		if err := json.Unmarshal([]byte(*input.Providers), &providers); err != nil {
 			return nil, fmt.Errorf("invalid providers JSON: %w", err)
 		}
-		s.Providers = next
 	}
+	var permissions map[string]string
 	if input.Permissions != nil {
-		if err := json.Unmarshal([]byte(*input.Permissions), &s.Permissions); err != nil {
+		if err := json.Unmarshal([]byte(*input.Permissions), &permissions); err != nil {
 			return nil, fmt.Errorf("invalid permissions JSON: %w", err)
 		}
 	}
+	var mcpServers []mcp.ServerConfig
 	if input.McpServers != nil {
-		if err := json.Unmarshal([]byte(*input.McpServers), &s.MCPServers); err != nil {
+		if err := json.Unmarshal([]byte(*input.McpServers), &mcpServers); err != nil {
 			return nil, fmt.Errorf("invalid MCP servers JSON: %w", err)
 		}
 	}
+	var hookConfigs []hooks.HookConfig
 	if input.Hooks != nil {
-		if err := json.Unmarshal([]byte(*input.Hooks), &s.Hooks); err != nil {
+		if err := json.Unmarshal([]byte(*input.Hooks), &hookConfigs); err != nil {
 			return nil, fmt.Errorf("invalid hooks JSON: %w", err)
 		}
 	}
+	var preferences map[string]string
 	if input.Preferences != nil {
-		if err := json.Unmarshal([]byte(*input.Preferences), &s.Preferences); err != nil {
+		if err := json.Unmarshal([]byte(*input.Preferences), &preferences); err != nil {
 			return nil, fmt.Errorf("invalid preferences JSON: %w", err)
 		}
 	}
+	var engine *config.EngineConfig
 	if input.Engine != nil {
 		var cfg config.EngineConfig
 		decoder := json.NewDecoder(bytes.NewReader([]byte(*input.Engine)))
@@ -60,24 +71,46 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		s.Engine = cfg
-		// Apply the complete snapshot onto the live engine config.
-		live := cfg.ApplyTo(r.substrate.Engine().Config())
-		if err := r.substrate.UpdateEngineConfig(ctx, live); err != nil {
-			return nil, fmt.Errorf("update engine config: %w", err)
+		engine = &cfg
+	}
+
+	if err := r.substrate.MutateSettings(ctx, func(s *config.Settings) error {
+		if input.Providers != nil {
+			s.Providers = providers
 		}
+		if input.Permissions != nil {
+			s.Permissions = permissions
+		}
+		if input.McpServers != nil {
+			s.MCPServers = mcpServers
+		}
+		if input.Hooks != nil {
+			s.Hooks = hookConfigs
+		}
+		if input.Preferences != nil {
+			s.Preferences = preferences
+		}
+		if engine != nil {
+			// loss_ratio 0 on the wire means "keep the current stance" —
+			// persist the kept value, not the zero, so the stance
+			// survives the round-trip.
+			if engine.LossRatio == 0 {
+				engine.LossRatio = s.Engine.LossRatio
+			}
+			s.Engine = *engine
+		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("apply settings: %w", err)
+	}
+
+	if engine != nil {
+		live := r.substrate.Engine().Config()
 		log.Printf("[Settings] Engine config applied live: lossRatio=%.3f minStd=%.3f local=%d topK=%d budget=%d lambda=%.2f headroom=%.2f delim=%d",
 			live.LossRatio, live.MinBatchStdDev,
 			live.LocalContextSize, live.RerankTopK,
 			live.ContextBudgetTokens,
 			live.DiversityLambda, live.BudgetHeadroomPct, live.PerMsgDelimiterTokens)
-	}
-	if err := r.cfg.Save(); err != nil {
-		return nil, err
-	}
-	// Hot-reload providers from updated config
-	if err := r.substrate.ReloadProviders(ctx); err != nil {
-		log.Printf("[Settings] Provider reload: %v", err)
 	}
 	return r.Query().Settings(ctx)
 }

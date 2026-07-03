@@ -152,7 +152,12 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 			return nil, fmt.Errorf("scorer (%s/%s): %w", scrCfg.Adapter, scrCfg.Model, err)
 		}
 		s.Scorer = sc
-		s.RerankerModelID = scrCfg.Model
+		// The artifact-binding identity is the full endpoint identity, not
+		// the bare model name: an empty Model (TEI-style endpoint-defined
+		// scorers) must never wildcard-match a foreign artifact, and the
+		// same model name behind a different endpoint is a different score
+		// distribution.
+		s.RerankerModelID = scrCfg.Adapter + "/" + scrCfg.Model + "@" + scrCfg.BaseURL
 		log.Printf("Scorer: %s/%s @ %s", scrCfg.Adapter, scrCfg.Model, scrCfg.BaseURL)
 	}
 

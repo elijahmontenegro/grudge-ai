@@ -218,6 +218,15 @@ func (s *scorer) scoreOne(ctx context.Context, query, document string) (float64,
 	}
 
 	first := content[answerIdx]
+	// The generated token at the answer position must BE the answer. At
+	// temperature 0 a healthy zerank's argmax is Yes/No; anything else
+	// (a reasoning trace opening with prose, an open think fence) means
+	// the position is not the answer head, and reading Yes/No out of a
+	// prose distribution's top-20 would score garbage silently.
+	if !tokenIsYes(first.Token) && !tokenIsNo(first.Token) {
+		return 0, fmt.Errorf("%w: answer position generated %q, not Yes/No — chat-template drift or wrong model at endpoint?",
+			core.ErrProviderUnavailable, first.Token)
+	}
 	yesLogprob := math.Inf(-1)
 	noLogprob := math.Inf(-1)
 	for _, tl := range first.TopLogprobs {
@@ -292,16 +301,21 @@ func (s *scorer) scoreOne(ctx context.Context, query, document string) (float64,
 	return 1.0 / (1.0 + math.Exp(-binaryLogit/5.0)), nil
 }
 
-// tokenIsScaffold reports whether token is thinking-prelude scaffold
-// rather than answer content: the think fences themselves or pure
-// whitespace between them and the answer. Full TrimSpace (not just
-// leading spaces/tabs): the prelude's separators are newline tokens.
+// tokenIsScaffold reports whether token is benign thinking-prelude
+// scaffold: the CLOSE fence (the template pre-opened an empty think
+// block and the model immediately closes it — the observed harmless
+// case) or pure whitespace. The OPEN fence is deliberately NOT
+// scaffold: a generated "<think>" means the model is ENTERING a
+// reasoning trace — proof enable_thinking was ignored — and scoring
+// must fail loudly rather than scan into prose. Full TrimSpace (not
+// just leading spaces/tabs): the prelude's separators are newline
+// tokens.
 func tokenIsScaffold(token string) bool {
 	t := strings.TrimSpace(token)
 	if t == "" {
 		return true // pure-whitespace token
 	}
-	return t == "</think>" || t == "<think>"
+	return t == "</think>"
 }
 
 func tokenIsYes(token string) bool {

@@ -2,6 +2,8 @@ package seedfit
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
@@ -11,10 +13,11 @@ import (
 // prerequisite (index 0) high, distractors low.
 type sepScorer struct{}
 
-func (sepScorer) Score(_ context.Context, _ string, c []string) ([]float64, error) {
+func (sepScorer) Score(_ context.Context, q string, c []string) ([]float64, error) {
 	out := make([]float64, len(c))
+	rot := PositiveIndex(q, len(c))
 	for i := range out {
-		if i == 0 {
+		if i == rot {
 			out[i] = 0.9
 		} else {
 			out[i] = 0.1
@@ -102,10 +105,11 @@ func (collapsedScorer) Score(_ context.Context, _ string, c []string) ([]float64
 // systematically anti-correlated with the labels.
 type invertedScorer struct{}
 
-func (invertedScorer) Score(_ context.Context, _ string, c []string) ([]float64, error) {
+func (invertedScorer) Score(_ context.Context, q string, c []string) ([]float64, error) {
 	out := make([]float64, len(c))
+	rot := PositiveIndex(q, len(c))
 	for i := range out {
-		if i == 0 {
+		if i == rot {
 			out[i] = 0.1
 		} else {
 			out[i] = 0.9
@@ -140,4 +144,22 @@ func TestFit_RefusesAntiCorrelatedScorer(t *testing.T) {
 		t.Fatal("anti-correlated scorer must be refused, got a fit")
 	}
 	t.Logf("refused as expected: %v", err)
+}
+
+// TestHealthSubsampleIsStratified pins the health subsample's coverage
+// contract: the stratified round-robin must touch every seed category
+// within the first pass, so boot health sees each difficulty regime —
+// including long documents, where template drift appears first.
+func TestHealthSubsampleIsStratified(t *testing.T) {
+	raw, err := os.ReadFile("../seed/pairs.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p pairsFile
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Categories) > healthTriples {
+		t.Fatalf("healthTriples (%d) no longer covers every category (%d) — the round-robin loses stratification", healthTriples, len(p.Categories))
+	}
 }

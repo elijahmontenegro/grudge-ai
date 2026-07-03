@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 )
@@ -26,6 +27,11 @@ type Artifact struct {
 
 	MassSamples          int `json:"mass_samples,omitempty"`
 	ProvenanceEdgesAtFit int `json:"provenance_edges_at_fit,omitempty"`
+	// MassAttemptEdges is failure memory: the provenance-edge count at
+	// the last FAILED mass-refit attempt. Re-arming waits for the corpus
+	// to double past it, so a structurally doomed or judge-broken replay
+	// retries on growth, not on every reload.
+	MassAttemptEdges int `json:"mass_attempt_edges,omitempty"`
 }
 
 // Save writes a fitted calibrator artifact to path as JSON, creating
@@ -41,8 +47,15 @@ func Save(path string, a Artifact) error {
 	if err != nil {
 		return fmt.Errorf("calibrate.Save: marshal: %w", err)
 	}
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	// Atomic: write a sibling temp file and rename. A crash or ENOSPC
+	// mid-write must not leave torn JSON at the canonical path — a torn
+	// artifact would fail every subsequent Load and wedge calibration.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
 		return fmt.Errorf("calibrate.Save: write: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("calibrate.Save: rename: %w", err)
 	}
 	return nil
 }
@@ -66,9 +79,17 @@ func Load(path, scorerModelID string) (Artifact, bool, error) {
 		return Artifact{}, false, fmt.Errorf("calibrate.Load: parse %s: %w", path, err)
 	}
 	// A calibrator fit against a different reranker's score distribution
-	// does not apply — refuse it rather than silently mis-gate.
-	if scorerModelID != "" && a.ScorerModelID != "" && a.ScorerModelID != scorerModelID {
+	// does not apply — refuse it rather than silently mis-gate. Strict:
+	// an artifact with no recorded scorer id is refused for any scorer
+	// (an empty id must not act as a wildcard).
+	if a.ScorerModelID == "" || (scorerModelID != "" && a.ScorerModelID != scorerModelID) {
 		return Artifact{}, false, nil
+	}
+	// Coefficient sanity: a parseable-but-degenerate artifact (hand
+	// edit, partial legacy write) must not become the live calibrator.
+	if !(a.Calibrator.A > 0) || math.IsNaN(a.Calibrator.B) || math.IsInf(a.Calibrator.B, 0) ||
+		math.IsNaN(a.Calibrator.C) || math.IsInf(a.Calibrator.C, 0) || math.IsInf(a.Calibrator.A, 0) {
+		return Artifact{}, false, fmt.Errorf("calibrate.Load: degenerate coefficients in %s (%+v)", path, a.Calibrator)
 	}
 	return a, true, nil
 }

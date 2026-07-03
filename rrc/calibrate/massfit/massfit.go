@@ -6,6 +6,16 @@
 // corpus with provenance edges, replayed turn by turn, with candidates
 // labeled by regenerative counterfactual coherence (regenjudge).
 //
+// KNOWN FIDELITY LIMITS (deliberate first-cut scope, documented so the
+// gap is a decision rather than a surprise): replay reconstructs one
+// selection per turn — the FIRST outbound call — while live selection
+// runs per call in multi-step tool loops; mass is computed under
+// ALL_THREADS while much live traffic is THREAD-scoped (replay mass is
+// an upper bound there); and labels come from regenjudge's one-call
+// judgment form. The faithful next step, if fit quality demands it, is
+// replaying per selection EVENT from the persisted selections table
+// rather than per turn from the raw corpus.
+//
 // Replay reconstructs, for each historical turn: the active discourse
 // as selection saw it (the trigger plus BuildActiveDiscourse's
 // reach-back anchors — not the turn's finished message group), the
@@ -75,6 +85,9 @@ type Stats struct {
 	TurnsSampled    int
 	MassPairs       int
 	ContrastPairs   int
+	// Truncated reports that at least one turn's provenance walk hit
+	// provenanceReachCap — the no-silent-cap contract, surfaced.
+	Truncated bool
 }
 
 // turnGroup is one historical turn: its id and messages in corpus order.
@@ -122,20 +135,37 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 		byThread[m.ThreadId] = append(byThread[m.ThreadId], m)
 	}
 
+	// Chronological order, not storage order: AllCorpus sorts by
+	// (thread_id, position), and first-appearance grouping over that
+	// would let whichever threads sort lexicographically first eat the
+	// whole label budget.
+	sort.SliceStable(turns, func(i, j int) bool {
+		return turns[i].messages[0].CreatedAt.AsTime().Before(turns[j].messages[0].CreatedAt.AsTime())
+	})
+
 	for _, turn := range turns {
 		if len(samples) >= maxLabels {
 			break
 		}
 		stats.TurnsConsidered++
 
+		// Only user-triggered turns replay. A turn whose first stored
+		// message is model output (an autonomous tick's empty-content
+		// call) had no selector input live — replaying it would score
+		// candidates against text that did not exist at selection time.
+		if turn.messages[0].Role != threadv1.Role_ROLE_USER {
+			continue
+		}
 		anchorTime := turn.messages[0].CreatedAt.AsTime()
 		threadID := turn.messages[0].ThreadId
 
-		// Thread corpus through the trigger (inclusive): what existed when
-		// the turn's first model call selected.
+		// Thread corpus strictly before the trigger, plus the trigger
+		// itself — symmetric with the candidate/edge cutoffs below, so
+		// same-timestamp rows (imported corpora) can't enter the cone
+		// window while being excluded as candidates.
 		var threadThroughTrigger []*threadv1.Message
 		for _, m := range byThread[threadID] {
-			if !m.CreatedAt.AsTime().After(anchorTime) {
+			if m.CreatedAt.AsTime().Before(anchorTime) || m.Id == turn.messages[0].Id {
 				threadThroughTrigger = append(threadThroughTrigger, m)
 			}
 		}
@@ -171,7 +201,13 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 
 		// Mass under ALL_THREADS: provenance is a structural fact of the
 		// corpus, and the /\'s home turf includes cross-thread roots.
-		mass, _ := rrc.ProvenanceMass(edgesAsOf, coneIDs, threadID, threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS)
+		// KNOWN FIDELITY LIMIT: live THREAD-scoped selections prune
+		// cross-thread chains this replay keeps, so replay mass is an
+		// upper bound on live mass for those turns.
+		mass, trunc := rrc.ProvenanceMass(edgesAsOf, coneIDs, threadID, threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS)
+		if trunc {
+			stats.Truncated = true
+		}
 
 		var massIDs []string
 		for id, m := range mass {
@@ -189,8 +225,23 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 			}
 			return massIDs[i] < massIDs[j]
 		})
+		// Half the per-turn quota goes to the top of the mass ranking,
+		// half to a seeded-random draw from the REST of the mass-bearing
+		// pool — without the random half, B would be fitted on a bimodal
+		// (top-tail vs exact-zero) distribution and its slope across the
+		// mid-mass range, where the acceptance boundary actually
+		// operates, would be pure extrapolation.
 		if len(massIDs) > perTurnMassCap {
-			massIDs = massIDs[:perTurnMassCap]
+			head := massIDs[:perTurnMassCap/2]
+			rest := append([]string(nil), massIDs[perTurnMassCap/2:]...)
+			rng.Shuffle(len(rest), func(i, j int) { rest[i], rest[j] = rest[j], rest[i] })
+			take := perTurnMassCap - len(head)
+			if take > len(rest) {
+				take = len(rest)
+			}
+			picked := append(append([]string(nil), head...), rest[:take]...)
+			sort.Strings(picked)
+			massIDs = picked
 		}
 
 		// Contrast: equal count of zero-mass candidates, drawn seeded-random

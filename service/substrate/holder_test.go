@@ -14,6 +14,7 @@ import (
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
+	"github.com/elijahmontenegro/grudge/rrc/calibrate/seedfit"
 	"github.com/elijahmontenegro/grudge/service/config"
 	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/storage"
@@ -21,18 +22,25 @@ import (
 )
 
 // fakeSeedScorer scores the seed set the way a competent reranker would:
-// seedfit always places the true prerequisite at candidate index 0, so
-// returning a high score there and low elsewhere yields a separable fit.
-// Registered through the real provider registry so the holder exercises the
-// same construction path as a production scorer.
+// the true prerequisite sits at the query-derived rotation index
+// (seedfit.PositiveIndex), so scoring that slot high yields a separable
+// fit. Replay scoring (single-candidate batches from the mass refit)
+// keys on content instead — candidates carrying the fixture marker
+// score high — so replay sims are informative rather than positionally
+// constant. Registered through the real provider registry so the holder
+// exercises the same construction path as a production scorer.
 type fakeSeedScorer struct{}
 
-func (fakeSeedScorer) Score(_ context.Context, _ string, candidates []string) ([]float64, error) {
+func (fakeSeedScorer) Score(_ context.Context, q string, candidates []string) ([]float64, error) {
 	out := make([]float64, len(candidates))
-	for i := range out {
-		if i == 0 {
+	rot := seedfit.PositiveIndex(q, len(candidates))
+	for i, c := range candidates {
+		switch {
+		case strings.Contains(c, "MAGICROOT"):
 			out[i] = 0.9
-		} else {
+		case len(candidates) > 1 && i == rot:
+			out[i] = 0.9
+		default:
 			out[i] = 0.1
 		}
 	}
@@ -91,7 +99,7 @@ func TestHolder_SelfCalibratesInBackground(t *testing.T) {
 
 	// The artifact exists and is bound to this scorer.
 	calPath := datadir.CalibratorPath(dataDir)
-	art, ok, err := calibrate.Load(calPath, "fake-reranker-1")
+	art, ok, err := calibrate.Load(calPath, "holdertest-scorer/fake-reranker-1@")
 	if err != nil || !ok {
 		t.Fatalf("persisted artifact not loadable for scorer: ok=%v err=%v", ok, err)
 	}
@@ -281,7 +289,7 @@ func TestHolder_HealthCheckRefusesPoisonedRefit(t *testing.T) {
 	calPath := datadir.CalibratorPath(dataDir)
 	healthy := calibrate.Artifact{
 		Calibrator:    calibrate.Bootstrap(0.5, 5.0, 2.5),
-		ScorerModelID: "fake-collapsed-1",
+		ScorerModelID: "holdertest-collapsed/fake-collapsed-1@",
 		Samples:       155,
 		LogLoss:       0.33,
 	}
@@ -312,7 +320,7 @@ func TestHolder_HealthCheckRefusesPoisonedRefit(t *testing.T) {
 	}
 	waitCalibration(t, h)
 
-	after, ok, err := calibrate.Load(calPath, "fake-collapsed-1")
+	after, ok, err := calibrate.Load(calPath, "holdertest-collapsed/fake-collapsed-1@")
 	if err != nil || !ok {
 		t.Fatalf("artifact must survive: ok=%v err=%v", ok, err)
 	}
@@ -345,7 +353,7 @@ func TestHolder_HealthyArtifactUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitCalibration(t, h1)
-	before, ok, _ := calibrate.Load(datadir.CalibratorPath(dataDir), "fake-reranker-1")
+	before, ok, _ := calibrate.Load(datadir.CalibratorPath(dataDir), "holdertest-scorer/fake-reranker-1@")
 	if !ok {
 		t.Fatal("first boot never persisted a fit")
 	}
@@ -356,7 +364,7 @@ func TestHolder_HealthyArtifactUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitCalibration(t, h2)
-	after, ok, _ := calibrate.Load(datadir.CalibratorPath(dataDir), "fake-reranker-1")
+	after, ok, _ := calibrate.Load(datadir.CalibratorPath(dataDir), "holdertest-scorer/fake-reranker-1@")
 	if !ok || after != before {
 		t.Fatalf("healthy pairing must leave the artifact untouched: %+v -> %+v", before, after)
 	}
@@ -406,6 +414,10 @@ func TestHolder_MassRefitFitsBFromCorpus(t *testing.T) {
 		mkMsg("m2", "turn-b", threadv1.Role_ROLE_USER, "name three pasta shapes", base.Add(10*time.Second)),
 		mkMsg("m3", "turn-b", threadv1.Role_ROLE_ASSISTANT, "penne rigatoni fusilli", base.Add(11*time.Second)),
 		mkMsg("m4", "turn-c", threadv1.Role_ROLE_USER, "remind me of that overflow case", base.Add(20*time.Second)),
+		mkMsg("m5", "turn-c", threadv1.Role_ROLE_ASSISTANT, "it is the MAGICROOT wraparound at INT_MAX", base.Add(21*time.Second)),
+		mkMsg("m6", "turn-d", threadv1.Role_ROLE_USER, "and the MAGICROOT case once more", base.Add(30*time.Second)),
+		mkMsg("m7", "turn-d", threadv1.Role_ROLE_ASSISTANT, "still the MAGICROOT wraparound", base.Add(31*time.Second)),
+		mkMsg("m8", "turn-e", threadv1.Role_ROLE_USER, "one more time, that overflow thing", base.Add(40*time.Second)),
 	}
 	for i, m := range msgs {
 		m.Position = int64(i)
@@ -425,6 +437,13 @@ func TestHolder_MassRefitFitsBFromCorpus(t *testing.T) {
 		mkEdge("m0", "m1", 1.0, base.Add(2*time.Second)),
 		mkEdge("m2", "m3", 1.0, base.Add(12*time.Second)),
 		mkEdge("m0", "m3", 0.8, base.Add(12*time.Second)),
+		// The root keeps getting selected and banking weight — the
+		// fan-in accumulation that separates real roots from one-shot
+		// noise like m2.
+		mkEdge("m4", "m5", 1.0, base.Add(22*time.Second)),
+		mkEdge("m0", "m5", 0.85, base.Add(22*time.Second)),
+		mkEdge("m6", "m7", 1.0, base.Add(32*time.Second)),
+		mkEdge("m0", "m7", 0.9, base.Add(32*time.Second)),
 	} {
 		if err := db.InsertEdge(e); err != nil {
 			t.Fatal(err)
@@ -447,7 +466,7 @@ func TestHolder_MassRefitFitsBFromCorpus(t *testing.T) {
 	// Stage 1: cold-start seed fit.
 	waitCalibration(t, h)
 	calPath := datadir.CalibratorPath(dataDir)
-	art, ok, _ := calibrate.Load(calPath, "fake-reranker-1")
+	art, ok, _ := calibrate.Load(calPath, "holdertest-scorer/fake-reranker-1@")
 	if !ok {
 		t.Fatal("seed fit never persisted")
 	}
@@ -461,7 +480,7 @@ func TestHolder_MassRefitFitsBFromCorpus(t *testing.T) {
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		art, ok, _ = calibrate.Load(calPath, "fake-reranker-1")
+		art, ok, _ = calibrate.Load(calPath, "holdertest-scorer/fake-reranker-1@")
 		if ok && art.MassSamples > 0 {
 			break
 		}
@@ -483,7 +502,7 @@ func TestHolder_MassRefitFitsBFromCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitCalibration(t, h)
-	again, _, _ := calibrate.Load(calPath, "fake-reranker-1")
+	again, _, _ := calibrate.Load(calPath, "holdertest-scorer/fake-reranker-1@")
 	if again != art {
 		t.Fatalf("watermark should hold the refit: %+v -> %+v", art, again)
 	}

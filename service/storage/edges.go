@@ -26,7 +26,8 @@ func (d *DB) AllEdges() ([]*rrcv1.Edge, error) {
 	rows, err := d.Query(
 		`SELECT from_message_id, to_message_id, score, source, cross_encoder_score,
 		        detected_at, from_thread_id, to_thread_id
-		 FROM edges`,
+		 FROM edges
+		 ORDER BY from_message_id, to_message_id, source`,
 	)
 	if err != nil {
 		return nil, err

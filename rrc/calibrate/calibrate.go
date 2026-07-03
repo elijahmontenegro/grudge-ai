@@ -97,6 +97,11 @@ func (f FitConfig) withDefaults() FitConfig {
 // because the whole point is a re-fit-on-drift model, not a hand-set number.
 // Returns an error only on empty input.
 func Fit(samples []LabeledSample, cfg FitConfig) (*Calibrator, error) {
+	for i, s := range samples {
+		if math.IsNaN(s.Sim) || math.IsInf(s.Sim, 0) || math.IsNaN(s.Mass) || math.IsInf(s.Mass, 0) {
+			return nil, fmt.Errorf("calibrate: non-finite sample %d (sim=%v mass=%v) — broken scorer output must not reach the fit: %w", i, s.Sim, s.Mass, ErrInvalid)
+		}
+	}
 	if len(samples) == 0 {
 		return nil, fmt.Errorf("calibrate.Fit: no samples")
 	}
@@ -201,7 +206,7 @@ var ErrInvalid = errors.New("calibrator/scorer pairing invalid")
 // invalid pairing — the seed fit before persisting, the boot-time
 // scorer health check, and the corpus-replay mass refit.
 func Validate(c Calibrator, samples []LabeledSample) error {
-	if c.A <= 0 {
+	if !(c.A > 0) { // NaN-safe: rejects A ≤ 0 AND non-finite A
 		return fmt.Errorf("calibrate: similarity coefficient A=%.3f ≤ 0 — scores are uncorrelated or anti-correlated with the labels (scorer collapse or wrong model at endpoint?): %w", c.A, ErrInvalid)
 	}
 	logLoss := c.LogLoss(samples)
@@ -210,7 +215,7 @@ func Validate(c Calibrator, samples []LabeledSample) error {
 	if priorLL > 0 {
 		skill = 1 - logLoss/priorLL
 	}
-	if skill < minFitSkill {
+	if !(skill >= minFitSkill) { // NaN-safe: a NaN skill must fail closed
 		return fmt.Errorf("calibrate: no discrimination on the labeled samples (log-loss %.4f vs prior baseline %.4f, skill %.2f < %.2f) — scorer collapse or wrong model at endpoint?: %w",
 			logLoss, priorLL, skill, minFitSkill, ErrInvalid)
 	}

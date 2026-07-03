@@ -168,6 +168,24 @@ func (h *Holder) UpdateEngineConfig(ctx context.Context, ec rrc.EngineConfig, op
 	return nil
 }
 
+// MutateSettings applies a settings mutation, persists it, and rebuilds
+// the substrate — all under the holder's lock. This is the ONLY safe
+// way to write cfg.Settings after boot: background calibration stages
+// re-enter Build at arbitrary moments (up to their context lifetime
+// after the triggering reload) and read cfg.Settings under h.mu, so an
+// unlocked writer is a data race against them.
+func (h *Holder) MutateSettings(ctx context.Context, mutate func(*config.Settings) error) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := mutate(&h.cfg.Settings); err != nil {
+		return err
+	}
+	if err := h.cfg.Save(); err != nil {
+		return err
+	}
+	return h.buildAndSwap(ctx)
+}
+
 // buildAndSwap is the inner reload sequence. Caller holds h.mu.
 // On success: stores the new Substrate atomically, rotates the
 // embed queue, fires onReload. On error: leaves prior state intact.
@@ -231,7 +249,18 @@ func (h *Holder) maybeCalibrate(subs *Substrate) {
 	chunkCfg := subs.Engine.Config().Chunk
 
 	go func() {
-		defer h.calibrating.Store(false)
+		defer func() {
+			h.calibrating.Store(false)
+			// Scorer-swap staleness: if the user swapped scorers while
+			// this stage ran, the artifact we produced is for the OLD
+			// scorer and the new one is sitting on the bootstrap with
+			// nothing scheduled. Re-evaluate once against the current
+			// substrate; convergent because it only fires on identity
+			// change.
+			if cur := h.current.Load(); cur != nil && cur.RerankerModelID != scorerModelID {
+				h.maybeCalibrate(cur)
+			}
+		}()
 
 		// Independent context: the caller's reload ctx ends with the
 		// request that triggered it, but calibration is a background job
@@ -244,7 +273,26 @@ func (h *Holder) maybeCalibrate(subs *Substrate) {
 		// Stage 1 — cold start: no fitted artifact for this scorer.
 		if !fitted {
 			log.Printf("[Calibrate] no fitted calibrator for scorer=%s — fitting from seed set in background", scorerModelID)
-			cal, res, err := seedfit.EnsureFitted(ctx, scorer, scorerModelID, calPath, seed.Pairs(), prior)
+			var cal calibrate.Calibrator
+			var res *seedfit.Result
+			var err error
+			// Transport failures get a bounded retry: the ordinary boot
+			// race is spidey up before the scorer container finishes
+			// warming, and nothing external schedules another reload.
+			// Validity refusals (ErrInvalid) do NOT retry — a collapsed
+			// scorer stays collapsed for the next 30 seconds too.
+			for attempt := 1; ; attempt++ {
+				cal, res, err = seedfit.EnsureFitted(ctx, scorer, scorerModelID, calPath, seed.Pairs(), prior)
+				if err == nil || errors.Is(err, calibrate.ErrInvalid) || attempt >= 5 {
+					break
+				}
+				log.Printf("[Calibrate] seed fit attempt %d failed (retrying in 30s): %v", attempt, err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(30 * time.Second):
+				}
+			}
 			if err != nil {
 				// Fail loudly, stay on bootstrap. The next reload retries.
 				// The fit's validity gate lands here too: a collapsed
@@ -259,10 +307,10 @@ func (h *Holder) maybeCalibrate(subs *Substrate) {
 			}
 
 			// Swap in via the normal rebuild: Build loads the artifact we
-			// just wrote. If the user swapped scorers while we were
-			// fitting, Build's scorer-id guard refuses the stale artifact
-			// and (via maybeCalibrate) a fresh fit starts for the new
-			// scorer — the staleness race resolves itself.
+			// just wrote. A concurrent scorer swap is handled by the
+			// deferred identity re-check above — the nested reload's own
+			// maybeCalibrate is CAS-suppressed while this goroutine runs,
+			// so the re-check is the mechanism, not the reload.
 			if err := h.ReloadProviders(ctx); err != nil {
 				log.Printf("[Calibrate] live swap failed (fit persisted; applies on next boot): %v", err)
 			}
@@ -334,7 +382,11 @@ func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scor
 		return // no judge available — replay labeling needs the main model
 	}
 	art, ok, err := calibrate.Load(calPath, scorerModelID)
-	if err != nil || !ok {
+	if err != nil {
+		log.Printf("[Calibrate] mass refit: artifact unreadable (stage 1 will refit): %v", err)
+		return
+	}
+	if !ok {
 		return // stage 1 owns the artifact's existence
 	}
 	edgeCount, err := h.db.CountProvenanceEdges()
@@ -342,10 +394,27 @@ func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scor
 		log.Printf("[Calibrate] mass refit arming check failed: %v", err)
 		return
 	}
-	armed := (art.MassSamples == 0 && edgeCount >= massRefitMinEdges) ||
-		(art.MassSamples > 0 && edgeCount >= 2*art.ProvenanceEdgesAtFit)
-	if !armed {
+	// Arming: past the floor, past the doubling watermark of the last
+	// successful mass fit, AND past the doubling watermark of the last
+	// FAILED attempt — failure memory, so an armed-but-failing replay
+	// (broken judge, unreachable structure, refused fit) retries on
+	// corpus growth, not on every reload.
+	threshold := massRefitMinEdges
+	if art.ProvenanceEdgesAtFit > 0 && 2*art.ProvenanceEdgesAtFit > threshold {
+		threshold = 2 * art.ProvenanceEdgesAtFit
+	}
+	if art.MassAttemptEdges > 0 && 2*art.MassAttemptEdges > threshold {
+		threshold = 2 * art.MassAttemptEdges
+	}
+	if edgeCount < threshold {
 		return
+	}
+	recordAttempt := func() {
+		attempted := art
+		attempted.MassAttemptEdges = edgeCount
+		if err := calibrate.Save(calPath, attempted); err != nil {
+			log.Printf("[Calibrate] mass refit attempt watermark persist failed: %v", err)
+		}
 	}
 
 	corpus, err := h.db.AllCorpus()
@@ -363,13 +432,19 @@ func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scor
 	judge := regenjudge.New(completer, massfit.NewCorpusProvider(corpus))
 	replaySamples, stats, err := massfit.Replay(ctx, corpus, edges, scorer, judge, chunkCfg)
 	if err != nil {
-		// Abort whole, retry at the next arming evaluation. No partial fit.
+		// Abort whole; the attempt watermark defers the retry to the
+		// next corpus doubling instead of the next reload. No partial fit.
 		log.Printf("[Calibrate] mass replay failed (keeping current artifact): %v", err)
+		recordAttempt()
 		return
+	}
+	if stats.Truncated {
+		log.Printf("[Calibrate] mass replay: provenance walk hit its cap on at least one turn — masses are floor estimates there")
 	}
 	seedSamples, _, _, err := seedfit.Samples(ctx, scorer, seed.Pairs(), 0)
 	if err != nil {
 		log.Printf("[Calibrate] mass refit seed scoring failed: %v", err)
+		recordAttempt()
 		return
 	}
 
@@ -381,6 +456,28 @@ func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scor
 	}
 	if err := calibrate.Validate(*cal, union); err != nil {
 		log.Printf("[Calibrate] mass fit refused (keeping current artifact): %v", err)
+		recordAttempt()
+		return
+	}
+	// Persist-consistency: the boot health check judges this calibrator
+	// on the seed subsample; a union fit that fails it would oscillate.
+	if err := seedfit.Health(ctx, scorer, seed.Pairs(), *cal); err != nil {
+		log.Printf("[Calibrate] mass fit refused (fails the boot-health subsample; keeping current artifact): %v", err)
+		recordAttempt()
+		return
+	}
+	// B ≤ 0 is a pipeline-breakage signal, not a finding. The contrast
+	// draws are RANDOM old messages — the base rate of a random message
+	// being a true prerequisite is low, so for mass to anti-predict
+	// (mass-bearing candidates prerequisites LESS often than random
+	// draws) the judge or the replay would have to be systematically
+	// inverted. Persisting B ≤ 0 would silently flip the /\: provenance
+	// mass would penalize acceptance for exactly the roots it exists to
+	// lift. Refuse loudly and keep the current artifact; the doubling
+	// watermark retries with more data.
+	if cal.B <= 0 {
+		log.Printf("[Calibrate] mass fit refused: fitted B=%.3f ≤ 0 (mass anti-predicts labels — judge or replay pipeline suspect; %d mass / %d contrast pairs)", cal.B, stats.MassPairs, stats.ContrastPairs)
+		recordAttempt()
 		return
 	}
 	if err := calibrate.Save(calPath, calibrate.Artifact{

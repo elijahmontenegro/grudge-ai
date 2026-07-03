@@ -4,6 +4,7 @@ import (
 	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"sort"
 )
 
 // provenanceReachCap bounds how many provenance-reached candidate messages
@@ -155,15 +156,17 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 		cone[id] = true
 	}
 
-	mass := make(map[string]float64)
-	// Best-first by accumulated mass. Seed: the cone's direct provenance
-	// prerequisites (messages the cone's turns were generated from).
-	type reachItem struct {
-		id   string
-		mass float64
-	}
-	var frontier []reachItem
+	// Phase 1 — capped, deterministic reachability. BFS backward from the
+	// cone over provenance edges, expanding in sorted-id layers so the
+	// kept set under the cap is a function of the edge SET, not of edge
+	// insertion or slice order.
+	inReach := make(map[string]bool)
+	seen := make(map[string]bool, len(coneIDs))
 	for _, id := range coneIDs {
+		seen[id] = true
+	}
+	contributorsOf := func(id string) []string {
+		var out []string
 		for _, edge := range d.Prerequisites(id) {
 			if edge.Source != rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 				continue
@@ -171,35 +174,59 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 			if !scopeAllows(edge, coneThreadID, scope) {
 				continue
 			}
-			from := edge.FromMessageId
-			if cone[from] {
-				continue
+			out = append(out, edge.FromMessageId)
+		}
+		return out
+	}
+	truncated := false
+	frontier := append([]string(nil), coneIDs...)
+	for len(frontier) > 0 && !truncated {
+		var next []string
+		for _, id := range frontier {
+			for _, from := range contributorsOf(id) {
+				if !seen[from] {
+					seen[from] = true
+					next = append(next, from)
+				}
 			}
-			mass[from] += float64(edge.Score)
-			frontier = append(frontier, reachItem{id: from, mass: float64(edge.Score)})
+		}
+		sort.Strings(next)
+		frontier = frontier[:0]
+		for _, id := range next {
+			if len(inReach) >= provenanceReachCap {
+				truncated = true
+				break
+			}
+			inReach[id] = true
+			frontier = append(frontier, id)
 		}
 	}
 
-	// Walk backward, chain-ruling the mass, until the frontier drains or the
-	// cap is hit. visited guards against provenance cycles (shouldn't occur
-	// — provenance is generation-ordered — but defensive).
-	visited := make(map[string]bool, len(cone))
-	for id := range cone {
-		visited[id] = true
+	// Phase 2 — exact path-sum mass over the capped subgraph. A node's
+	// mass is the sum, over its provenance edges into reach ∪ cone, of
+	// edge weight × the dependent's contribution (1.0 for cone members,
+	// the dependent's own FINAL mass otherwise) — the chain rule summed
+	// over every path into the cone. A node finalizes only after every
+	// in-reach dependent has finalized, so multi-path (diamond) mass
+	// accumulates fully before it propagates and the result is
+	// independent of edge order. Provenance is generation-ordered
+	// (contributor → newer anchor), so the subgraph is a DAG; a defensive
+	// cycle leftover finalizes with its partial sum, in sorted order.
+	type out struct {
+		to     string
+		weight float64
 	}
-	truncated := false
-	for len(frontier) > 0 {
-		item := frontier[0]
-		frontier = frontier[1:]
-		if visited[item.id] {
-			continue
-		}
-		visited[item.id] = true
-		if len(visited)-len(cone) > provenanceReachCap {
-			truncated = true
-			break
-		}
-		for _, edge := range d.Prerequisites(item.id) {
+	outgoing := make(map[string][]out, len(inReach))
+	pending := make(map[string]int, len(inReach))
+	members := make([]string, 0, len(inReach))
+	for id := range inReach {
+		members = append(members, id)
+	}
+	sort.Strings(members)
+	targets := append(append([]string(nil), coneIDs...), members...)
+	sort.Strings(targets)
+	for _, u := range targets {
+		for _, edge := range d.Prerequisites(u) {
 			if edge.Source != rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 				continue
 			}
@@ -207,16 +234,62 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 				continue
 			}
 			from := edge.FromMessageId
-			if cone[from] {
+			if cone[from] || !inReach[from] {
 				continue
 			}
-			// Chain rule: contribution decays multiplicatively along the path.
-			contributed := item.mass * float64(edge.Score)
-			mass[from] += contributed
-			if !visited[from] {
-				frontier = append(frontier, reachItem{id: from, mass: contributed})
+			outgoing[from] = append(outgoing[from], out{to: u, weight: float64(edge.Score)})
+			if !cone[u] && inReach[u] {
+				pending[from]++
 			}
 		}
 	}
+
+	mass := make(map[string]float64, len(inReach))
+	finalized := make(map[string]bool, len(inReach))
+	finalize := func(v string) []string {
+		var m float64
+		for _, e := range outgoing[v] {
+			switch {
+			case cone[e.to]:
+				m += e.weight
+			case inReach[e.to]:
+				m += e.weight * mass[e.to]
+			}
+		}
+		mass[v] = m
+		finalized[v] = true
+		var freed []string
+		for _, from := range contributorsOf(v) {
+			if !inReach[from] || finalized[from] {
+				continue
+			}
+			pending[from]--
+			if pending[from] == 0 {
+				freed = append(freed, from)
+			}
+		}
+		sort.Strings(freed)
+		return freed
+	}
+	var queue []string
+	for _, v := range members {
+		if pending[v] == 0 {
+			queue = append(queue, v)
+		}
+	}
+	for len(queue) > 0 {
+		v := queue[0]
+		queue = queue[1:]
+		if finalized[v] {
+			continue
+		}
+		queue = append(queue, finalize(v)...)
+	}
+	for _, v := range members { // defensive cycle leftovers
+		if !finalized[v] {
+			finalize(v)
+		}
+	}
+
 	return mass, truncated
 }

@@ -1,10 +1,17 @@
 // Package regenjudge is the live CounterfactualJudge: it decides whether a
 // candidate is a true prerequisite of a turn by regenerative counterfactual
 // coherence. It lives in its own package (not calibrate) so the calibrate
-// math stays free of any LLM dependency. Nothing wires it in yet: it is
-// the committed path for provenance-mass calibration (replaying a real
-// corpus to label mass-bearing candidates), pending a corpus with
-// provenance history. Tests inject a fake judge.
+// math stays free of any LLM dependency. It is wired by the substrate
+// Holder's mass refit (judge = main completer, provider = the replayed
+// in-memory corpus).
+//
+// HONEST SCOPE: this implementation is the one-call ECONOMY form of the
+// counterfactual — it asks the judge model to compare with-vs-without in
+// a single judgment rather than paying two fresh regenerations plus a
+// comparison per label. Same ground-truth definition, cheaper estimator
+// of it, and correspondingly more exposed to the judge model's topical-
+// similarity bias. If labels prove noisy, the two-regeneration form is
+// the upgrade path behind this same interface.
 //
 // Ground-truth definition (see calibrate.CounterfactualJudge): a candidate is
 // a prerequisite iff the turn's continuation is materially better with it
@@ -93,15 +100,37 @@ const systemInstruction = "You are a strict judge of conversational dependency. 
 	"A candidate that is merely topically similar but not required is NOT a " +
 	"prerequisite. Answer with exactly one word: YES or NO."
 
+// Prompt bounds: one long tool-loop turn must not overflow the judge
+// model's context — a single oversized prompt would error, abort the
+// whole replay, and (until the attempt watermark advances) re-abort on
+// every retry. Discourse keeps the most recent messages; every message
+// serialization is capped. Bounds are generous for judgment quality and
+// exist to prevent wedging, not to trim routinely.
+const (
+	promptMaxMessages = 12
+	promptMaxMsgChars = 4000
+)
+
+func capped(s string) string {
+	if len(s) <= promptMaxMsgChars {
+		return s
+	}
+	return s[:promptMaxMsgChars] + "\n[...truncated for judgment...]\n"
+}
+
 func buildPrompt(tc TurnContext) string {
 	var b strings.Builder
 	b.WriteString("RECENT DISCOURSE (the active turn):\n")
-	for _, m := range tc.LocalContext {
-		b.WriteString(rrc.SerializeMessageForScoring(m))
+	local := tc.LocalContext
+	if len(local) > promptMaxMessages {
+		local = local[len(local)-promptMaxMessages:]
+	}
+	for _, m := range local {
+		b.WriteString(capped(rrc.SerializeMessageForScoring(m)))
 	}
 	b.WriteString("\nCANDIDATE EARLIER MESSAGE:\n")
 	if tc.Candidate != nil {
-		b.WriteString(rrc.SerializeMessageForScoring(tc.Candidate))
+		b.WriteString(capped(rrc.SerializeMessageForScoring(tc.Candidate)))
 	}
 	b.WriteString("\nIs the candidate a prerequisite for a coherent continuation? Answer YES or NO.")
 	return b.String()

@@ -198,3 +198,45 @@ func selectionContains(sel []*rrcv1.SelectedMessage, id string) bool {
 	}
 	return false
 }
+
+// TestProvenanceMass_DiamondAccumulatesBeforePropagating pins the
+// path-sum semantics against the order-sensitivity defect the
+// adversarial review found: a node reachable through multiple paths
+// must propagate its FULL accumulated mass, not whichever single
+// path's partial happened to pop first — and the result must be
+// identical for every edge ordering.
+func TestProvenanceMass_DiamondAccumulatesBeforePropagating(t *testing.T) {
+	mk := func(from, to string, w float32) *rrcv1.Edge {
+		return &rrcv1.Edge{
+			FromMessageId: from, ToMessageId: to, Score: w,
+			Source:       rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE,
+			FromThreadId: "t1", ToThreadId: "t1",
+		}
+	}
+	// Q feeds R twice over: Q→A→C (1.0·0.9) and Q→B→C (1.0·0.1).
+	// mass[Q] must be 0.9·1.0 + 0.1·1.0 = 1.0 under every permutation.
+	edges := []*rrcv1.Edge{
+		mk("a", "cone", 0.9),
+		mk("b", "cone", 0.1),
+		mk("q", "a", 1.0),
+		mk("q", "b", 1.0),
+	}
+	perms := [][]int{{0, 1, 2, 3}, {3, 2, 1, 0}, {1, 3, 0, 2}, {2, 0, 3, 1}}
+	for _, p := range perms {
+		ordered := make([]*rrcv1.Edge, len(edges))
+		for i, j := range p {
+			ordered[i] = edges[j]
+		}
+		mass, truncated := ProvenanceMass(ordered, []string{"cone"}, "t1",
+			threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS)
+		if truncated {
+			t.Fatal("tiny graph must not truncate")
+		}
+		if got := mass["q"]; got < 0.999 || got > 1.001 {
+			t.Fatalf("perm %v: diamond mass through q = %v, want 1.0 (path-sum)", p, got)
+		}
+		if got := mass["a"]; got < 0.899 || got > 0.901 {
+			t.Fatalf("perm %v: mass[a] = %v, want 0.9", p, got)
+		}
+	}
+}

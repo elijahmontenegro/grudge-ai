@@ -16,6 +16,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"math"
 	"sort"
 
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
@@ -108,14 +110,33 @@ func Fit(ctx context.Context, scorer Scorer, seedJSON []byte, prior calibrate.Ca
 	if verr := calibrate.Validate(*cal, samples); verr != nil {
 		return Result{}, fmt.Errorf("seedfit: refusing the fit: %w", verr)
 	}
+	// Persist-consistency gate: the boot health check will judge this
+	// same calibrator on the deterministic seed SUBSAMPLE. A fit that
+	// passes the full-set predicate but fails the subsample would
+	// persist, then fail health on every boot — an oscillation of full
+	// refits (and re-armed mass replays) that never converges. Gate
+	// persistence on the exact predicate that judges it later.
+	subSamples, _, _, err := Samples(ctx, scorer, seedJSON, healthTriples)
+	if err != nil {
+		return Result{}, fmt.Errorf("seedfit: subsample gate: %w", err)
+	}
+	if verr := calibrate.Validate(*cal, subSamples); verr != nil {
+		return Result{}, fmt.Errorf("seedfit: refusing the fit (passes full seed but fails the boot-health subsample — would oscillate): %w", verr)
+	}
 	logLoss := cal.LogLoss(samples)
 
 	// Preserve the structural lift: the seed carried no mass signal, so the
 	// fitted B is a meaningless 0. Carry the prior's boundary-shift ratio
-	// B/A onto the fitted similarity scale (see doc comment).
-	if prior.A != 0 {
-		cal.B = (prior.B / prior.A) * cal.A
+	// B/A onto the fitted similarity scale (see doc comment). A degenerate
+	// prior (zero/non-finite A, or a non-positive lift ratio — e.g. a
+	// hand-edited or corrupt artifact that slipped in as the live
+	// calibrator) must not zero the /\; fall back to the canonical
+	// bootstrap ratio (rrc.DefaultConfig's Bootstrap(0.60, 12, 6) → 0.5).
+	ratio := bootstrapLiftRatio
+	if prior.A > 0 && !math.IsNaN(prior.B/prior.A) && prior.B/prior.A > 0 {
+		ratio = prior.B / prior.A
 	}
+	cal.B = ratio * cal.A
 	return Result{
 		Calibrator: *cal,
 		Samples:    len(samples),
@@ -133,9 +154,12 @@ func Fit(ctx context.Context, scorer Scorer, seedJSON []byte, prior calibrate.Ca
 // used. This is the single definition of "make sure this scorer has a
 // fitted calibrator" — callers own only trigger policy and lifecycle.
 func EnsureFitted(ctx context.Context, scorer Scorer, scorerModelID, path string, seedJSON []byte, prior calibrate.Calibrator) (calibrate.Calibrator, *Result, error) {
-	if art, ok, err := calibrate.Load(path, scorerModelID); err != nil {
-		return calibrate.Calibrator{}, nil, err
-	} else if ok {
+	// A corrupt or degenerate artifact is a refittable cache, not user
+	// data: fall through to fit-and-overwrite rather than wedging every
+	// boot on the same broken file (substrate.Build already logged the
+	// load failure loudly). Save is atomic, so the overwrite cannot
+	// reproduce the torn state.
+	if art, ok, err := calibrate.Load(path, scorerModelID); err == nil && ok {
 		return art.Calibrator, nil, nil
 	}
 	res, err := Fit(ctx, scorer, seedJSON, prior)
@@ -174,28 +198,72 @@ func Samples(ctx context.Context, scorer Scorer, seedJSON []byte, maxTriples int
 	sort.Strings(cats)
 
 	var samples []calibrate.LabeledSample
-	var pos, neg, triples int
-	for _, cat := range cats {
-		for _, t := range p.Categories[cat] {
-			if maxTriples > 0 && triples >= maxTriples {
+	var pos, neg int
+	scoreTriple := func(cat string, t triple) error {
+		// The positive sits at a query-derived index, not a fixed slot.
+		// With the positive always first, a scorer keying on batch
+		// position — or an adapter returning rank-sorted score arrays
+		// (the classic /rerank index-remap bug) — separates the labels
+		// perfectly while being blind to content. Rotation makes the
+		// gate measure discrimination, not slot agreement. The index is
+		// a pure function of the query so fakes and replays agree.
+		rot := PositiveIndex(t.Query, len(t.Distractors)+1)
+		candidates := make([]string, 0, len(t.Distractors)+1)
+		candidates = append(candidates, t.Distractors[:rot]...)
+		candidates = append(candidates, t.Correct)
+		candidates = append(candidates, t.Distractors[rot:]...)
+		scores, err := scorer.Score(ctx, t.Query, candidates)
+		if err != nil {
+			return fmt.Errorf("seedfit: score %s/%s: %w", cat, t.ID, err)
+		}
+		if len(scores) != len(candidates) {
+			return fmt.Errorf("seedfit: %s/%s: %d scores for %d candidates", cat, t.ID, len(scores), len(candidates))
+		}
+		for i, s := range scores {
+			if math.IsNaN(s) || math.IsInf(s, 0) {
+				return fmt.Errorf("seedfit: non-finite score %v for %s/%s candidate %d: %w", s, cat, t.ID, i, calibrate.ErrInvalid)
+			}
+			isPrereq := i == rot
+			samples = append(samples, calibrate.LabeledSample{Sim: s, Mass: 0, IsPrereq: isPrereq})
+			if isPrereq {
+				pos++
+			} else {
+				neg++
+			}
+		}
+		return nil
+	}
+
+	if maxTriples > 0 {
+		// Stratified subsample: round-robin one triple per category so
+		// the health check covers every difficulty regime — including
+		// the long-document triples where template drift shows first —
+		// instead of whichever categories sort alphabetically.
+		taken := 0
+		for j := 0; taken < maxTriples; j++ {
+			progressed := false
+			for _, cat := range cats {
+				if taken >= maxTriples {
+					break
+				}
+				if j >= len(p.Categories[cat]) {
+					continue
+				}
+				progressed = true
+				if err := scoreTriple(cat, p.Categories[cat][j]); err != nil {
+					return nil, 0, 0, err
+				}
+				taken++
+			}
+			if !progressed {
 				break
 			}
-			triples++
-			candidates := append([]string{t.Correct}, t.Distractors...)
-			scores, err := scorer.Score(ctx, t.Query, candidates)
-			if err != nil {
-				return nil, 0, 0, fmt.Errorf("seedfit: score %s/%s: %w", cat, t.ID, err)
-			}
-			if len(scores) != len(candidates) {
-				return nil, 0, 0, fmt.Errorf("seedfit: %s/%s: %d scores for %d candidates", cat, t.ID, len(scores), len(candidates))
-			}
-			for i, s := range scores {
-				isPrereq := i == 0 // index 0 is the correct (prerequisite) candidate
-				samples = append(samples, calibrate.LabeledSample{Sim: s, Mass: 0, IsPrereq: isPrereq})
-				if isPrereq {
-					pos++
-				} else {
-					neg++
+		}
+	} else {
+		for _, cat := range cats {
+			for _, t := range p.Categories[cat] {
+				if err := scoreTriple(cat, t); err != nil {
+					return nil, 0, 0, err
 				}
 			}
 		}
@@ -206,10 +274,33 @@ func Samples(ctx context.Context, scorer Scorer, seedJSON []byte, maxTriples int
 	return samples, pos, neg, nil
 }
 
+// PositiveIndex is the deterministic slot the correct candidate
+// occupies in a triple's Score batch: a pure function of the query, so
+// every consumer of the seed protocol (the fit, health checks, test
+// fakes) derives the same rotation independently.
+func PositiveIndex(query string, candidateCount int) int {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(query))
+	return int(h.Sum32() % uint32(candidateCount))
+}
+
+// bootstrapLiftRatio is the canonical structural-lift ratio B/A the
+// bootstrap calibrator ships (calibrate.Bootstrap(0.60, 12, 6) → 6/12),
+// used as the carry fallback when the prior is degenerate.
+const bootstrapLiftRatio = 0.5
+
 // healthTriples bounds the boot-time health check's scorer work: a
 // deterministic seed subsample big enough to expose catastrophic
 // non-discrimination, small enough to be a background blip (~8 scorer
 // batch calls). The check refuses false confidence, not subtle drift.
+//
+// The subsample is STRATIFIED — one triple per category, round-robin —
+// so health covers every difficulty regime, including the
+// long-document triples where template drift manifests first. Churn
+// safety does not depend on composition: Fit's persist-consistency
+// gate guarantees any persisted calibrator already passes this exact
+// subsample predicate, so a healthy pairing can never oscillate
+// between passing the fit and failing boot health.
 const healthTriples = 8
 
 // Health verifies that the persisted calibrator still describes the
