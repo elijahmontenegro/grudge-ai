@@ -20,6 +20,7 @@
 package calibrate
 
 import (
+	"errors"
 	"fmt"
 	"math"
 )
@@ -171,4 +172,47 @@ func PriorLogLoss(samples []LabeledSample) float64 {
 		return 0
 	}
 	return -(p*math.Log(p) + (1-p)*math.Log(1-p))
+}
+
+// minFitSkill is the validity floor for any calibrator judged against
+// labeled samples, measured as skill over the label-prior baseline:
+// skill = 1 − LogLoss/PriorLogLoss. A scorer that separates labeled
+// positives from negatives at all clears it easily (zerank's first
+// live seed fit: log-loss 0.330 vs prior 0.500 → skill ≈ 0.34); a
+// collapsed scorer yields a flat base-rate calibrator with skill ≈ 0.
+// Deliberately loose — the refused failure is catastrophic
+// non-discrimination, not subtle mis-calibration.
+const minFitSkill = 0.10
+
+// ErrInvalid marks a calibrator/scorer pairing that failed the
+// absolute validity predicate. Callers branch on it (errors.Is) to
+// distinguish "the pairing is broken — refit" from transport errors
+// ("could not check — skip").
+var ErrInvalid = errors.New("calibrator/scorer pairing invalid")
+
+// Validate is the absolute validity predicate for a calibrator against
+// labeled samples: the similarity association must be positive (A > 0 —
+// an anti-correlated or score-blind calibrator is a broken pairing,
+// whatever its log-loss) and the calibrator must show real skill over
+// the no-signal prior baseline. Absolute against the labels, never
+// relative to a prior fit: a flat calibrator scores the same log-loss
+// on healthy and garbage input, so relative comparisons cannot detect
+// their own poisoning. Shared by every consumer that must refuse an
+// invalid pairing — the seed fit before persisting, the boot-time
+// scorer health check, and the corpus-replay mass refit.
+func Validate(c Calibrator, samples []LabeledSample) error {
+	if c.A <= 0 {
+		return fmt.Errorf("calibrate: similarity coefficient A=%.3f ≤ 0 — scores are uncorrelated or anti-correlated with the labels (scorer collapse or wrong model at endpoint?): %w", c.A, ErrInvalid)
+	}
+	logLoss := c.LogLoss(samples)
+	priorLL := PriorLogLoss(samples)
+	skill := 0.0
+	if priorLL > 0 {
+		skill = 1 - logLoss/priorLL
+	}
+	if skill < minFitSkill {
+		return fmt.Errorf("calibrate: no discrimination on the labeled samples (log-loss %.4f vs prior baseline %.4f, skill %.2f < %.2f) — scorer collapse or wrong model at endpoint?: %w",
+			logLoss, priorLL, skill, minFitSkill, ErrInvalid)
+	}
+	return nil
 }

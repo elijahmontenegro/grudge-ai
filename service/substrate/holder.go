@@ -2,6 +2,7 @@ package substrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -10,6 +11,9 @@ import (
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc/calibrate"
+	"github.com/elijahmontenegro/grudge/rrc/calibrate/massfit"
+	"github.com/elijahmontenegro/grudge/rrc/calibrate/regenjudge"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate/seed"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate/seedfit"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
@@ -210,51 +214,190 @@ func (h *Holder) maybeCalibrate(subs *Substrate) {
 	if subs.Scorer == nil || subs.RerankerModelID == "" {
 		return // nothing to calibrate against
 	}
-	if subs.CalibratorFitted {
-		return // Build loaded a persisted fit for this scorer — done
-	}
 	if !h.calibrating.CompareAndSwap(false, true) {
-		return // a fit is already in flight
+		return // a calibration stage is already in flight
 	}
 
 	scorer := subs.Scorer
 	scorerModelID := subs.RerankerModelID
 	calPath := datadir.CalibratorPath(h.cfg.DataDir)
-	// The seed set carries no mass signal, so the fit carries the current
-	// (bootstrap) calibrator's structural-lift ratio forward rather than
-	// zeroing it — see seedfit.Fit.
+	// The live calibrator: the bootstrap when no artifact loaded, the
+	// persisted fit otherwise. Seed fits carry its structural-lift
+	// ratio forward (see seedfit.Fit); the health check judges it
+	// against the live scorer.
 	prior := subs.Engine.Config().Calibrator
+	fitted := subs.CalibratorFitted
+	completer := subs.MainCompleter
+	chunkCfg := subs.Engine.Config().Chunk
 
 	go func() {
 		defer h.calibrating.Store(false)
 
 		// Independent context: the caller's reload ctx ends with the
-		// request that triggered it, but the fit is a background job that
-		// should survive it. Bounded so a wedged scorer can't leak the
-		// goroutine forever.
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		// request that triggered it, but calibration is a background job
+		// that should survive it. Bounded so a wedged scorer or judge
+		// can't leak the goroutine forever (the mass replay's judge
+		// calls dominate the budget).
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 
-		log.Printf("[Calibrate] no fitted calibrator for scorer=%s — fitting from seed set in background", scorerModelID)
-		cal, res, err := seedfit.EnsureFitted(ctx, scorer, scorerModelID, calPath, seed.Pairs(), prior)
-		if err != nil {
-			// Fail loudly, stay on bootstrap. The next reload retries.
-			log.Printf("[Calibrate] seed fit failed (staying on bootstrap): %v", err)
+		// Stage 1 — cold start: no fitted artifact for this scorer.
+		if !fitted {
+			log.Printf("[Calibrate] no fitted calibrator for scorer=%s — fitting from seed set in background", scorerModelID)
+			cal, res, err := seedfit.EnsureFitted(ctx, scorer, scorerModelID, calPath, seed.Pairs(), prior)
+			if err != nil {
+				// Fail loudly, stay on bootstrap. The next reload retries.
+				// The fit's validity gate lands here too: a collapsed
+				// scorer cannot persist an artifact.
+				log.Printf("[Calibrate] seed fit failed (staying on bootstrap): %v", err)
+				return
+			}
+			if res != nil {
+				log.Printf("[Calibrate] fitted %s over %d samples (%d pos/%d neg, log-loss %.4f): A=%.3f B=%.3f C=%.3f",
+					scorerModelID, res.Samples, res.Positives, res.Negatives, res.LogLoss,
+					cal.A, cal.B, cal.C)
+			}
+
+			// Swap in via the normal rebuild: Build loads the artifact we
+			// just wrote. If the user swapped scorers while we were
+			// fitting, Build's scorer-id guard refuses the stale artifact
+			// and (via maybeCalibrate) a fresh fit starts for the new
+			// scorer — the staleness race resolves itself.
+			if err := h.ReloadProviders(ctx); err != nil {
+				log.Printf("[Calibrate] live swap failed (fit persisted; applies on next boot): %v", err)
+			}
 			return
 		}
-		if res != nil {
-			log.Printf("[Calibrate] fitted %s over %d samples (%d pos/%d neg, log-loss %.4f): A=%.3f B=%.3f C=%.3f",
-				scorerModelID, res.Samples, res.Positives, res.Negatives, res.LogLoss,
-				cal.A, cal.B, cal.C)
+
+		// Stage 2 — health: the artifact fits ONCE per scorer-id, but the
+		// scorer behind an unchanged id can drift (a vLLM upgrade shifting
+		// the chat template). Re-verify the persisted calibrator against
+		// the LIVE scorer on the deterministic seed subsample, judged by
+		// the same absolute validity predicate every fit passes through.
+		if err := seedfit.Health(ctx, scorer, seed.Pairs(), prior); err != nil {
+			if !errors.Is(err, calibrate.ErrInvalid) {
+				// Could not check (scorer unreachable, transport failure):
+				// skip — never refit on a question that wasn't answered.
+				log.Printf("[Calibrate] scorer health check skipped: %v", err)
+				return
+			}
+			// The pairing is broken NOW. Refit against the live scorer —
+			// the fit's own validity gate means a still-broken scorer
+			// refuses to produce an artifact, so the persisted one is
+			// never overwritten by garbage.
+			log.Printf("[Calibrate] scorer health check FAILED for %s — refitting: %v", scorerModelID, err)
+			res, ferr := seedfit.Fit(ctx, scorer, seed.Pairs(), prior)
+			if ferr != nil {
+				log.Printf("[Calibrate] refit refused (scorer still broken; keeping persisted artifact): %v", ferr)
+				return
+			}
+			if err := calibrate.Save(calPath, calibrate.Artifact{
+				Calibrator:    res.Calibrator,
+				ScorerModelID: scorerModelID,
+				Samples:       res.Samples,
+				LogLoss:       res.LogLoss,
+			}); err != nil {
+				log.Printf("[Calibrate] refit persist failed: %v", err)
+				return
+			}
+			log.Printf("[Calibrate] refitted %s over %d samples (log-loss %.4f): A=%.3f B=%.3f C=%.3f",
+				scorerModelID, res.Samples, res.LogLoss, res.Calibrator.A, res.Calibrator.B, res.Calibrator.C)
+			if err := h.ReloadProviders(ctx); err != nil {
+				log.Printf("[Calibrate] live swap failed (refit persisted; applies on next boot): %v", err)
+			}
+			return
 		}
 
-		// Swap in via the normal rebuild: Build loads the artifact we just
-		// wrote. If the user swapped scorers while we were fitting, Build's
-		// scorer-id guard refuses the stale artifact and (via
-		// maybeCalibrate) a fresh fit starts for the new scorer — the
-		// staleness race resolves itself.
-		if err := h.ReloadProviders(ctx); err != nil {
-			log.Printf("[Calibrate] live swap failed (fit persisted; applies on next boot): %v", err)
-		}
+		// Stage 3 — mass refit: fit B empirically from replayed corpus
+		// history once the provenance structure is there.
+		h.maybeMassRefit(ctx, scorer, scorerModelID, completer, chunkCfg, calPath)
 	}()
+}
+
+// massRefitMinEdges arms the first mass refit: below this many recorded
+// provenance edges a replay would be as mass-starved as the seed set.
+// A documented constant, not a setting — like provenanceReachCap,
+// there is nothing for a user to know better about.
+const massRefitMinEdges = 64
+
+// maybeMassRefit fits the calibrator's mass axis (B) from replayed
+// corpus history, watermark-gated: it runs when provenance structure
+// first crosses massRefitMinEdges, and re-runs when the structure has
+// doubled since the last mass fit — a knobless refresh schedule whose
+// per-run cost is bounded (massfit caps its judge calls) and whose
+// frequency decays as the corpus matures. The union fit (seed samples
+// anchoring the similarity axis with curated labels + replay samples
+// informing mass) passes the same absolute validity gate as every
+// other fit before it may persist.
+func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scorerModelID string, completer core.Completer, chunkCfg chunk.Config, calPath string) {
+	if completer == nil {
+		return // no judge available — replay labeling needs the main model
+	}
+	art, ok, err := calibrate.Load(calPath, scorerModelID)
+	if err != nil || !ok {
+		return // stage 1 owns the artifact's existence
+	}
+	edgeCount, err := h.db.CountProvenanceEdges()
+	if err != nil {
+		log.Printf("[Calibrate] mass refit arming check failed: %v", err)
+		return
+	}
+	armed := (art.MassSamples == 0 && edgeCount >= massRefitMinEdges) ||
+		(art.MassSamples > 0 && edgeCount >= 2*art.ProvenanceEdgesAtFit)
+	if !armed {
+		return
+	}
+
+	corpus, err := h.db.AllCorpus()
+	if err != nil {
+		log.Printf("[Calibrate] mass refit corpus load failed: %v", err)
+		return
+	}
+	edges, err := h.db.AllEdges()
+	if err != nil {
+		log.Printf("[Calibrate] mass refit edge load failed: %v", err)
+		return
+	}
+
+	log.Printf("[Calibrate] mass refit armed for %s (%d provenance edges, prior fit at %d) — replaying corpus", scorerModelID, edgeCount, art.ProvenanceEdgesAtFit)
+	judge := regenjudge.New(completer, massfit.NewCorpusProvider(corpus))
+	replaySamples, stats, err := massfit.Replay(ctx, corpus, edges, scorer, judge, chunkCfg)
+	if err != nil {
+		// Abort whole, retry at the next arming evaluation. No partial fit.
+		log.Printf("[Calibrate] mass replay failed (keeping current artifact): %v", err)
+		return
+	}
+	seedSamples, _, _, err := seedfit.Samples(ctx, scorer, seed.Pairs(), 0)
+	if err != nil {
+		log.Printf("[Calibrate] mass refit seed scoring failed: %v", err)
+		return
+	}
+
+	union := append(seedSamples, replaySamples...)
+	cal, err := calibrate.Fit(union, calibrate.FitConfig{L2: 1e-4})
+	if err != nil {
+		log.Printf("[Calibrate] mass fit failed: %v", err)
+		return
+	}
+	if err := calibrate.Validate(*cal, union); err != nil {
+		log.Printf("[Calibrate] mass fit refused (keeping current artifact): %v", err)
+		return
+	}
+	if err := calibrate.Save(calPath, calibrate.Artifact{
+		Calibrator:           *cal,
+		ScorerModelID:        scorerModelID,
+		Samples:              len(union),
+		LogLoss:              cal.LogLoss(union),
+		MassSamples:          len(replaySamples),
+		ProvenanceEdgesAtFit: edgeCount,
+	}); err != nil {
+		log.Printf("[Calibrate] mass fit persist failed: %v", err)
+		return
+	}
+	log.Printf("[Calibrate] mass-fit %s: %d seed + %d replay samples (%d mass / %d contrast over %d turns): A=%.3f B=%.3f C=%.3f",
+		scorerModelID, len(seedSamples), len(replaySamples), stats.MassPairs, stats.ContrastPairs, stats.TurnsSampled,
+		cal.A, cal.B, cal.C)
+	if err := h.ReloadProviders(ctx); err != nil {
+		log.Printf("[Calibrate] live swap failed (mass fit persisted; applies on next boot): %v", err)
+	}
 }

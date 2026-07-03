@@ -213,12 +213,12 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	// so a scorer swap doesn't silently mis-gate. This is the seam that
 	// makes A4 a real calibrated cutover rather than a permanent bootstrap.
 	calPath := datadir.CalibratorPath(cfg.DataDir)
-	if cal, ok, err := calibrate.Load(calPath, s.RerankerModelID); err != nil {
+	if art, ok, err := calibrate.Load(calPath, s.RerankerModelID); err != nil {
 		log.Printf("WARNING: calibrator load failed, using bootstrap: %v", err)
 	} else if ok {
-		rrcCfg.Calibrator = cal
+		rrcCfg.Calibrator = art.Calibrator
 		s.CalibratorFitted = true
-		log.Printf("Loaded fitted acceptance calibrator (scorer=%s): %+v", s.RerankerModelID, cal)
+		log.Printf("Loaded fitted acceptance calibrator (scorer=%s): %+v", s.RerankerModelID, art.Calibrator)
 	}
 
 	// Searcher + ChunkOracle share the same embedder and model id.

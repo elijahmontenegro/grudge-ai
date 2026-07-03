@@ -60,3 +60,15 @@ func (d *DB) DeleteEdgesForThread(threadID string) error {
 	)
 	return err
 }
+
+// CountProvenanceEdges returns the number of recorded provenance
+// edges — the corpus-structure watermark the mass-refit arming check
+// reads (see substrate.Holder).
+func (d *DB) CountProvenanceEdges() (int, error) {
+	var n int
+	err := d.QueryRow(
+		`SELECT COUNT(*) FROM edges WHERE source = ?`,
+		int(rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE),
+	).Scan(&n)
+	return n, err
+}

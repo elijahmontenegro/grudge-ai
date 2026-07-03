@@ -24,17 +24,25 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "calibrator.json")
-	if err := Save(path, *cal, "zerank-x", len(samples), cal.LogLoss(samples)); err != nil {
+	if err := Save(path, Artifact{
+		Calibrator:    *cal,
+		ScorerModelID: "zerank-x",
+		Samples:       len(samples),
+		LogLoss:       cal.LogLoss(samples),
+	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Same scorer: present + identical prediction.
+	// Same scorer: present + identical prediction, metadata intact.
 	got, ok, err := Load(path, "zerank-x")
 	if err != nil || !ok {
 		t.Fatalf("load for same scorer: ok=%v err=%v", ok, err)
 	}
-	if got.Predict(0.8, 0) != cal.Predict(0.8, 0) {
+	if got.Calibrator.Predict(0.8, 0) != cal.Predict(0.8, 0) {
 		t.Fatal("loaded calibrator predicts differently from the fitted one")
+	}
+	if got.Samples != len(samples) || got.MassSamples != 0 {
+		t.Fatalf("metadata mismatch: %+v", got)
 	}
 
 	// Different scorer: refused, no error → caller falls back to bootstrap.

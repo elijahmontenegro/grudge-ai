@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 )
@@ -92,36 +93,9 @@ func Fit(ctx context.Context, scorer Scorer, seedJSON []byte, prior calibrate.Ca
 	if scorer == nil {
 		return Result{}, fmt.Errorf("seedfit: nil scorer")
 	}
-	var p pairsFile
-	if err := json.Unmarshal(seedJSON, &p); err != nil {
-		return Result{}, fmt.Errorf("seedfit: parse seed set: %w", err)
-	}
-
-	var samples []calibrate.LabeledSample
-	var pos, neg int
-	for cat, items := range p.Categories {
-		for _, t := range items {
-			candidates := append([]string{t.Correct}, t.Distractors...)
-			scores, err := scorer.Score(ctx, t.Query, candidates)
-			if err != nil {
-				return Result{}, fmt.Errorf("seedfit: score %s/%s: %w", cat, t.ID, err)
-			}
-			if len(scores) != len(candidates) {
-				return Result{}, fmt.Errorf("seedfit: %s/%s: %d scores for %d candidates", cat, t.ID, len(scores), len(candidates))
-			}
-			for i, s := range scores {
-				isPrereq := i == 0 // index 0 is the correct (prerequisite) candidate
-				samples = append(samples, calibrate.LabeledSample{Sim: s, Mass: 0, IsPrereq: isPrereq})
-				if isPrereq {
-					pos++
-				} else {
-					neg++
-				}
-			}
-		}
-	}
-	if len(samples) == 0 {
-		return Result{}, fmt.Errorf("seedfit: seed set produced no samples")
+	samples, pos, neg, err := Samples(ctx, scorer, seedJSON, 0)
+	if err != nil {
+		return Result{}, err
 	}
 
 	cal, err := calibrate.Fit(samples, calibrate.FitConfig{L2: 1e-4})
@@ -129,26 +103,12 @@ func Fit(ctx context.Context, scorer Scorer, seedJSON []byte, prior calibrate.Ca
 		return Result{}, fmt.Errorf("seedfit: fit: %w", err)
 	}
 
-	// Validity gate (see doc comment). Both checks are absolute against
-	// the labels: A must be a positive association (an anti-correlated or
-	// score-blind fit is a broken scorer, whatever its log-loss), and the
-	// fit must show real skill over the no-signal prior baseline.
+	// Validity gate (see doc comment): the fit must be refused before it
+	// can be returned, and therefore before anything can persist it.
+	if verr := calibrate.Validate(*cal, samples); verr != nil {
+		return Result{}, fmt.Errorf("seedfit: refusing the fit: %w", verr)
+	}
 	logLoss := cal.LogLoss(samples)
-	priorLL := calibrate.PriorLogLoss(samples)
-	skill := 0.0
-	if priorLL > 0 {
-		skill = 1 - logLoss/priorLL
-	}
-	if cal.A <= 0 {
-		return Result{}, fmt.Errorf(
-			"seedfit: fitted similarity coefficient A=%.3f ≤ 0 — scores are uncorrelated or anti-correlated with the seed labels; refusing the fit (scorer collapse or wrong model at endpoint?)",
-			cal.A)
-	}
-	if skill < minFitSkill {
-		return Result{}, fmt.Errorf(
-			"seedfit: fit shows no discrimination on the labeled seed (log-loss %.4f vs prior baseline %.4f, skill %.2f < %.2f); refusing the fit (scorer collapse or wrong model at endpoint?)",
-			logLoss, priorLL, skill, minFitSkill)
-	}
 
 	// Preserve the structural lift: the seed carried no mass signal, so the
 	// fitted B is a meaningless 0. Carry the prior's boundary-shift ratio
@@ -165,17 +125,6 @@ func Fit(ctx context.Context, scorer Scorer, seedJSON []byte, prior calibrate.Ca
 	}, nil
 }
 
-// minFitSkill is the validity floor for a fit, measured as skill over
-// the label-prior baseline: skill = 1 − LogLoss/PriorLogLoss. A scorer
-// that separates the seed's labeled positives from negatives at all
-// clears it easily (zerank's first live fit: log-loss 0.330 vs prior
-// 0.500 → skill ≈ 0.34); a collapsed scorer fits a flat base-rate
-// calibrator with skill ≈ 0. Deliberately loose — the failure being
-// refused is catastrophic non-discrimination, not subtle
-// mis-calibration — mirroring the loose-threshold stance elsewhere
-// (provenanceReachCap et al.).
-const minFitSkill = 0.10
-
 // EnsureFitted is the load-or-fit-and-save composition: return the
 // persisted calibrator for scorerModelID when one exists at path,
 // otherwise fit from seedJSON (carrying prior's structural-lift ratio),
@@ -184,17 +133,98 @@ const minFitSkill = 0.10
 // used. This is the single definition of "make sure this scorer has a
 // fitted calibrator" — callers own only trigger policy and lifecycle.
 func EnsureFitted(ctx context.Context, scorer Scorer, scorerModelID, path string, seedJSON []byte, prior calibrate.Calibrator) (calibrate.Calibrator, *Result, error) {
-	if cal, ok, err := calibrate.Load(path, scorerModelID); err != nil {
+	if art, ok, err := calibrate.Load(path, scorerModelID); err != nil {
 		return calibrate.Calibrator{}, nil, err
 	} else if ok {
-		return cal, nil, nil
+		return art.Calibrator, nil, nil
 	}
 	res, err := Fit(ctx, scorer, seedJSON, prior)
 	if err != nil {
 		return calibrate.Calibrator{}, nil, err
 	}
-	if err := calibrate.Save(path, res.Calibrator, scorerModelID, res.Samples, res.LogLoss); err != nil {
+	if err := calibrate.Save(path, calibrate.Artifact{
+		Calibrator:    res.Calibrator,
+		ScorerModelID: scorerModelID,
+		Samples:       res.Samples,
+		LogLoss:       res.LogLoss,
+	}); err != nil {
 		return calibrate.Calibrator{}, nil, err
 	}
 	return res.Calibrator, &res, nil
+}
+
+// Samples scores the labeled seed set with scorer and returns
+// calibration samples (mass=0 — the seed is static and carries no
+// provenance signal). maxTriples > 0 bounds the work to a
+// deterministic subsample: categories in sorted order, triples in file
+// order — the same triples every call, so health checks compare like
+// with like. maxTriples ≤ 0 scores everything.
+func Samples(ctx context.Context, scorer Scorer, seedJSON []byte, maxTriples int) ([]calibrate.LabeledSample, int, int, error) {
+	if scorer == nil {
+		return nil, 0, 0, fmt.Errorf("seedfit: nil scorer")
+	}
+	var p pairsFile
+	if err := json.Unmarshal(seedJSON, &p); err != nil {
+		return nil, 0, 0, fmt.Errorf("seedfit: parse seed set: %w", err)
+	}
+	cats := make([]string, 0, len(p.Categories))
+	for cat := range p.Categories {
+		cats = append(cats, cat)
+	}
+	sort.Strings(cats)
+
+	var samples []calibrate.LabeledSample
+	var pos, neg, triples int
+	for _, cat := range cats {
+		for _, t := range p.Categories[cat] {
+			if maxTriples > 0 && triples >= maxTriples {
+				break
+			}
+			triples++
+			candidates := append([]string{t.Correct}, t.Distractors...)
+			scores, err := scorer.Score(ctx, t.Query, candidates)
+			if err != nil {
+				return nil, 0, 0, fmt.Errorf("seedfit: score %s/%s: %w", cat, t.ID, err)
+			}
+			if len(scores) != len(candidates) {
+				return nil, 0, 0, fmt.Errorf("seedfit: %s/%s: %d scores for %d candidates", cat, t.ID, len(scores), len(candidates))
+			}
+			for i, s := range scores {
+				isPrereq := i == 0 // index 0 is the correct (prerequisite) candidate
+				samples = append(samples, calibrate.LabeledSample{Sim: s, Mass: 0, IsPrereq: isPrereq})
+				if isPrereq {
+					pos++
+				} else {
+					neg++
+				}
+			}
+		}
+	}
+	if len(samples) == 0 {
+		return nil, 0, 0, fmt.Errorf("seedfit: seed set produced no samples")
+	}
+	return samples, pos, neg, nil
+}
+
+// healthTriples bounds the boot-time health check's scorer work: a
+// deterministic seed subsample big enough to expose catastrophic
+// non-discrimination, small enough to be a background blip (~8 scorer
+// batch calls). The check refuses false confidence, not subtle drift.
+const healthTriples = 8
+
+// Health verifies that the persisted calibrator still describes the
+// LIVE scorer: it scores the deterministic seed subsample through the
+// scorer and applies the absolute validity predicate
+// (calibrate.Validate) to the pairing. nil means healthy. A transport
+// error means "could not check" (callers skip — they don't refit); a
+// validation error means the pairing is broken NOW — template drift,
+// a swapped-but-same-id model, a scorer collapse — and the caller
+// should refit (the fit's own validity gate makes a refit against a
+// still-broken scorer unpersistable).
+func Health(ctx context.Context, scorer Scorer, seedJSON []byte, cal calibrate.Calibrator) error {
+	samples, _, _, err := Samples(ctx, scorer, seedJSON, healthTriples)
+	if err != nil {
+		return fmt.Errorf("seedfit health: %w", err)
+	}
+	return calibrate.Validate(cal, samples)
 }

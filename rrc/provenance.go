@@ -127,6 +127,29 @@ func (e *Engine) AddEdges(edges []*rrcv1.Edge) []*rrcv1.Edge {
 // Assemble already holds around SelectPrerequisites. Taking e.mu here would
 // self-deadlock against that outer lock.
 func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, bool) {
+	return provenanceMassWalk(e.dag, coneIDs, coneThreadID, scope)
+}
+
+// ProvenanceMass computes the chain-ruled provenance mass of every
+// message reachable from the cone through the given edge set — the
+// same walk the engine's recall path runs, exposed over an arbitrary
+// edge set so offline replay (mass calibration over corpus history,
+// filtered to edges as-of a turn) computes mass with the engine's
+// exact semantics instead of a drifting reimplementation. Non-
+// provenance edges are ignored by the walk itself.
+func ProvenanceMass(edges []*rrcv1.Edge, coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, bool) {
+	d := newDAG()
+	for _, edge := range edges {
+		if edge != nil {
+			d.AddEdge(edge)
+		}
+	}
+	return provenanceMassWalk(d, coneIDs, coneThreadID, scope)
+}
+
+// provenanceMassWalk is the shared walk body. See provenanceReach for
+// the mass semantics and the cap contract.
+func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, bool) {
 	cone := make(map[string]bool, len(coneIDs))
 	for _, id := range coneIDs {
 		cone[id] = true
@@ -141,7 +164,7 @@ func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope th
 	}
 	var frontier []reachItem
 	for _, id := range coneIDs {
-		for _, edge := range e.dag.Prerequisites(id) {
+		for _, edge := range d.Prerequisites(id) {
 			if edge.Source != rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 				continue
 			}
@@ -176,7 +199,7 @@ func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope th
 			truncated = true
 			break
 		}
-		for _, edge := range e.dag.Prerequisites(item.id) {
+		for _, edge := range d.Prerequisites(item.id) {
 			if edge.Source != rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 				continue
 			}
