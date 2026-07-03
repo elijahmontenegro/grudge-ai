@@ -33,24 +33,21 @@ export interface HookConfig {
   timeout: string
 }
 
-// Matches service/config/settings.go:EngineConfig. Tunable at
-// runtime; saves apply to the live engine with no rebuild.
+// Matches the LIVE keys of service/config/settings.go:EngineConfig.
+// Tunable at runtime; saves apply to the live engine with no rebuild.
 //
 // loss_ratio is the acceptance operating point — the precision stance
 // (a candidate is accepted when its calibrated P(prerequisite) clears
 // it). It is the one hand-set knob; the calibrator coefficients behind
 // it are learned automatically per scorer.
 //
-// edge_threshold / score_floor / z_score_threshold are DEPRECATED
-// no-ops: the calibrated acceptance model replaced the flat cutoffs.
-// They remain in this type because the backend decoder requires the
-// keys on save (settings-file back-compat), but they are hidden from
-// the UI — tuning them has no effect.
+// The retired flat-threshold keys (edge_threshold, score_floor,
+// z_score_threshold) are deliberately ABSENT here: the backend
+// tolerates them in old config files but does not require them, and
+// the calibrated acceptance model ignores them entirely. The wire
+// carries only knobs that do something.
 export interface EngineConfig {
   loss_ratio: number
-  edge_threshold: number
-  score_floor: number
-  z_score_threshold: number
   min_batch_stddev: number
   local_context_size: number
   rerank_top_k: number
@@ -62,9 +59,6 @@ export interface EngineConfig {
 
 export const ENGINE_DEFAULT: EngineConfig = {
   loss_ratio: 0.5,
-  edge_threshold: 0.6,
-  score_floor: 0.3,
-  z_score_threshold: 0,
   min_batch_stddev: 0.05,
   local_context_size: 10,
   rerank_top_k: 64,

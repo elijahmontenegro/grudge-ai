@@ -124,12 +124,13 @@ func (r *queryResolver) Settings(ctx context.Context) (*Settings, error) {
 	// config file. This lets the UI reflect the actual operating
 	// config (including any defaults that kicked in when Settings had
 	// zero-value engine fields).
+	// Serialize only LIVE engine keys. The deprecated flat-threshold
+	// fields are omitted so the client never sees (and can never
+	// round-trip) knobs that do nothing; the save decoder tolerates them
+	// from old config files but the wire stays clean.
 	engineCfg := r.substrate.Engine().Config()
 	engine, err := json.Marshal(map[string]any{
 		"loss_ratio":               engineCfg.LossRatio,
-		"edge_threshold":           engineCfg.EdgeThreshold,
-		"score_floor":              engineCfg.ScoreFloor,
-		"z_score_threshold":        engineCfg.ZScoreThreshold,
 		"min_batch_stddev":         engineCfg.MinBatchStdDev,
 		"local_context_size":       engineCfg.LocalContextSize,
 		"rerank_top_k":             engineCfg.RerankTopK,

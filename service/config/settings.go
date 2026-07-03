@@ -66,8 +66,14 @@ func (e *EngineConfig) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
+	// Only LIVE knobs are required. The deprecated threshold keys
+	// (edge_threshold, score_floor, z_score_threshold) are tolerated when
+	// present — old config files carry them and DisallowUnknownFields
+	// would otherwise reject those files — but never demanded: requiring
+	// dead keys forces every client to ship corpses forever. loss_ratio is
+	// likewise optional (absent = keep the default stance) so pre-A4
+	// config files still parse.
 	required := []string{
-		"edge_threshold", "score_floor", "z_score_threshold",
 		"min_batch_stddev", "local_context_size", "rerank_top_k",
 		"context_budget_tokens", "diversity_lambda",
 		"budget_headroom_pct", "per_msg_delimiter_tokens",

@@ -1,9 +1,9 @@
 import { ENGINE_DEFAULT, type EngineConfig } from './types'
 
-// edge_threshold / score_floor / z_score_threshold exist in EngineConfig
-// for backend save compatibility but are deliberately NOT listed here:
-// the calibrated acceptance model made them no-ops, and a dial that does
-// nothing is a lie. loss_ratio is their replacement — the one honest knob.
+// The retired flat-threshold knobs (edge_threshold, score_floor,
+// z_score_threshold) are gone from EngineConfig entirely — the calibrated
+// acceptance model replaced them, and the wire carries only live keys.
+// loss_ratio is their replacement: the one honest hand-set knob.
 const ENGINE_FIELDS: Array<{
   key: keyof EngineConfig
   label: string
