@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strings"
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/core/httpc"
@@ -149,13 +150,19 @@ func (s *scorer) scoreOne(ctx context.Context, query, document string) (float64,
 			{Role: "system", Content: query},
 			{Role: "user", Content: document},
 		},
-		MaxTokens:   1,
+		// 6 tokens, not 1: enable_thinking=false is supposed to bypass
+		// Qwen3's reasoning prelude, but vLLM template versions have
+		// been observed emitting stray thinking scaffold ("</think>",
+		// newlines) ahead of the answer token. Generating a small
+		// window lets scoring skip past benign scaffold to the actual
+		// Yes/No position instead of breaking on it. Bounded and tiny
+		// relative to prefill cost.
+		MaxTokens:   6,
 		Temperature: 0,
 		Logprobs:    true,
-		// 20 covers vocab dispersion at the next-token position
+		// 20 covers vocab dispersion at the answer position
 		// without paying for the full vocab. "Yes" / "yes" / variants
-		// reliably land in the top-20 for an in-distribution input —
-		// once enable_thinking=false bypasses Qwen3's reasoning prelude.
+		// reliably land in the top-20 for an in-distribution input.
 		TopLogprobs:        20,
 		ChatTemplateKwargs: chatTemplateKwargs{EnableThinking: false},
 	}
@@ -190,7 +197,27 @@ func (s *scorer) scoreOne(ctx context.Context, query, document string) (float64,
 			core.ErrProviderUnavailable)
 	}
 
-	first := resp.Choices[0].Logprobs.Content[0]
+	// Skip benign thinking scaffold ("</think>", "<think>", bare
+	// whitespace tokens) to the first real answer position. A healthy
+	// template answers at position 0 and the scan is a no-op; a
+	// template that leaks its thinking prelude still yields a correct
+	// score instead of a break. Only KNOWN scaffold is skipped — the
+	// first non-scaffold position must be the Yes/No answer or scoring
+	// fails loudly below.
+	content := resp.Choices[0].Logprobs.Content
+	answerIdx := -1
+	for i := range content {
+		if !tokenIsScaffold(content[i].Token) {
+			answerIdx = i
+			break
+		}
+	}
+	if answerIdx == -1 {
+		return 0, fmt.Errorf("%w: only thinking-scaffold tokens in %d generated positions — chat-template drift at endpoint?",
+			core.ErrProviderUnavailable, len(content))
+	}
+
+	first := content[answerIdx]
 	yesLogprob := math.Inf(-1)
 	noLogprob := math.Inf(-1)
 	for _, tl := range first.TopLogprobs {
@@ -263,6 +290,18 @@ func (s *scorer) scoreOne(ctx context.Context, query, document string) (float64,
 	}
 	binaryLogit := yesLogprob - noLogprob
 	return 1.0 / (1.0 + math.Exp(-binaryLogit/5.0)), nil
+}
+
+// tokenIsScaffold reports whether token is thinking-prelude scaffold
+// rather than answer content: the think fences themselves or pure
+// whitespace between them and the answer. Full TrimSpace (not just
+// leading spaces/tabs): the prelude's separators are newline tokens.
+func tokenIsScaffold(token string) bool {
+	t := strings.TrimSpace(token)
+	if t == "" {
+		return true // pure-whitespace token
+	}
+	return t == "</think>" || t == "<think>"
 }
 
 func tokenIsYes(token string) bool {
