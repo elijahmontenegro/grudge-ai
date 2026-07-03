@@ -3,12 +3,17 @@ package substrate
 import (
 	"context"
 	"fmt"
+	"log"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/eval"
 	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc/calibrate"
+	"github.com/elijahmontenegro/grudge/rrc/calibrate/seedfit"
 	"github.com/elijahmontenegro/grudge/service/config"
 	"github.com/elijahmontenegro/grudge/service/search"
 	"github.com/elijahmontenegro/grudge/service/storage"
@@ -31,6 +36,10 @@ type Holder struct {
 
 	current atomic.Pointer[Substrate]
 	embeds  atomic.Pointer[search.EmbedQueue]
+
+	// calibrating is true while a background seed-set fit is in flight —
+	// see maybeCalibrate. Guards fit-stacking across rapid reloads.
+	calibrating atomic.Bool
 
 	mu sync.Mutex
 }
@@ -100,8 +109,8 @@ func (h *Holder) Searcher() *search.Searcher {
 
 // EmbedQueue returns the bounded fan-out pool for post-insert
 // embedding work. Nil when no embedder is configured or after a
-// reload cleared it. Hot callers (Inserter, OnMessageStored)
-// tolerate nil — the startup backfill goroutine catches up later.
+// reload cleared it. Hot callers tolerate nil when embedding is not
+// configured; a configured runtime creates the queue before serving.
 func (h *Holder) EmbedQueue() *search.EmbedQueue { return h.embeds.Load() }
 
 // Enqueue routes a message id into the bounded embed queue. Tolerates
@@ -132,7 +141,7 @@ func (h *Holder) ReloadProviders(ctx context.Context, opts ...Option) error {
 // UpdateEngineConfig swaps in a fresh engine that reuses the current
 // providers but with a different EngineConfig. Path for settings-
 // only edits that don't touch provider URLs / models (threshold
-// tweak, MMR lambda, radius size).
+// tweak, MMR lambda, Local Context size).
 //
 // Same swap semantics as ReloadProviders: writes the new config into
 // cfg.Settings.Engine, rebuilds the substrate, atomic stores the
@@ -145,11 +154,12 @@ func (h *Holder) UpdateEngineConfig(ctx context.Context, ec rrc.EngineConfig, op
 
 	old := h.cfg.Settings.Engine
 	h.cfg.Settings.Engine = config.EngineConfig{
+		LossRatio:             ec.LossRatio,
 		EdgeThreshold:         ec.EdgeThreshold,
 		ScoreFloor:            ec.ScoreFloor,
 		ZScoreThreshold:       ec.ZScoreThreshold,
 		MinBatchStdDev:        ec.MinBatchStdDev,
-		RadiusSize:            ec.RadiusSize,
+		LocalContextSize:      ec.LocalContextSize,
 		RerankTopK:            ec.RerankTopK,
 		ContextBudgetTokens:   ec.ContextBudgetTokens,
 		DiversityLambda:       ec.DiversityLambda,
@@ -190,5 +200,72 @@ func (h *Holder) buildAndSwap(ctx context.Context, opts ...Option) error {
 	if h.onReload != nil {
 		h.onReload()
 	}
+
+	// Self-calibration: if this substrate has a scorer but no fitted
+	// calibrator for it (Build fell back to the bootstrap), fit one in the
+	// background from the embedded seed set and swap it in live. Same
+	// self-service posture as the embedding backfill — the user configures
+	// a scorer; calibration is the system's job, not a command to run.
+	h.maybeCalibrate(subs)
 	return nil
+}
+
+// maybeCalibrate launches a background seed-set fit when the freshly-swapped
+// substrate is running on the bootstrap calibrator. Caller holds h.mu (it is
+// invoked from buildAndSwap), so reading cfg/subs here is race-free; the
+// goroutine itself touches only immutable copies and re-enters the holder
+// through ReloadProviders.
+func (h *Holder) maybeCalibrate(subs *Substrate) {
+	if subs.Scorer == nil || subs.RerankerModelID == "" {
+		return // nothing to calibrate against
+	}
+	if subs.CalibratorFitted {
+		return // Build loaded a persisted fit for this scorer — done
+	}
+	if !h.calibrating.CompareAndSwap(false, true) {
+		return // a fit is already in flight
+	}
+
+	scorer := subs.Scorer
+	scorerModelID := subs.RerankerModelID
+	calPath := filepath.Join(h.cfg.DataDir, CalibratorFilename)
+	// The seed set carries no mass signal, so the fit carries the current
+	// (bootstrap) calibrator's structural-lift ratio forward rather than
+	// zeroing it — see seedfit.Fit.
+	prior := subs.Engine.Config().Calibrator
+
+	go func() {
+		defer h.calibrating.Store(false)
+
+		// Independent context: the caller's reload ctx ends with the
+		// request that triggered it, but the fit is a background job that
+		// should survive it. Bounded so a wedged scorer can't leak the
+		// goroutine forever.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		log.Printf("[Calibrate] no fitted calibrator for scorer=%s — fitting from seed set in background", scorerModelID)
+		res, err := seedfit.Fit(ctx, scorer, eval.Seed(), prior)
+		if err != nil {
+			// Fail loudly, stay on bootstrap. The next reload retries.
+			log.Printf("[Calibrate] seed fit failed (staying on bootstrap): %v", err)
+			return
+		}
+		if err := calibrate.Save(calPath, res.Calibrator, scorerModelID, res.Samples, res.LogLoss); err != nil {
+			log.Printf("[Calibrate] persist failed (staying on bootstrap): %v", err)
+			return
+		}
+		log.Printf("[Calibrate] fitted %s over %d samples (%d pos/%d neg, log-loss %.4f): A=%.3f B=%.3f C=%.3f",
+			scorerModelID, res.Samples, res.Positives, res.Negatives, res.LogLoss,
+			res.Calibrator.A, res.Calibrator.B, res.Calibrator.C)
+
+		// Swap in via the normal rebuild: Build loads the artifact we just
+		// wrote. If the user swapped scorers while we were fitting, Build's
+		// scorer-id guard refuses the stale artifact and (via
+		// maybeCalibrate) a fresh fit starts for the new scorer — the
+		// staleness race resolves itself.
+		if err := h.ReloadProviders(ctx); err != nil {
+			log.Printf("[Calibrate] live swap failed (fit persisted; applies on next boot): %v", err)
+		}
+	}()
 }

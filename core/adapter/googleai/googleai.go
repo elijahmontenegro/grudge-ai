@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/core/adapter/internal/util"
 	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
@@ -24,31 +25,38 @@ type Config struct {
 
 type provider struct {
 	cfg    Config
+	authFn func(*http.Request)
 	client *httpc.Client
 }
 
-// New creates a Google AI provider.
+// New creates a Google AI provider. Authentication is the API key sent as
+// the `x-goog-api-key` request header (Google's documented alternative to
+// the `?key=` query parameter), injected via the httpc auth callback so the
+// key never lands in a URL — and therefore never in proxy/access logs.
 func New(cfg Config) any {
+	authFn := func(req *http.Request) {
+		if cfg.APIKey != "" {
+			req.Header.Set("x-goog-api-key", cfg.APIKey)
+		}
+	}
 	return &provider{
 		cfg:    cfg,
-		client: httpc.New(httpc.TimeoutDefault, nil),
+		authFn: authFn,
+		client: httpc.New(httpc.TimeoutDefault, authFn),
 	}
 }
-
 
 func (p *provider) Completer(model string) (core.Completer, error) {
 	return &completer{
 		model:        model,
-		apiKey:       p.cfg.APIKey,
 		client:       p.client,
-		streamClient: httpc.NewStreaming(nil),
+		streamClient: httpc.NewStreaming(p.authFn),
 	}, nil
 }
 
 func (p *provider) Embedder(model string) (core.Embedder, error) {
 	return &embedder{
 		model:  model,
-		apiKey: p.cfg.APIKey,
 		client: p.client,
 	}, nil
 }
@@ -57,14 +65,12 @@ func (p *provider) Embedder(model string) (core.Embedder, error) {
 
 type completer struct {
 	model        string
-	apiKey       string
 	client       *httpc.Client
 	streamClient *httpc.Client
 }
 
-
 func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error) {
-	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", baseURL, c.model, c.apiKey)
+	url := fmt.Sprintf("%s/models/%s:generateContent", baseURL, c.model)
 
 	body, err := json.Marshal(toGenerateRequest(req))
 	if err != nil {
@@ -108,7 +114,7 @@ func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 
 func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
 	return func(yield func(*pb.StreamChunk, error) bool) {
-		url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s", baseURL, c.model, c.apiKey)
+		url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", baseURL, c.model)
 
 		body, err := json.Marshal(toGenerateRequest(req))
 		if err != nil {
@@ -128,8 +134,9 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			return
 		}
 		if resp.StatusCode != http.StatusOK {
+			err := httpc.NewStatusError("googleai", resp)
 			resp.Body.Close()
-			yield(nil, &httpc.StatusError{Provider: "googleai", StatusCode: resp.StatusCode})
+			yield(nil, err)
 			return
 		}
 		defer resp.Body.Close()
@@ -144,7 +151,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 
 			var chunk generateResponse
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
+				yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 				return
 			}
 
@@ -172,7 +179,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
+			yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 		}
 	}
 }
@@ -181,10 +188,8 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 
 type embedder struct {
 	model  string
-	apiKey string
 	client *httpc.Client
 }
-
 
 // Embed routes both roles to the same batch endpoint — googleai's
 // embedContent API doesn't differentiate query/document at the
@@ -195,7 +200,7 @@ func (e *embedder) Embed(ctx context.Context, _ core.EmbedRole, texts []string) 
 }
 
 func (e *embedder) embed(ctx context.Context, texts []string) ([][]float32, error) {
-	url := fmt.Sprintf("%s/models/%s:batchEmbedContents?key=%s", baseURL, e.model, e.apiKey)
+	url := fmt.Sprintf("%s/models/%s:batchEmbedContents", baseURL, e.model)
 
 	reqs := make([]embedContentRequest, len(texts))
 	for i, t := range texts {
@@ -237,4 +242,3 @@ func (e *embedder) embed(ctx context.Context, texts []string) ([][]float32, erro
 	}
 	return results, nil
 }
-

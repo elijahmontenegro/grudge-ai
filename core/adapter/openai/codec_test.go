@@ -202,4 +202,3 @@ func textOf(blocks []*pb.ContentBlock) string {
 	}
 	return sb.String()
 }
-

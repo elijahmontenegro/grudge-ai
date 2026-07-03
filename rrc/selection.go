@@ -17,15 +17,14 @@ type selectionEntry struct {
 	CrossThread    bool
 }
 
-// edgeScoreUnderConfig returns the gating score for an edge under
-// current config. Edge scoring is now a single signal — the stored
-// CrossEncoderScore — so this function reads that field directly.
-// Kept as a named function because callers gate against
-// cfg.EdgeThreshold on the result; future score adjustments (e.g.
-// per-edge weighting, age decay) would land here without touching
-// callsites.
+// edgeScoreUnderConfig returns the traversal score for an edge. Post-A4 this
+// is the calibrated P(prereq) stored in Score (edge formation writes the
+// Calibrator's output there), so multi-hop traversal chain-rules calibrated
+// probabilities — the same currency acceptance uses — rather than raw CE
+// scores gated by a flat threshold. Kept as a named function so a future
+// per-edge adjustment (age decay, re-calibration) lands here.
 func edgeScoreUnderConfig(edge *pb.Edge, _ EngineConfig) float64 {
-	return float64(edge.CrossEncoderScore)
+	return float64(edge.Score)
 }
 
 // extractSubgraph performs best-first backward traversal from promptID through
@@ -46,12 +45,21 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope pb.Se
 
 	// Seed with direct prerequisites of the prompt
 	for _, edge := range d.Prerequisites(promptID) {
+		if edge.Source == pb.EdgeSource_EDGE_SOURCE_PROVENANCE {
+			continue // provenance is a recorded structural signal, not a
+			// scored prerequisite edge; it is consumed by the traversal
+			// recall path (A2) and folded into acceptance (A4), never by
+			// this CE-scored subgraph walk.
+		}
 		if !scopeAllows(edge, promptThreadID, scope) {
 			continue
 		}
+		// Edge Score is calibrated P(prereq) (A4). Accept into the walk at
+		// the precision floor (μ=0 at selection; the token-price μ is applied
+		// later in the assembly shed loop). Replaces the flat EdgeThreshold.
 		score := edgeScoreUnderConfig(edge, cfg)
-		if score < cfg.EdgeThreshold {
-			continue // edge doesn't qualify under current config
+		if !accept(score, cfg.LossRatio, 0, 0) {
+			continue
 		}
 		crossThread := edge.FromThreadId != promptThreadID
 		heap.Push(pq, &pqItem{
@@ -77,15 +85,23 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope pb.Se
 		}
 		visited[entry.MessageID] = true
 
-		if entry.EffectiveScore < cfg.ScoreFloor {
+		// Chain-ruled calibrated probability floor (A4, replacing ScoreFloor).
+		// EffectiveScore is the product of calibrated edge probabilities along
+		// the path — a genuine P(prereq) for the multi-hop chain — so the same
+		// precision stance that gates formation gates reach. A deep chain whose
+		// product falls below the stance stops here.
+		if entry.EffectiveScore < cfg.LossRatio {
 			belowFloor[entry.MessageID] = entry.EffectiveScore
 			continue
 		}
 
 		selected = append(selected, entry)
 
-		// Push prerequisites with multiplicatively decayed scores
+		// Push prerequisites with multiplicatively decayed (chain-rule) scores
 		for _, edge := range d.Prerequisites(entry.MessageID) {
+			if edge.Source == pb.EdgeSource_EDGE_SOURCE_PROVENANCE {
+				continue // see seed loop: provenance is not a CE-scored edge
+			}
 			if visited[edge.FromMessageId] {
 				continue
 			}
@@ -93,7 +109,7 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope pb.Se
 				continue
 			}
 			edgeScore := edgeScoreUnderConfig(edge, cfg)
-			if edgeScore < cfg.EdgeThreshold {
+			if !accept(edgeScore, cfg.LossRatio, 0, 0) {
 				continue
 			}
 			effectiveScore := edgeScore * entry.EffectiveScore
@@ -201,8 +217,20 @@ type pqItem struct {
 
 type priorityQueue []*pqItem
 
-func (pq priorityQueue) Len() int            { return len(pq) }
-func (pq priorityQueue) Less(i, j int) bool  { return pq[i].priority > pq[j].priority } // max-heap
-func (pq priorityQueue) Swap(i, j int)       { pq[i], pq[j] = pq[j], pq[i]; pq[i].index = i; pq[j].index = j }
-func (pq *priorityQueue) Push(x any)         { item := x.(*pqItem); item.index = len(*pq); *pq = append(*pq, item) }
-func (pq *priorityQueue) Pop() any           { old := *pq; n := len(old); item := old[n-1]; old[n-1] = nil; item.index = -1; *pq = old[:n-1]; return item }
+func (pq priorityQueue) Len() int           { return len(pq) }
+func (pq priorityQueue) Less(i, j int) bool { return pq[i].priority > pq[j].priority } // max-heap
+func (pq priorityQueue) Swap(i, j int)      { pq[i], pq[j] = pq[j], pq[i]; pq[i].index = i; pq[j].index = j }
+func (pq *priorityQueue) Push(x any) {
+	item := x.(*pqItem)
+	item.index = len(*pq)
+	*pq = append(*pq, item)
+}
+func (pq *priorityQueue) Pop() any {
+	old := *pq
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil
+	item.index = -1
+	*pq = old[:n-1]
+	return item
+}

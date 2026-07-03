@@ -620,13 +620,19 @@ func (x *AttachmentContent) GetInlinedText() string {
 }
 
 type Message struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Role          Role                   `protobuf:"varint,2,opt,name=role,proto3,enum=grudge.v1.Role" json:"role,omitempty"`
-	Content       []*ContentBlock        `protobuf:"bytes,3,rep,name=content,proto3" json:"content,omitempty"`
-	Position      int64                  `protobuf:"varint,4,opt,name=position,proto3" json:"position,omitempty"`
-	ThreadId      string                 `protobuf:"bytes,5,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Role      Role                   `protobuf:"varint,2,opt,name=role,proto3,enum=grudge.v1.Role" json:"role,omitempty"`
+	Content   []*ContentBlock        `protobuf:"bytes,3,rep,name=content,proto3" json:"content,omitempty"`
+	Position  int64                  `protobuf:"varint,4,opt,name=position,proto3" json:"position,omitempty"`
+	ThreadId  string                 `protobuf:"bytes,5,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Active-discourse identity. Messages produced within one outbound
+	// model call (the triggering event plus the model/tool events it
+	// spawns) share a turn_id, so the in-flight local discourse can be
+	// recovered without falling back to fixed last-N recency. Empty on
+	// messages stored before this field existed / outside a turn.
+	TurnId        string `protobuf:"bytes,7,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -701,6 +707,13 @@ func (x *Message) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *Message) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
 }
 
 type Thread struct {
@@ -843,7 +856,7 @@ const file_grudge_v1_thread_proto_rawDesc = "" +
 	"\n" +
 	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\x12\x12\n" +
 	"\x04path\x18\x05 \x01(\tR\x04path\x12!\n" +
-	"\finlined_text\x18\x06 \x01(\tR\vinlinedText\"\xe5\x01\n" +
+	"\finlined_text\x18\x06 \x01(\tR\vinlinedText\"\xfe\x01\n" +
 	"\aMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x04role\x18\x02 \x01(\x0e2\x0f.grudge.v1.RoleR\x04role\x121\n" +
@@ -851,7 +864,8 @@ const file_grudge_v1_thread_proto_rawDesc = "" +
 	"\bposition\x18\x04 \x01(\x03R\bposition\x12\x1b\n" +
 	"\tthread_id\x18\x05 \x01(\tR\bthreadId\x129\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x91\x03\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x17\n" +
+	"\aturn_id\x18\a \x01(\tR\x06turnId\"\x91\x03\n" +
 	"\x06Thread\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12!\n" +

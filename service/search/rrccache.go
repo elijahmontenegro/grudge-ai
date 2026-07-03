@@ -6,11 +6,9 @@ import (
 	"log"
 	"math"
 	"sort"
-	"sync"
-	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 	"github.com/elijahmontenegro/grudge/core"
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/protobuf/proto"
@@ -78,17 +76,9 @@ func (o *ChunkOracle) ChunksForMessages(ctx context.Context, messageIDs []string
 	return out, nil
 }
 
-// NearestChunks encodes queryText as a query (asymmetric — the
-// embedder applies its query-side prompt), then ranks every chunk in
-// chunk_vectors that satisfies predicate by cosine similarity to the
-// query vector and returns the top k.
-//
-// Backed by a brute-force scan over the predicate-filtered set today.
-// The interface is the architectural seam: a future HNSW or sqlite-vec
-// implementation swaps the scoring loop without changing callers.
-// Sub-linear retrieval is the long-term invariance commitment; the
-// brute-force path satisfies the API contract immediately, with
-// O(filtered-set-size) cost.
+// NearestChunks encodes queryText asymmetrically, then runs sqlite-vec
+// KNN. It expands the raw result set until k predicate-eligible chunks
+// survive or the model partition is exhausted.
 func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int, predicate rrc.Predicate) ([]rrc.ChunkRef, error) {
 	if o == nil || o.db == nil || o.embedder == nil {
 		return nil, nil
@@ -106,26 +96,35 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 	}
 	qVec := qVecs[0]
 
-	predClause, predArgs, err := compilePredicate(predicate)
-	if err != nil {
-		return nil, fmt.Errorf("NearestChunks: compile predicate: %w", err)
-	}
+	requestK := k
+	var topRows []storage.ChunkVectorRow
 
-	// Sub-linear KNN via sqlite-vec vec0 — auxiliary columns push the
-	// model_id and predicate filters into the MATCH search rather than
-	// post-filtering. Result is already ordered by distance ascending.
-	rows, err := o.db.NearestChunkVectors(qVec, k, o.model, predClause, predArgs)
-	if err != nil {
-		return nil, fmt.Errorf("NearestChunks: vec0 KNN: %w", err)
+	// model_id is a vec0 partition key. Thread and message exclusions
+	// are applied after each KNN page, so ineligible rows cannot consume
+	// the caller's effective k.
+	for {
+		rows, err := o.db.NearestChunkVectors(qVec, requestK, o.model, "", nil)
+		if err != nil {
+			return nil, fmt.Errorf("NearestChunks: vec0 KNN: %w", err)
+		}
+		topRows = topRows[:0]
+		for _, row := range rows {
+			if matchesPredicate(predicate, row) {
+				topRows = append(topRows, row)
+				if len(topRows) == k {
+					break
+				}
+			}
+		}
+		if len(topRows) == k || len(rows) < requestK {
+			break
+		}
+		requestK *= 2
 	}
-	if len(rows) == 0 {
+	if len(topRows) == 0 {
 		return nil, nil
 	}
-	topRows := rows
-	if k > len(topRows) {
-		k = len(topRows)
-	}
-	topRows = topRows[:k]
+	k = len(topRows)
 	chunkTexts, err := o.fetchChunkTexts(topRows)
 	if err != nil {
 		return nil, fmt.Errorf("NearestChunks: fetch chunk texts: %w", err)
@@ -134,7 +133,7 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 	for i := 0; i < k; i++ {
 		r := topRows[i]
 		// Convert vec0 distance → similarity in [0, 1]. The schema
-		// declares distance_metric=cosine (post-migrationV5), so the
+		// declares distance_metric=cosine, so the
 		// returned Distance is a cosine distance and `1 - distance`
 		// is the cosine similarity. Clamp out of caution against
 		// floating-point drift just outside the unit interval.
@@ -154,6 +153,54 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 		}
 	}
 	return out, nil
+}
+
+func matchesPredicate(predicate rrc.Predicate, row storage.ChunkVectorRow) bool {
+	if predicate == nil {
+		return true
+	}
+	switch p := predicate.(type) {
+	case rrc.PredAll:
+		return true
+	case rrc.PredThread:
+		return row.ThreadID == p.ThreadID
+	case rrc.PredScope:
+		return p.Scope == rrc.ScopeAll || row.ThreadID == p.CurrentThread
+	case rrc.PredExcludeMessageIDs:
+		for _, id := range p.MessageIDs {
+			if row.MessageID == id {
+				return false
+			}
+		}
+		return true
+	case rrc.PredAnd:
+		for _, child := range p.Children {
+			if !matchesPredicate(child, row) {
+				return false
+			}
+		}
+		return true
+	case rrc.PredOr:
+		for _, child := range p.Children {
+			if matchesPredicate(child, row) {
+				return true
+			}
+		}
+		return false
+	case rrc.PredNot:
+		return !matchesPredicate(p.Inner, row)
+	case rrc.PredHasMetadata:
+		switch p.Key {
+		case "thread_id":
+			return row.ThreadID == p.Value
+		case "model_id":
+			return row.ModelID == p.Value
+		default:
+			return false
+		}
+	default:
+		return false
+	}
 }
 
 type chunkKey struct {
@@ -185,7 +232,6 @@ func (o *ChunkOracle) fetchChunkTexts(rows []storage.ChunkVectorRow) (map[chunkK
 	}
 	return out, nil
 }
-
 
 // DiversityRerank applies MMR (Carbonell & Goldstein 1998) to the
 // candidate set using mean-pooled chunk vectors as the per-message
@@ -326,7 +372,7 @@ func cosineSim(a, b []float32) float64 {
 }
 
 // EnsureVector embeds a chunk live if it isn't cached. Called by the
-// engine for brand-new chunks that backfill hasn't reached yet.
+// engine when a selected candidate lacks a cached vector.
 func (o *ChunkOracle) EnsureVector(ctx context.Context, ref rrc.ChunkRef) ([]float32, error) {
 	if len(ref.Vector) > 0 {
 		return ref.Vector, nil
@@ -351,105 +397,4 @@ func (o *ChunkOracle) EnsureVector(ctx context.Context, ref rrc.ChunkRef) ([]flo
 		log.Printf("ChunkOracle: InsertChunkEmbedding(%s[%d], %s): %v", ref.MessageID, ref.ChunkIndex, o.model, err)
 	}
 	return vec, nil
-}
-
-// BackfillEmbeddings closes the gap between the chunks table and the
-// embedding cache for the configured model. Runs in a goroutine from
-// main.go at startup — non-blocking so the service accepts requests
-// immediately; in-flight EnsureVector calls for not-yet-backfilled
-// chunks just embed live via the same code path.
-//
-// Idempotent and resumable: the LEFT JOIN query naturally shrinks
-// across restarts, so a crashed or canceled backfill picks up where
-// it left off on next boot.
-func (o *ChunkOracle) BackfillEmbeddings(ctx context.Context) {
-	if o == nil || o.db == nil || o.embedder == nil {
-		return
-	}
-	missing, err := o.db.ChunksMissingEmbeddings(o.model)
-	if err != nil {
-		log.Printf("Backfill: ChunksMissingEmbeddings(model=%s): %v", o.model, err)
-		return
-	}
-	if len(missing) == 0 {
-		return
-	}
-	log.Printf("Backfill: embedding %d chunks for model %s", len(missing), o.model)
-
-	const (
-		chunkSize   = 32 // matches TEI max_client_batch_size
-		concurrency = 4  // matches TEI max_batch_requests
-	)
-
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
-	var done atomicCounter
-
-	start := time.Now()
-	for i := 0; i < len(missing); i += chunkSize {
-		end := i + chunkSize
-		if end > len(missing) {
-			end = len(missing)
-		}
-		group := missing[i:end]
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(group []storage.ChunkMissing) {
-			defer wg.Done()
-			defer func() { <-sem }()
-
-			texts := make([]string, len(group))
-			for j, g := range group {
-				texts[j] = g.Text
-			}
-			vecs, err := o.embedder.Embed(ctx, core.RoleDocument, texts)
-			if err != nil || len(vecs) != len(group) {
-				// Fall back to one-at-a-time on batch failure so the
-				// whole chunk isn't lost.
-				vecs = embedOneByOne(ctx, o.embedder, texts)
-			}
-			for j, g := range group {
-				if j >= len(vecs) || vecs[j] == nil {
-					continue
-				}
-				if err := o.db.InsertChunkEmbedding(g.MessageID, g.ChunkIndex, o.model, vecs[j]); err != nil {
-					log.Printf("Backfill: InsertChunkEmbedding(%s[%d]): %v", g.MessageID, g.ChunkIndex, err)
-					continue
-				}
-				done.inc()
-			}
-		}(group)
-	}
-	wg.Wait()
-	log.Printf("Backfill: embedded %d/%d chunks (model=%s) in %v",
-		done.value(), len(missing), o.model, time.Since(start))
-}
-
-func embedOneByOne(ctx context.Context, e core.Embedder, texts []string) [][]float32 {
-	vecs := make([][]float32, len(texts))
-	for i, t := range texts {
-		out, err := e.Embed(ctx, core.RoleDocument, []string{t})
-		if err != nil {
-			continue
-		}
-		vecs[i] = out[0]
-	}
-	return vecs
-}
-
-type atomicCounter struct {
-	mu sync.Mutex
-	n  int
-}
-
-func (c *atomicCounter) inc() {
-	c.mu.Lock()
-	c.n++
-	c.mu.Unlock()
-}
-
-func (c *atomicCounter) value() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.n
 }

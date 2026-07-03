@@ -41,9 +41,15 @@ type Runner struct {
 	rerankerModelID string // for subagent forks to inherit
 	adkRunner       *runner.Runner
 	rrcLLM          *adk.RRCLLM // stored to set scope per-call
-	mu          sync.Mutex
-	msgSeq      atomic.Int64 // monotonic message ID counter
-	autoState   *AutonomousState
+	mu              sync.Mutex
+	msgSeq          atomic.Int64 // monotonic message ID counter
+	// currentTurnID is the active-discourse identity stamped on every
+	// message stored during the in-flight SendMessage (the triggering
+	// event plus the model/tool events it spawns). Minted at SendMessage
+	// entry, read by indexMessage. Guarded by mu (held for the whole
+	// SendMessage call); indexMessage only runs under that lock.
+	currentTurnID string
+	autoState     *AutonomousState
 	// turnCancel holds the derived-context cancel for the in-flight
 	// turn. Atomic pointer because r.mu is held for the entire
 	// SendMessage call — CancelTurn has to read this without blocking
@@ -136,10 +142,8 @@ func (r *Runner) SetRoundCallback(cb func(round int, elapsed time.Duration)) {
 // inserter, so chunk derivation is identical across both insert
 // pathways (no per-layer chunksFor duplicate).
 //
-// rerankerModelID is the id under which reranker chunk-pair scores
-// are persisted in the scores table. Passed through to RRCLLM so
-// its protocol-rectification resolver can score Store-resident
-// candidates against the current query.
+// rerankerModelID identifies the score model inherited by subagent
+// runners. Local-Context score persistence is wired into the shared engine.
 func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName, instruction, rerankerModelID string, inserter *messages.Inserter) (*Runner, error) {
 	r := &Runner{
 		engine:          engine,
@@ -156,7 +160,7 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 	// RRC-as-LLM: ADK calls this thinking it's an LLM. Engine owns its
 	// own lock now; rrcLLM acquires it directly via engine.Lock /
 	// Unlock — no shared mutex passed in.
-	rrcLLM := adk.NewRRCLLM(engine, completer, db, threadID, modelName, rerankerModelID)
+	rrcLLM := adk.NewRRCLLM(engine, completer, db, threadID, modelName)
 	rrcLLM.OnStream = func(delta, thinking string, done bool) {
 		if r.onStream != nil {
 			r.onStream(delta, thinking, done)
@@ -186,18 +190,18 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 			r.tickAssembleSet = true
 			return
 		}
-		r.tickAssemble.OnMessage.DurationMs += t.OnMessage.DurationMs
-		r.tickAssemble.OnMessage.CandidatesScored += t.OnMessage.CandidatesScored
-		r.tickAssemble.OnMessage.Reranked += t.OnMessage.Reranked
+		r.tickAssemble.PrerequisiteSelection.DurationMs += t.PrerequisiteSelection.DurationMs
+		r.tickAssemble.PrerequisiteSelection.CandidatesScored += t.PrerequisiteSelection.CandidatesScored
+		r.tickAssemble.PrerequisiteSelection.Reranked += t.PrerequisiteSelection.Reranked
 		r.tickAssemble.SelectMs += t.SelectMs
 		r.tickAssemble.MMRMs += t.MMRMs
 		r.tickAssemble.ShedMs += t.ShedMs
 		// Final-state fields: take the last attempt's values.
-		r.tickAssemble.OnMessage.PriorsConsidered = t.OnMessage.PriorsConsidered
-		r.tickAssemble.OnMessage.EdgesFormed = t.OnMessage.EdgesFormed
+		r.tickAssemble.PrerequisiteSelection.PriorsConsidered = t.PrerequisiteSelection.PriorsConsidered
+		r.tickAssemble.PrerequisiteSelection.EdgesFormed = t.PrerequisiteSelection.EdgesFormed
 		r.tickAssemble.SelectedCount = t.SelectedCount
-		r.tickAssemble.RadiusCount = t.RadiusCount
-		r.tickAssemble.RectifiedCount = t.RectifiedCount
+		r.tickAssemble.LocalContextCount = t.LocalContextCount
+		r.tickAssemble.ClosureCount = t.ClosureCount
 		r.tickAssemble.SheddedCount = t.SheddedCount
 		r.tickAssemble.TotalTokens = t.TotalTokens
 		r.tickAssemble.EffectiveBudget = t.EffectiveBudget
@@ -253,16 +257,21 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 // enqueue — for the entire 14h novel run, every pre-tool-call thought
 // landed in `chunks` but never got a vector in `chunk_vectors`. The
 // chunks were visible to BM25 / count queries but invisible to RRC's
-// vec0 KNN retrieval, until the next service boot's
-// BackfillEmbeddings caught them up. The fix collapses both ops into
-// one helper so the bug class is structurally impossible — adding a
-// future call-site can't reintroduce it.
+// vec0 KNN retrieval. The fix collapses both operations into one
+// helper so every stored message follows the same indexing path.
 //
 // The per-tick persist accumulator includes only the synchronous
 // SQLite write. The enqueue is fire-and-forget into the bounded
 // worker pool; its cost is steady-state background load, not a tick
 // stage.
 func (r *Runner) indexMessage(msg *pb.Message) error {
+	// Stamp the active-discourse identity. Every message stored during a
+	// SendMessage — triggering event, thinking, tool calls, tool results,
+	// final assistant text — shares the turn's id, so BuildActiveDiscourse
+	// can recover the in-flight local discourse without fixed-N recency.
+	if msg.TurnId == "" {
+		msg.TurnId = r.currentTurnID
+	}
 	if r.inserter == nil {
 		// Tests construct a Runner with no inserter wired so they can
 		// exercise processEvents without a full runtime. Insert the
@@ -347,6 +356,14 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.Selec
 		r.msgSeq.Store(cur)
 	}
 
+	// Mint the active-discourse identity for this turn before the
+	// triggering event is stored, so the trigger and every model/tool
+	// event it spawns share it (indexMessage stamps it). Set it on the
+	// RRCLLM so BuildActiveDiscourse recovers exactly this turn's
+	// in-flight discourse as Local Context.
+	r.currentTurnID = fmt.Sprintf("turn-%s-%d", r.threadID, time.Now().UnixNano())
+	r.rrcLLM.CurrentTurnID = r.currentTurnID
+
 	// Store the user Event only when it carries real content. Empty-
 	// content autonomous ticks do not enter the Store — they are a
 	// loop iteration, not an Event. Protocol-adherence shaping (e.g.
@@ -402,7 +419,7 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.Selec
 //
 // Stage attribution:
 //
-//	t_rrc_onmessage_ms = OnMessage's own duration (chunking + embed + KNN + rerank + edges)
+//	t_rrc_prerequisite_selection_ms = Local Context serialization, KNN, rerank, gates, and edges
 //	t_select_ms        = Engine.Select (graph walk + transitive reduction)
 //	t_assemble_ms      = the rest of Assemble (MMR + budget shed + token estimate)
 //	t_complete_ms      = wall clock from adkRunner.Run entry to first event,
@@ -417,14 +434,14 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 	// Stage decomposition. Some fields may be zero if SendMessage
 	// exited early (e.g., corpus load failed → no Assemble fired).
 	var (
-		onMessageMs int64
-		selectMs    int64
-		assembleMs  int64
-		completeMs  int64
-		streamMs    int64
+		onQueryMs  int64
+		selectMs   int64
+		assembleMs int64
+		completeMs int64
+		streamMs   int64
 	)
 	if r.tickAssembleSet {
-		onMessageMs = r.tickAssemble.OnMessage.DurationMs
+		onQueryMs = r.tickAssemble.PrerequisiteSelection.DurationMs
 		selectMs = r.tickAssemble.SelectMs
 		// "Assemble" stage in the trace folds MMR + budget shed since
 		// they're both post-Select assembly work and aren't worth
@@ -438,7 +455,7 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 			// round-trip. Subtract the Assemble stages so what's left
 			// approximates pure network/model wait.
 			runToFirst := r.tickFirstEvent.Sub(r.tickRunStart).Milliseconds()
-			assemblyInsideRun := onMessageMs + selectMs + assembleMs
+			assemblyInsideRun := onQueryMs + selectMs + assembleMs
 			completeMs = runToFirst - assemblyInsideRun
 			if completeMs < 0 {
 				// Clamp to zero — sub-millisecond stage timings can
@@ -455,19 +472,19 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 	}
 
 	trace := &storage.TickTrace{
-		ThreadID:           r.threadID,
-		Round:              r.tickRound,
-		RRCOnMessageMs:     onMessageMs,
-		SelectMs:           selectMs,
-		AssembleMs:         assembleMs,
-		CompleteMs:         completeMs,
-		StreamMs:           streamMs,
-		PersistMs:          r.tickPersistMs,
-		TotalMs:            totalMs,
-		CompleterModel:     r.modelName,
-		CorpusSize:         r.tickCorpusSize,
-		SelectedCount:      r.tickAssemble.SelectedCount,
-		AssembledTokensEst: r.tickAssemble.TotalTokens,
+		ThreadID:                   r.threadID,
+		Round:                      r.tickRound,
+		RRCPrerequisiteSelectionMs: onQueryMs,
+		SelectMs:                   selectMs,
+		AssembleMs:                 assembleMs,
+		CompleteMs:                 completeMs,
+		StreamMs:                   streamMs,
+		PersistMs:                  r.tickPersistMs,
+		TotalMs:                    totalMs,
+		CompleterModel:             r.modelName,
+		CorpusSize:                 r.tickCorpusSize,
+		SelectedCount:              r.tickAssemble.SelectedCount,
+		AssembledTokensEst:         r.tickAssemble.TotalTokens,
 	}
 	if callErr != nil {
 		trace.Errored = true
@@ -507,7 +524,7 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 	// call stored twice in the corpus). Track IDs we've already persisted
 	// so repeat Parts are ignored at the storage boundary rather than
 	// polluting the corpus the RRC engine sees next round.
-	seenCallIDs := make(map[string]bool)
+	seenCallIDs := make(map[string]string)
 	seenResultIDs := make(map[string]bool)
 
 	// storeThinking flushes accumulated thinking as its own message in the turn.
@@ -555,11 +572,13 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 			if part.FunctionCall != nil {
 				fc := part.FunctionCall
 				// Guard against ADK re-emitting the same call Part.
-				if fc.ID != "" && seenCallIDs[fc.ID] {
-					continue
+				if fc.ID != "" {
+					if _, seen := seenCallIDs[fc.ID]; seen {
+						continue
+					}
 				}
 				if fc.ID != "" {
-					seenCallIDs[fc.ID] = true
+					seenCallIDs[fc.ID] = fc.Name
 				}
 				// Flush thinking BEFORE the tool call so ordering is correct
 				storeThinking()
@@ -626,6 +645,39 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 		}
 	}
 
+	// A cancelled or interrupted tool execution can end the event
+	// stream after its call was persisted but before ADK emits a
+	// FunctionResponse. Preserve the exact protocol relation by
+	// recording an explicit error result under the original call ID.
+	for callID, toolName := range seenCallIDs {
+		if callID == "" || seenResultIDs[callID] {
+			continue
+		}
+		content := "Tool execution ended without a result."
+		if lastErr != nil {
+			content = "Tool execution failed: " + lastErr.Error()
+		}
+		toolResultMsg := &pb.Message{
+			Id:   r.nextMsgID(),
+			Role: pb.Role_ROLE_ASSISTANT,
+			Content: []*pb.ContentBlock{{Block: &pb.ContentBlock_ToolResult{
+				ToolResult: &pb.ToolResultContent{
+					ToolCallId: callID,
+					Content:    content,
+					IsError:    true,
+				},
+			}}},
+			Position: r.msgSeq.Load(),
+			ThreadId: r.threadID,
+		}
+		if err := r.indexMessage(toolResultMsg); err != nil {
+			return nil, err
+		}
+		if r.OnToolResult != nil {
+			r.OnToolResult(callID, toolName, content, true)
+		}
+	}
+
 	// Store final thinking + text as the last message in the turn
 	var finalContent []*pb.ContentBlock
 	if thinkingBuf.Len() > 0 {
@@ -677,11 +729,10 @@ func (r *Runner) afterModelCallback(
 		return llmResponse, llmResponseError
 	}
 
-	// QUD carry-forward removed along with the small-fast-model extractor.
-	// Thinking blocks are still stored by the runner's message loop; edge
-	// discovery on thinking text is done by the scorer when the
-	// synthetic message is seen by OnMessage. No separate carry-forward
-	// pass is needed.
+	// Model and tool events are stored by the runner's message loop.
+	// A later outbound call sees those events through Local Context and
+	// builds a fresh serialized Local Context, so no separate carry-forward pass
+	// is needed here.
 	_ = llmResponse.Content
 	return llmResponse, nil
 }

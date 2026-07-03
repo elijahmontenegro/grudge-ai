@@ -111,10 +111,10 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 		return nil, err
 	}
 
-	// No Engine.Fork needed — the global engine has the parent's edges and scores.
-	// ThreadCorpus for the branch includes the parent's messages up to the branch point
-	// (referenced, not copied). OnMessage will score the new message against the full
-	// inherited corpus. Edges for the parent's messages are already in the DAG.
+	// No Engine.Fork is needed: the global engine has the parent's edges and
+	// query scores. The branch corpus references the parent's messages through
+	// the branch point, and later Selection Queries can retrieve from that
+	// inherited corpus.
 
 	// Insert the edited message at the branch point
 	msg := &v1.Message{

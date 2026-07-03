@@ -169,4 +169,4 @@ func TestEstimateToolSchemaTokens_AccumulatesAcrossTools(t *testing.T) {
 }
 
 // hasTextBlock tests live in rrc/assembly_test.go — the helper now
-// lives in rrc since dynamical Radius is part of Engine.Assemble.
+// lives in rrc because Local Context construction is part of Engine.Assemble.

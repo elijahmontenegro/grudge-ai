@@ -23,24 +23,11 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
-	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 	"github.com/elijahmontenegro/grudge/core/httpc/retry"
+	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 )
-
-// zerankRetryPolicy mirrors TEI's policy — local service, ~6 minute
-// total window across 3 attempts.
-func zerankRetryPolicy() retry.Policy {
-	return retry.Policy{
-		MaxAttempts: 3,
-		BaseDelay:   1 * time.Second,
-		MaxDelay:    10 * time.Second,
-		Multiplier:  3.0,
-		Jitter:      0.25,
-	}
-}
 
 // Config for the zerank (vLLM-served zerank-1-small) provider.
 type Config struct {
@@ -178,7 +165,7 @@ func (s *scorer) scoreOne(ctx context.Context, query, document string) (float64,
 	}
 
 	var resp completionResponse
-	err = retry.Do(ctx, zerankRetryPolicy(), nil, func(ctx context.Context) error {
+	err = retry.Do(ctx, retry.LocalServicePolicy(), retry.LogRetryEvent("zerank rerank"), func(ctx context.Context) error {
 		httpReq, err := http.NewRequest("POST", s.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			return err

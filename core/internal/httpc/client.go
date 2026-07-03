@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	TimeoutDefault   = 30 * time.Second
-	TimeoutStreaming = 120 * time.Second
+	TimeoutDefault = 30 * time.Second
 
 	// TimeoutTEI bounds a single TEI /rerank or /embed HTTP call.
 	// The default 30s was too tight — healthy reranks are sub-second,

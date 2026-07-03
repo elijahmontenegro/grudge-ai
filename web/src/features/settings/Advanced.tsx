@@ -1,5 +1,9 @@
 import { ENGINE_DEFAULT, type EngineConfig } from './types'
 
+// edge_threshold / score_floor / z_score_threshold exist in EngineConfig
+// for backend save compatibility but are deliberately NOT listed here:
+// the calibrated acceptance model made them no-ops, and a dial that does
+// nothing is a lie. loss_ratio is their replacement — the one honest knob.
 const ENGINE_FIELDS: Array<{
   key: keyof EngineConfig
   label: string
@@ -8,33 +12,21 @@ const ENGINE_FIELDS: Array<{
   integer?: boolean
 }> = [
   {
-    key: 'edge_threshold',
-    label: 'edge threshold',
-    hint: 'fused-score minimum for an edge to enter the DAG (0 = accept all)',
-    step: 0.01,
-  },
-  {
-    key: 'score_floor',
-    label: 'score floor',
-    hint: 'effective-score minimum for a selected message (0 = no cutoff)',
-    step: 0.01,
-  },
-  {
-    key: 'weight_ce',
-    label: 'weight · reranker',
-    hint: 'semantic axis weight. 0 = pure-temporal scoring',
+    key: 'loss_ratio',
+    label: 'precision stance',
+    hint: 'calibrated P(prerequisite) a candidate must clear. higher = stricter, more abstention; lower = more recall, more junk risk',
     step: 0.05,
   },
   {
-    key: 'weight_temp',
-    label: 'weight · temporal',
-    hint: 'structural axis weight. 0 = pure-semantic scoring',
+    key: 'min_batch_stddev',
+    label: 'minimum batch spread',
+    hint: 'return no edges when scorer outputs are too flat',
     step: 0.05,
   },
   {
-    key: 'radius_size',
-    label: 'radius size',
-    hint: 'neighbors included around each selected message',
+    key: 'local_context_size',
+    label: 'local context size',
+    hint: 'recent same-thread messages used for prerequisite scoring and the model payload',
     step: 1,
     integer: true,
   },
@@ -45,6 +37,32 @@ const ENGINE_FIELDS: Array<{
     step: 1,
     integer: true,
   },
+  {
+    key: 'context_budget_tokens',
+    label: 'context budget',
+    hint: 'estimated input-token ceiling before provider headroom',
+    step: 1000,
+    integer: true,
+  },
+  {
+    key: 'diversity_lambda',
+    label: 'diversity lambda',
+    hint: 'MMR relevance weight in the range 0 to 1',
+    step: 0.05,
+  },
+  {
+    key: 'budget_headroom_pct',
+    label: 'budget headroom',
+    hint: 'fraction of the context budget available to assembly',
+    step: 0.05,
+  },
+  {
+    key: 'per_msg_delimiter_tokens',
+    label: 'message overhead',
+    hint: 'estimated provider delimiter tokens per message',
+    step: 1,
+    integer: true,
+  },
 ]
 
 interface AdvancedProps {
@@ -52,19 +70,13 @@ interface AdvancedProps {
   setEngine: (next: EngineConfig) => void
 }
 
-/** RRC engine knobs — live-tunable. Backend recomputes edge
- *  scores under the new config at walk time, so saves apply
- *  retroactively. */
+/** Live RRC engine controls. */
 export function Advanced({ engine, setEngine }: AdvancedProps) {
   return (
     <div className="role-card">
       <h3>RRC engine</h3>
       <div className="role-name">
-        Live-tunable retrieval parameters. Stored edges keep their raw reranker
-        and temporal scores; the fused score and threshold are reprojected under
-        the current config at walk time. Saves apply retroactively — the next
-        walk sees the full edge history under the new weights, not just edges
-        created afterward.
+        Retrieval, Local Context, and payload-budget parameters.
       </div>
       <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
         {ENGINE_FIELDS.map((f) => (

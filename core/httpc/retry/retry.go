@@ -17,6 +17,7 @@ package retry
 import (
 	"context"
 	"errors"
+	"log"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -61,6 +62,46 @@ func DefaultPolicy() Policy {
 		MaxDelay:    5 * time.Minute,
 		Multiplier:  2.0,
 		Jitter:      0.2,
+	}
+}
+
+// LocalServicePolicy is the retry shape for a single call to a local
+// inference service (TEI, vLLM-served rerankers). Tighter than
+// DefaultPolicy because a local service either recovers fast (transient
+// slow batch, a just-restarted container the healthcheck brought back) or
+// is genuinely wedged (which a few seconds of retry won't fix). 3 attempts
+// at a 120s per-attempt ceiling gives a ~6-minute window — one full
+// restart-and-warmup cycle — before the error propagates and RRC pauses the
+// round per spec. Shared by every local-service adapter so the policy is
+// defined once, not copy-pasted per adapter.
+func LocalServicePolicy() Policy {
+	return Policy{
+		MaxAttempts: 3,
+		BaseDelay:   1 * time.Second,
+		MaxDelay:    10 * time.Second,
+		Multiplier:  3.0,
+		Jitter:      0.25,
+	}
+}
+
+// LogRetryEvent returns a retry.Do event handler that surfaces retries into
+// the server log under a standard "[Retry]" prefix, so operators can grep a
+// single stream for transient-infrastructure events across all adapters.
+// Only failure events (Err != nil) are logged — successes are silent to keep
+// log volume sane under healthy load. `op` labels the operation (e.g.
+// "tei embed", "zerank rerank").
+func LogRetryEvent(op string) func(Event) {
+	return func(e Event) {
+		if e.Err == nil {
+			return
+		}
+		if e.Final {
+			log.Printf("[Retry] %s exhausted after attempt %d/%d: %v",
+				op, e.Attempt, e.MaxAttempts, e.Err)
+			return
+		}
+		log.Printf("[Retry] %s attempt %d/%d failed: %v — next attempt in %s",
+			op, e.Attempt, e.MaxAttempts, e.Err, e.NextDelay.Round(100*time.Millisecond))
 	}
 }
 

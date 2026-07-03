@@ -49,11 +49,11 @@ type ollamaToolCall struct {
 }
 
 type chatResponse struct {
-	Message      chatMessage `json:"message"`
-	Model        string      `json:"model"`
-	Done         bool        `json:"done"`
-	PromptEval   int         `json:"prompt_eval_count"`
-	EvalCount    int         `json:"eval_count"`
+	Message    chatMessage `json:"message"`
+	Model      string      `json:"model"`
+	Done       bool        `json:"done"`
+	PromptEval int         `json:"prompt_eval_count"`
+	EvalCount  int         `json:"eval_count"`
 }
 
 type embedRequest struct {
@@ -328,5 +328,3 @@ func toOllamaTools(tools []*pb.ToolDeclaration) []ollamaTool {
 	}
 	return out
 }
-
-func ptr(s string) *string { return &s }

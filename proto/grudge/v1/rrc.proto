@@ -14,6 +14,14 @@ enum EdgeSource {
   EDGE_SOURCE_CROSS_ENCODER = 1;
   EDGE_SOURCE_QUD = 2;
   EDGE_SOURCE_BOTH = 3;
+  // Recorded at generation time: "the turn at to_message_id was generated
+  // from from_message_id." Not similarity-scored — it is a fact about what
+  // fed the turn, legible even where semantic similarity is near zero. Its
+  // `score` field carries the contribution weight (was the source
+  // load-bearing for the turn, not merely present). Provenance edges bypass
+  // EdgeThreshold; they are the structural signal that lifts required-but-
+  // weakly-connected prerequisites — roots above all — over acceptance.
+  EDGE_SOURCE_PROVENANCE = 4;
 }
 
 message Edge {
@@ -82,6 +90,9 @@ message SelectionResult {
   string thread_id = 3;               // Thread where the prompt originated
   repeated SelectedMessage selected = 4;
   repeated ExcludedMessage excluded = 5;
+  string local_context_fingerprint = 6;       // Exact bounded Local Context serialization
+  repeated string local_context_message_ids = 7;
+  string anchor_message_id = 8;       // Latest stored event receiving DAG edges
 }
 
 // Carry-forward input. The service extracts thinking blocks from LLM responses

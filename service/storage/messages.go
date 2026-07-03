@@ -39,8 +39,8 @@ func (d *DB) InsertMessage(msg *pb.Message, chunks []Chunk) error {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(
-		`INSERT INTO messages (id, thread_id, role, content, position, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		msg.Id, msg.ThreadId, int(msg.Role), content, msg.Position, msg.CreatedAt.AsTime(),
+		`INSERT INTO messages (id, thread_id, role, content, position, created_at, turn_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		msg.Id, msg.ThreadId, int(msg.Role), content, msg.Position, msg.CreatedAt.AsTime(), msg.TurnId,
 	); err != nil {
 		return err
 	}
@@ -70,8 +70,8 @@ func (d *DB) GetMessage(id string) (*pb.Message, error) {
 	var createdAt time.Time
 
 	err := d.QueryRow(
-		`SELECT id, thread_id, role, content, position, created_at FROM messages WHERE id = ?`, id,
-	).Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt)
+		`SELECT id, thread_id, role, content, position, created_at, turn_id FROM messages WHERE id = ?`, id,
+	).Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt, &msg.TurnId)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (d *DB) GetMessage(id string) (*pb.Message, error) {
 
 // ListMessages returns messages for a thread, ordered by position.
 func (d *DB) ListMessages(threadID string, limit, offset int) ([]*pb.Message, error) {
-	query := `SELECT id, thread_id, role, content, position, created_at
+	query := `SELECT id, thread_id, role, content, position, created_at, turn_id
 	          FROM messages WHERE thread_id = ? ORDER BY position ASC`
 	args := []any{threadID}
 	if limit > 0 {
@@ -105,7 +105,7 @@ func (d *DB) ListMessages(threadID string, limit, offset int) ([]*pb.Message, er
 		var content []byte
 		var createdAt time.Time
 
-		if err := rows.Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt); err != nil {
+		if err := rows.Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt, &msg.TurnId); err != nil {
 			return nil, err
 		}
 		msg.Role = pb.Role(roleInt)
@@ -162,7 +162,7 @@ func (d *DB) ThreadCorpus(threadID string) ([]*pb.Message, error) {
 // never form.
 func (d *DB) AllCorpus() ([]*pb.Message, error) {
 	rows, err := d.Query(
-		`SELECT id, thread_id, role, content, position, created_at
+		`SELECT id, thread_id, role, content, position, created_at, turn_id
 		 FROM messages ORDER BY thread_id, position`,
 	)
 	if err != nil {
@@ -175,7 +175,7 @@ func (d *DB) AllCorpus() ([]*pb.Message, error) {
 		var roleInt int
 		var content []byte
 		var createdAt time.Time
-		if err := rows.Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt); err != nil {
+		if err := rows.Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt, &msg.TurnId); err != nil {
 			return nil, err
 		}
 		msg.Role = pb.Role(roleInt)
@@ -193,9 +193,9 @@ func (d *DB) LatestMessage(threadID string) *pb.Message {
 	var content []byte
 	var createdAt time.Time
 	err := d.QueryRow(
-		`SELECT id, thread_id, role, content, position, created_at
+		`SELECT id, thread_id, role, content, position, created_at, turn_id
 		 FROM messages WHERE thread_id = ? ORDER BY position DESC LIMIT 1`, threadID,
-	).Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt)
+	).Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt, &msg.TurnId)
 	if err != nil {
 		return nil
 	}
@@ -226,4 +226,3 @@ func unmarshalContentBlocks(data []byte) ([]*pb.ContentBlock, error) {
 	}
 	return wrapper.Content, nil
 }
-

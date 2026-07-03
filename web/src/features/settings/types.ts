@@ -34,25 +34,44 @@ export interface HookConfig {
 }
 
 // Matches service/config/settings.go:EngineConfig. Tunable at
-// runtime; backend recomputes edge scores under the new config at
-// walk time, so edits take effect on the very next turn with no
-// rebuild.
+// runtime; saves apply to the live engine with no rebuild.
+//
+// loss_ratio is the acceptance operating point — the precision stance
+// (a candidate is accepted when its calibrated P(prerequisite) clears
+// it). It is the one hand-set knob; the calibrator coefficients behind
+// it are learned automatically per scorer.
+//
+// edge_threshold / score_floor / z_score_threshold are DEPRECATED
+// no-ops: the calibrated acceptance model replaced the flat cutoffs.
+// They remain in this type because the backend decoder requires the
+// keys on save (settings-file back-compat), but they are hidden from
+// the UI — tuning them has no effect.
 export interface EngineConfig {
+  loss_ratio: number
   edge_threshold: number
   score_floor: number
-  weight_ce: number
-  weight_temp: number
-  radius_size: number
+  z_score_threshold: number
+  min_batch_stddev: number
+  local_context_size: number
   rerank_top_k: number
+  context_budget_tokens: number
+  diversity_lambda: number
+  budget_headroom_pct: number
+  per_msg_delimiter_tokens: number
 }
 
 export const ENGINE_DEFAULT: EngineConfig = {
-  edge_threshold: 0.35,
-  score_floor: 0.01,
-  weight_ce: 0.6,
-  weight_temp: 0.4,
-  radius_size: 10,
+  loss_ratio: 0.5,
+  edge_threshold: 0.6,
+  score_floor: 0.3,
+  z_score_threshold: 0,
+  min_batch_stddev: 0.05,
+  local_context_size: 10,
   rerank_top_k: 64,
+  context_budget_tokens: 150000,
+  diversity_lambda: 0.7,
+  budget_headroom_pct: 0.9,
+  per_msg_delimiter_tokens: 5,
 }
 
 export const EMPTY_PROVIDER: ProviderConfig = { adapter: '', model: '', base_url: '' }

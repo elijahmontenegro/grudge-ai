@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"encoding/json"
+
 	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -17,7 +19,7 @@ import (
 // panel wants and it's small.
 
 // SaveSelection persists a SelectionResult. Idempotent by event_id.
-func (d *DB) SaveSelection(result *pb.SelectionResult, targetMessageID, threadID string) error {
+func (d *DB) SaveSelection(result *pb.SelectionResult, anchorMessageID, threadID string) error {
 	if result == nil {
 		return nil
 	}
@@ -25,16 +27,23 @@ func (d *DB) SaveSelection(result *pb.SelectionResult, targetMessageID, threadID
 	if err != nil {
 		return err
 	}
+	localContextIDs, err := json.Marshal(result.LocalContextMessageIds)
+	if err != nil {
+		return err
+	}
 	_, err = d.Exec(
-		`INSERT OR REPLACE INTO selections (event_id, target_message_id, thread_id, scope, result) VALUES (?, ?, ?, ?, ?)`,
-		result.EventId, targetMessageID, threadID, int(result.Scope), blob,
+		`INSERT OR REPLACE INTO selections
+		 (event_id, anchor_message_id, thread_id, scope, local_context_fingerprint, local_context_message_ids, result)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		result.EventId, anchorMessageID, threadID, int(result.Scope),
+		result.LocalContextFingerprint, localContextIDs, blob,
 	)
 	return err
 }
 
 // GetSelection fetches a persisted SelectionResult by event_id.
 // Returns (nil, nil) if not found — selections are optional; Retrieval
-// Events without a Query (autonomous continuation) skip Selection
+// Autonomous continuations without a new event skip Selection
 // entirely and have no row.
 func (d *DB) GetSelection(eventID string) (*pb.SelectionResult, error) {
 	var blob []byte
@@ -52,15 +61,12 @@ func (d *DB) GetSelection(eventID string) (*pb.SelectionResult, error) {
 	return result, nil
 }
 
-// GetSelectionForMessage returns the SelectionResult that drove the
-// turn which produced the given target message. The engine's event_id
-// format is sel-<target_message_id>, so we can derive the lookup key
-// without an extra column scan, but the target_message_id column is
-// still the supported query path for when the format changes.
+// GetSelectionForMessage returns the SelectionResult anchored to the
+// given stored event.
 func (d *DB) GetSelectionForMessage(messageID string) (*pb.SelectionResult, error) {
 	var blob []byte
 	err := d.QueryRow(
-		`SELECT result FROM selections WHERE target_message_id = ? ORDER BY created_at DESC LIMIT 1`,
+		`SELECT result FROM selections WHERE anchor_message_id = ? ORDER BY created_at DESC LIMIT 1`,
 		messageID,
 	).Scan(&blob)
 	if err != nil {
@@ -72,4 +78,3 @@ func (d *DB) GetSelectionForMessage(messageID string) (*pb.SelectionResult, erro
 	}
 	return result, nil
 }
-

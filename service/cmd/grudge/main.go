@@ -23,10 +23,12 @@ import (
 	// Importing core alone gives an empty registry; each adapter
 	// package wires itself in init() in core/adapter/X/register.go.
 	_ "github.com/elijahmontenegro/grudge/core/adapter/anthropic"
+	_ "github.com/elijahmontenegro/grudge/core/adapter/gcpranking"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/googleai"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/ollama"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/openai"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/tei"
+	_ "github.com/elijahmontenegro/grudge/core/adapter/vertex"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/vllm"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/zerank"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
@@ -90,9 +92,6 @@ func main() {
 		log.Fatalf("storage: %v", err)
 	}
 	defer db.Close()
-	if n := db.BackfillThreadNames(); n > 0 {
-		log.Printf("Named %d unnamed threads from first message", n)
-	}
 
 	// Sandbox preflight — non-fatal. Threads with sandboxed=true will
 	// fail at Bash-call time with the same error if the image is not

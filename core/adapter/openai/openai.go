@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/core/adapter/internal/util"
 	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
@@ -24,6 +25,7 @@ type Config struct {
 
 type provider struct {
 	cfg    Config
+	authFn func(*http.Request)
 	client *httpc.Client
 }
 
@@ -32,25 +34,25 @@ func New(cfg Config) any {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = "https://api.openai.com"
 	}
-	authFn := func(req *http.Request) {
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	p := &provider{cfg: cfg}
+	// Skip the Authorization header entirely when no key is set. An empty
+	// key means "no auth" (local vLLM / Ollama-compatible servers, which
+	// reject a literal `Bearer ` with an empty token) — not `Bearer `.
+	p.authFn = func(req *http.Request) {
+		if cfg.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+		}
 	}
-	return &provider{
-		cfg:    cfg,
-		client: httpc.New(httpc.TimeoutDefault, authFn),
-	}
+	p.client = httpc.New(httpc.TimeoutDefault, p.authFn)
+	return p
 }
 
-
 func (p *provider) Completer(model string) (core.Completer, error) {
-	authFn := func(req *http.Request) {
-		req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
-	}
 	return &completer{
 		model:        model,
 		baseURL:      p.cfg.BaseURL,
 		client:       p.client,
-		streamClient: httpc.NewStreaming(authFn),
+		streamClient: httpc.NewStreaming(p.authFn),
 	}, nil
 }
 
@@ -82,10 +84,10 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role       string        `json:"role"`
-	Content    any           `json:"content"`
-	ToolCalls  []toolCall    `json:"tool_calls,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
+	Role       string     `json:"role"`
+	Content    any        `json:"content"`
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type toolCall struct {
@@ -178,8 +180,9 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			return
 		}
 		if resp.StatusCode != http.StatusOK {
+			err := httpc.NewStatusError("openai", resp)
 			resp.Body.Close()
-			yield(nil, &httpc.StatusError{Provider: "openai", StatusCode: resp.StatusCode})
+			yield(nil, err)
 			return
 		}
 		defer resp.Body.Close()
@@ -199,7 +202,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 
 			var chunk chatResponse
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
+				yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 				return
 			}
 
@@ -236,7 +239,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
+			yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 		}
 	}
 }
@@ -379,5 +382,3 @@ func fromChatMessage(m chatMessage) []*pb.ContentBlock {
 	}
 	return blocks
 }
-
-func ptr(s string) *string { return &s }

@@ -73,8 +73,7 @@ func (d *DB) GetChunks(messageID string) ([]Chunk, error) {
 
 // GetChunksForMessages fetches all chunks for a list of messages in
 // one query. Returns a map keyed by message_id, each value ordered
-// by chunk_index. Used in hot paths (OnMessage scoring) where we
-// want chunks for many priors in bulk.
+// by chunk_index. Used when scoring many candidates for one query.
 func (d *DB) GetChunksForMessages(messageIDs []string) (map[string][]Chunk, error) {
 	if len(messageIDs) == 0 {
 		return map[string][]Chunk{}, nil
@@ -105,32 +104,6 @@ func (d *DB) GetChunksForMessages(messageIDs []string) (map[string][]Chunk, erro
 			return nil, err
 		}
 		out[c.MessageID] = append(out[c.MessageID], c)
-	}
-	return out, rows.Err()
-}
-
-// MessagesWithoutChunks returns message IDs that have text content but
-// no chunks persisted. Used by the startup backfill to populate
-// chunks for messages that existed before the chunk table was added
-// (post-v2 migration) or for messages where chunking failed mid-transaction.
-func (d *DB) MessagesWithoutChunks() ([]string, error) {
-	rows, err := d.Query(`
-		SELECT m.id FROM messages m
-		LEFT JOIN chunks c ON c.message_id = m.id
-		WHERE c.message_id IS NULL
-		ORDER BY m.created_at
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
 	}
 	return out, rows.Err()
 }

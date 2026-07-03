@@ -7,8 +7,8 @@ import (
 )
 
 type generateRequest struct {
-	Contents         []content        `json:"contents"`
-	SystemInstruct   *content         `json:"systemInstruction,omitempty"`
+	Contents         []content         `json:"contents"`
+	SystemInstruct   *content          `json:"systemInstruction,omitempty"`
 	GenerationConfig *generationConfig `json:"generationConfig,omitempty"`
 }
 
@@ -29,7 +29,7 @@ type generationConfig struct {
 }
 
 type generateResponse struct {
-	Candidates []candidate  `json:"candidates"`
+	Candidates []candidate   `json:"candidates"`
 	UsageMeta  usageMetadata `json:"usageMetadata"`
 }
 
@@ -123,5 +123,3 @@ func textFromBlocks(blocks []*pb.ContentBlock) string {
 	}
 	return sb.String()
 }
-
-func ptr(s string) *string { return &s }

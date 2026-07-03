@@ -27,26 +27,26 @@ func init() { chunk.SetDefaultEstimator(charEstimator{}) }
 // ordering, map iteration leak) trips here.
 func TestAssemble_Deterministic(t *testing.T) {
 	mc := newMockScorer()
-	mc.SetScore("alpha", "query content", 0.8)
-	mc.SetScore("beta", "query content", 0.7)
-	mc.SetScore("gamma", "query content", 0.6)
+	mc.SetScore("alpha", "current context", 0.8)
+	mc.SetScore("beta", "current context", 0.7)
+	mc.SetScore("gamma", "current context", 0.6)
 
 	o := newMockChunkOracle()
 
 	cfg := DefaultConfig()
 	cfg.ZScoreThreshold = 0
 	cfg.MinBatchStdDev = 0
-	cfg.RadiusSize = 0
+	cfg.LocalContextSize = 1
 	cfg.DiversityLambda = 0 // disable MMR — focus the test on Selection
 
 	prior1 := addMsg(o, "m1", 0, "t1", "alpha")
 	prior2 := addMsg(o, "m2", 1, "t1", "beta")
 	prior3 := addMsg(o, "m3", 2, "t1", "gamma")
-	query := addMsg(o, "q", 3, "t1", "query content")
-	corpus := []*pb.Message{prior1, prior2, prior3, query}
+	anchor := addMsg(o, "q", 3, "t1", "current context")
+	corpus := []*pb.Message{prior1, prior2, prior3, anchor}
 
-	first := runAssemble(t, cfg, mc, o, corpus, query)
-	second := runAssemble(t, cfg, mc, o, corpus, query)
+	first := runAssemble(t, cfg, mc, o, corpus, anchor)
+	second := runAssemble(t, cfg, mc, o, corpus, anchor)
 
 	if len(first.Wire) != len(second.Wire) {
 		t.Fatalf("wire length differs: first=%d second=%d", len(first.Wire), len(second.Wire))
@@ -77,15 +77,16 @@ func TestAssemble_Deterministic(t *testing.T) {
 // the assemble output. Each call constructs a new engine — the
 // determinism test compares cross-engine outputs, which is the
 // stricter contract (state from one call mustn't leak into another).
-func runAssemble(t *testing.T, cfg EngineConfig, mc *mockScorer, o *mockChunkOracle, corpus []*pb.Message, query *pb.Message) AssembleResult {
+func runAssemble(t *testing.T, cfg EngineConfig, mc *mockScorer, o *mockChunkOracle, corpus []*pb.Message, anchor *pb.Message) AssembleResult {
 	t.Helper()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	res, err := e.Assemble(context.Background(), AssembleRequest{
-		Query:        query,
-		Corpus:       corpus,
-		ThreadCorpus: corpus,
-		Scope:        pb.SelectionScope_SELECTION_SCOPE_THREAD,
-		ThreadID:     "t1",
+		SerializedLocalContext: testSerializedLocalContext(anchor),
+		Anchor:                 anchor,
+		Corpus:                 corpus,
+		LocalContext:           []*pb.Message{anchor},
+		Scope:                  pb.SelectionScope_SELECTION_SCOPE_THREAD,
+		ThreadID:               "t1",
 	})
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)

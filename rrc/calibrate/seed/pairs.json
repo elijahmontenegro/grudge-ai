@@ -1,0 +1,357 @@
+{
+  "categories": {
+    "A_technical_vocab": [
+      {
+        "id": "A1_overflow",
+        "query": "remind me of that overflow case",
+        "correct": "The wraparound bug only triggers when count exceeds INT_MAX",
+        "distractors": [
+          "I had pancakes for breakfast",
+          "The garden needs watering",
+          "Cats are mammals",
+          "let me check the bug tracker"
+        ]
+      },
+      {
+        "id": "A2_race",
+        "query": "the race condition again",
+        "correct": "Two threads were writing to the same variable without a mutex",
+        "distractors": [
+          "The dog needs a walk",
+          "Pluto is no longer a planet",
+          "She bought new shoes",
+          "let me re-read the concurrency docs"
+        ]
+      },
+      {
+        "id": "A3_memleak",
+        "query": "remind me of the memory leak",
+        "correct": "We forgot to free the malloc'd buffer in the cleanup path",
+        "distractors": [
+          "Pizza is round",
+          "The river flows north",
+          "He likes jazz",
+          "let me run valgrind"
+        ]
+      },
+      {
+        "id": "A4_segfault",
+        "query": "what caused the segfault",
+        "correct": "A null pointer dereference in the parser when input was empty",
+        "distractors": [
+          "The kettle is boiling",
+          "Bees pollinate flowers",
+          "Friday is payday",
+          "let me check the stack trace"
+        ]
+      },
+      {
+        "id": "A5_deadlock",
+        "query": "the deadlock again",
+        "correct": "Thread A held lock X waiting for Y, thread B held Y waiting for X",
+        "distractors": [
+          "The shop closes at 6",
+          "Birds migrate south",
+          "I prefer green tea",
+          "let me re-check the locking order"
+        ]
+      },
+      {
+        "id": "A6_thrashing",
+        "query": "what was the CPU spike",
+        "correct": "The kernel started thrashing the page cache under memory pressure",
+        "distractors": [
+          "My phone needs charging",
+          "Lions live in prides",
+          "Saturday is windy",
+          "let me look at top output"
+        ]
+      }
+    ],
+    "B_prose_dependency": [
+      {
+        "id": "B1_variance",
+        "query": "where am I in the variance novel",
+        "correct": "I am working on a novel called Variance about Lena and Mira",
+        "distractors": [
+          "The weather is nice today",
+          "Grocery list: milk, eggs, bread",
+          "Jupiter has 95 moons",
+          "let me check what chapter we are on"
+        ]
+      },
+      {
+        "id": "B2_antagonist",
+        "query": "who is the antagonist again",
+        "correct": "Marcus Webb is the antagonist in chapter 7 of the bible",
+        "distractors": [
+          "Stars are made of plasma",
+          "I want sushi for dinner",
+          "The car needs an oil change",
+          "let me check the character list"
+        ]
+      },
+      {
+        "id": "B3_june",
+        "query": "what was June's role",
+        "correct": "June is the third co-author on the variance paper",
+        "distractors": [
+          "Apples are red",
+          "I like jazz",
+          "The library closes early",
+          "let me look at the author notes"
+        ]
+      },
+      {
+        "id": "B4_hubris",
+        "query": "what is the protagonist's flaw",
+        "correct": "Sarah's hubris drives the plot collapse in Act 2",
+        "distractors": [
+          "Pasta needs salt",
+          "Dogs are loyal",
+          "The bus is late",
+          "let me re-read the outline"
+        ]
+      },
+      {
+        "id": "B5_nekomimi",
+        "query": "the cat character's name",
+        "correct": "We named the nekomimi protagonist Whiskers",
+        "distractors": [
+          "Vanilla ice cream is the best",
+          "I like blue",
+          "The pen is mightier",
+          "let me check the character sheet"
+        ]
+      }
+    ],
+    "C_factual_recall": [
+      {
+        "id": "C1_password",
+        "query": "what was the password",
+        "correct": "Yesterday I told you the password is hunter2",
+        "distractors": [
+          "Trees produce oxygen",
+          "She speaks three languages",
+          "The exam is next week",
+          "let me check the credentials file"
+        ]
+      },
+      {
+        "id": "C2_ratelimit",
+        "query": "what was the rate limit again",
+        "correct": "We decided to rate-limit the API at 100 req/min",
+        "distractors": [
+          "The team is meeting Thursday",
+          "Bagels are on sale this week",
+          "I read a book about birds",
+          "let me check the latest config"
+        ]
+      },
+      {
+        "id": "C3_port",
+        "query": "what port was it",
+        "correct": "The database listens on port 5432",
+        "distractors": [
+          "Birds chirp at dawn",
+          "Salt makes it tasty",
+          "I drove to work today",
+          "let me grep the config"
+        ]
+      },
+      {
+        "id": "C4_deadline",
+        "query": "when is the deadline",
+        "correct": "The contractor needs everything delivered by Friday",
+        "distractors": [
+          "The flowers are blooming",
+          "I forgot my umbrella",
+          "The cake was delicious",
+          "let me check the timeline"
+        ]
+      },
+      {
+        "id": "C5_bugid",
+        "query": "what was the bug ID",
+        "correct": "I filed it as JIRA-4521 last Tuesday",
+        "distractors": [
+          "The lawn was mowed",
+          "Coffee is bitter",
+          "She wore a red dress",
+          "let me search the tracker"
+        ]
+      }
+    ],
+    "D_coreference": [
+      {
+        "id": "D1_he_decide",
+        "query": "what did he decide",
+        "correct": "Marcus chose to ship without the rate limiter",
+        "distractors": [
+          "The grass is green",
+          "Tea has caffeine",
+          "I jogged this morning",
+          "let me check what was decided"
+        ]
+      },
+      {
+        "id": "D2_it_stored",
+        "query": "where is it stored",
+        "correct": "Configuration lives in XDG_CONFIG_HOME slash grudge",
+        "distractors": [
+          "Books make great gifts",
+          "He plays guitar",
+          "The pool is closed",
+          "let me find the storage path"
+        ]
+      },
+      {
+        "id": "D3_she_onboard",
+        "query": "is she on board",
+        "correct": "Lena agreed to the variance pivot last night",
+        "distractors": [
+          "Sandwiches are quick",
+          "The dog barked",
+          "Math is hard",
+          "let me ask her again"
+        ]
+      },
+      {
+        "id": "D4_color",
+        "query": "what color is it",
+        "correct": "The car we test-drove yesterday was electric blue",
+        "distractors": [
+          "Birds fly south",
+          "He bakes bread",
+          "Coffee is hot",
+          "let me look at the photo"
+        ]
+      },
+      {
+        "id": "D5_expires",
+        "query": "when does it expire",
+        "correct": "The certificate is valid through 2026-12-31",
+        "distractors": [
+          "The cake is on the counter",
+          "She finished her novel",
+          "Soccer is fun",
+          "let me check the cert details"
+        ]
+      }
+    ],
+    "E_conflation_traps": [
+      {
+        "id": "E1_bible",
+        "query": "what is in the character bible",
+        "correct": "Marcus Webb is the antagonist in chapter 7 of the bible",
+        "distractors": [
+          "The garden needs water",
+          "Tea is hot",
+          "Boxing is tough",
+          "let me check the character bible"
+        ]
+      },
+      {
+        "id": "E2_query_result",
+        "query": "what was the query result",
+        "correct": "The query returned 1247 rows from the orders table",
+        "distractors": [
+          "Apples grow on trees",
+          "He likes math",
+          "The store closes early",
+          "let me run the query again"
+        ]
+      },
+      {
+        "id": "E3_tests_pass",
+        "query": "did the tests pass",
+        "correct": "Yes, all 47 tests passed clean on the CI run",
+        "distractors": [
+          "The kettle whistled",
+          "Birds chirp",
+          "She wrote a poem",
+          "let me run the tests again"
+        ]
+      },
+      {
+        "id": "E4_log_says",
+        "query": "what does the log say",
+        "correct": "Connection refused: server returned 502 at 03:14:22",
+        "distractors": [
+          "I baked cookies",
+          "The book is long",
+          "Geometry is fun",
+          "let me tail the log"
+        ]
+      }
+    ],
+    "F_long_document": [
+      {
+        "id": "F1_predicate_design",
+        "query": "where in the substrate plan does it describe the Predicate AST and how backends compile it to native filter representations",
+        "correct": "rrc.Predicate is a typed AST for filtering chunk retrieval. Backends implement a Compile method that lowers Predicate to their native filter form. The interface is sealed via the unexported predicateMarker method, so backend type-switches can be exhaustive. New predicate types are added without touching the engine. Each backend adds a case to its compile function; backends that don't support a type return an error or fall through to a safe default. Concrete predicates: PredAll matches every chunk. PredThread matches chunks whose owning thread equals ThreadID. PredScope encodes the user-visible retrieval scope: with Scope = ScopeThread, matches chunks from CurrentThread; with Scope = ScopeAll, matches chunks from any thread. PredAnd matches chunks satisfying every child predicate. PredOr matches chunks satisfying at least one child predicate. PredNot matches chunks that do not satisfy Inner. PredHasMetadata matches chunks whose metadata Key equals Value. The metadata key/value space is open — backends decide which keys they index. Future filters such as attached-file presence, role, or time-window add new Pred types without touching the engine or the interface. The retrieval substrate gets a clean abstraction: the engine stops doing cosine math; it asks the oracle for nearest chunks under a filter, with sub-linear cost.",
+        "distractors": [
+          "The vector index becomes a first-class storage primitive in the SQLite file alongside messages, chunks, scores, edges. Implementation via the sqlite-vec extension. New schema managed by service/storage/migrations: chunk_vectors is a vec0 virtual table keyed by chunk_rowid INTEGER PRIMARY KEY with payload embedding FLOAT[D] where D is the embedder's output dimension. chunk_vector_metadata is a companion regular table indexed alongside chunk_vectors with columns chunk_rowid INTEGER PK, message_id TEXT, chunk_index INTEGER, thread_id TEXT, model_id TEXT, role TEXT, has_attachments BOOL — start with the filters needed today, extend as predicates demand. The embeddings table is removed in favor of chunk_vectors as the source of truth for vector data. HNSW parameters: vec0 defaults are sane for our scale; tune M=16, ef_construction=200, ef_search=64 initially, leave knobs accessible via config for later. Filter integration: NearestChunks lowers the predicate to a SQL WHERE clause that joins chunk_vectors against chunk_vector_metadata and pushes the predicate into the vec0 KNN search. Pre-traversal filtering for high recall rather than post-filter. Concurrency: SQLite WAL handles single-writer/multi-reader. The existing engine mutex pattern continues; vector writes happen in the same transaction as the embedding insert.",
+          "zembed-1 is asymmetric — distinct prompts for queries vs documents, applied automatically by sentence-transformers via model.encode_query and model.encode_document. The current core.Embedder interface is symmetric. Interface change: replace symmetric Embed and EmbedBatch with asymmetric EmbedQuery and EmbedDocument, both signatures taking a slice of strings and returning a slice of float32 slices. All adapters implementing the interface update accordingly. Engine call sites: the new message being processed embeds via EmbedQuery; chunks being indexed into the corpus embed via EmbedDocument. For symmetric models like bge-m3, the implementation routes both methods to the same code path. Asymmetric is the principled default; symmetric is a degenerate case. Serving stack: custom Python service. TEI's default-prompt-name is server-wide, set at boot, not per-request — running asymmetric models would require two TEI containers per embedder. zembed-1's trust_remote_code modeling defines the encode_query and encode_document semantics; vLLM ingests weights and applies its own inference, so it can't faithfully reproduce them. A custom Python service of about 50 LOC plus Dockerfile loads zembed-1 via sentence-transformers, exposes two endpoints /embed/query and /embed/document, routes to model.encode_query and model.encode_document respectively. Single service, single GPU instance, correct semantics by construction.",
+          "zerank-2 served via vLLM, which provides causal LM serving with an OpenAI-compatible API. vLLM exposes per-token logprobs; the Go adapter extracts the Yes token logprob from the completion response and applies sigmoid of logit divided by 5.0. Prefix KV caching in vLLM is free: scoring N candidates against 1 query reuses the query-prefix's KV state across the N forward passes since the chat-template prefix through user content start is identical across them. vLLM is the principled fit because zerank-2 is a causal LM; vLLM is what causal LMs are served by; Grudge's core/adapter/openai already speaks the wire protocol; the new adapter is small with about 30-50 LOC of yes-logit extraction plus sigmoid. Production-grade serving with prefix caching, dynamic batching, paged attention — all properties zerank-2's per-call cost benefits from. Single inference stack pattern across LM-served work: future LM-as-judge, LM-as-rerank, and main completer all run via vLLM. The reranker swap drops BAAI bge-reranker-v2-m3 and the grudge-tei-rerank-1 Docker container from the production stack.",
+          "Engine.Fork shares the underlying ChunkOracle, so chunks and vector index are corpus-level, not per-fork. Forked engines diverge on the DAG which is the subagent's edge view, and on the score cache which is the subagent's scoring memory. Vector retrieval calls the same shared oracle. Confirmed: identity in fork lives in the reasoning thread; corpus is one. This is consistent with the directive that subagents share the corpus. Engine.Fork does not snapshot the chunk store or the vector index. Forks operate on the same chunks, same vectors, same index. Schema-level model identity records model_id per chunk vector, so embedder swap is index rebuild, not schema migration. zembed-1's native dim is 2560; vec0 schema is embedding FLOAT[2560]. Matryoshka truncation to 1280, 640 etc. is a future config knob if storage becomes load-bearing. The library exposes clean swap seams; library consumers can plug different models without forking. User direction grounding the scope: no backward compat, no migrations, SQLite stays, Go-idiomatic swappable defaults, filter extensibility is first-class."
+        ]
+      },
+      {
+        "id": "F2_storage_design",
+        "query": "where in the substrate plan does it describe how sqlite-vec is integrated, the HNSW tuning, and how predicate filters get pushed into the KNN search",
+        "correct": "The vector index becomes a first-class storage primitive in the SQLite file alongside messages, chunks, scores, edges. Implementation via the sqlite-vec extension. New schema managed by service/storage/migrations: chunk_vectors is a vec0 virtual table keyed by chunk_rowid INTEGER PRIMARY KEY with payload embedding FLOAT[D] where D is the embedder's output dimension. chunk_vector_metadata is a companion regular table indexed alongside chunk_vectors with columns chunk_rowid INTEGER PK, message_id TEXT, chunk_index INTEGER, thread_id TEXT, model_id TEXT, role TEXT, has_attachments BOOL — start with the filters needed today, extend as predicates demand. The embeddings table is removed in favor of chunk_vectors as the source of truth for vector data. HNSW parameters: vec0 defaults are sane for our scale; tune M=16, ef_construction=200, ef_search=64 initially, leave knobs accessible via config for later. Filter integration: NearestChunks lowers the predicate to a SQL WHERE clause that joins chunk_vectors against chunk_vector_metadata and pushes the predicate into the vec0 KNN search. Pre-traversal filtering for high recall rather than post-filter. Concurrency: SQLite WAL handles single-writer/multi-reader. The existing engine mutex pattern continues; vector writes happen in the same transaction as the embedding insert.",
+        "distractors": [
+          "rrc.Predicate is a typed AST for filtering chunk retrieval. Backends implement a Compile method that lowers Predicate to their native filter form. The interface is sealed via the unexported predicateMarker method, so backend type-switches can be exhaustive. New predicate types are added without touching the engine. Each backend adds a case to its compile function; backends that don't support a type return an error or fall through to a safe default. Concrete predicates: PredAll matches every chunk. PredThread matches chunks whose owning thread equals ThreadID. PredScope encodes the user-visible retrieval scope: with Scope = ScopeThread, matches chunks from CurrentThread; with Scope = ScopeAll, matches chunks from any thread. PredAnd matches chunks satisfying every child predicate. PredOr matches chunks satisfying at least one child predicate. PredNot matches chunks that do not satisfy Inner. PredHasMetadata matches chunks whose metadata Key equals Value. The metadata key/value space is open — backends decide which keys they index. Future filters such as attached-file presence, role, or time-window add new Pred types without touching the engine or the interface. The retrieval substrate gets a clean abstraction: the engine stops doing cosine math; it asks the oracle for nearest chunks under a filter, with sub-linear cost.",
+          "zembed-1 is asymmetric — distinct prompts for queries vs documents, applied automatically by sentence-transformers via model.encode_query and model.encode_document. The current core.Embedder interface is symmetric. Interface change: replace symmetric Embed and EmbedBatch with asymmetric EmbedQuery and EmbedDocument, both signatures taking a slice of strings and returning a slice of float32 slices. All adapters implementing the interface update accordingly. Engine call sites: the new message being processed embeds via EmbedQuery; chunks being indexed into the corpus embed via EmbedDocument. For symmetric models like bge-m3, the implementation routes both methods to the same code path. Asymmetric is the principled default; symmetric is a degenerate case. Serving stack: custom Python service. TEI's default-prompt-name is server-wide, set at boot, not per-request — running asymmetric models would require two TEI containers per embedder. zembed-1's trust_remote_code modeling defines the encode_query and encode_document semantics; vLLM ingests weights and applies its own inference, so it can't faithfully reproduce them. A custom Python service of about 50 LOC plus Dockerfile loads zembed-1 via sentence-transformers, exposes two endpoints /embed/query and /embed/document, routes to model.encode_query and model.encode_document respectively. Single service, single GPU instance, correct semantics by construction.",
+          "zerank-2 served via vLLM, which provides causal LM serving with an OpenAI-compatible API. vLLM exposes per-token logprobs; the Go adapter extracts the Yes token logprob from the completion response and applies sigmoid of logit divided by 5.0. Prefix KV caching in vLLM is free: scoring N candidates against 1 query reuses the query-prefix's KV state across the N forward passes since the chat-template prefix through user content start is identical across them. vLLM is the principled fit because zerank-2 is a causal LM; vLLM is what causal LMs are served by; Grudge's core/adapter/openai already speaks the wire protocol; the new adapter is small with about 30-50 LOC of yes-logit extraction plus sigmoid. Production-grade serving with prefix caching, dynamic batching, paged attention — all properties zerank-2's per-call cost benefits from. Single inference stack pattern across LM-served work: future LM-as-judge, LM-as-rerank, and main completer all run via vLLM. The reranker swap drops BAAI bge-reranker-v2-m3 and the grudge-tei-rerank-1 Docker container from the production stack.",
+          "Engine.Fork shares the underlying ChunkOracle, so chunks and vector index are corpus-level, not per-fork. Forked engines diverge on the DAG which is the subagent's edge view, and on the score cache which is the subagent's scoring memory. Vector retrieval calls the same shared oracle. Confirmed: identity in fork lives in the reasoning thread; corpus is one. This is consistent with the directive that subagents share the corpus. Engine.Fork does not snapshot the chunk store or the vector index. Forks operate on the same chunks, same vectors, same index. Schema-level model identity records model_id per chunk vector, so embedder swap is index rebuild, not schema migration. zembed-1's native dim is 2560; vec0 schema is embedding FLOAT[2560]. Matryoshka truncation to 1280, 640 etc. is a future config knob if storage becomes load-bearing. The library exposes clean swap seams; library consumers can plug different models without forking. User direction grounding the scope: no backward compat, no migrations, SQLite stays, Go-idiomatic swappable defaults, filter extensibility is first-class."
+        ]
+      },
+      {
+        "id": "F3_embedder_design",
+        "query": "where in the substrate plan does it describe the asymmetric query and document encoding and why a custom Python service is needed instead of TEI",
+        "correct": "zembed-1 is asymmetric — distinct prompts for queries vs documents, applied automatically by sentence-transformers via model.encode_query and model.encode_document. The current core.Embedder interface is symmetric. Interface change: replace symmetric Embed and EmbedBatch with asymmetric EmbedQuery and EmbedDocument, both signatures taking a slice of strings and returning a slice of float32 slices. All adapters implementing the interface update accordingly. Engine call sites: the new message being processed embeds via EmbedQuery; chunks being indexed into the corpus embed via EmbedDocument. For symmetric models like bge-m3, the implementation routes both methods to the same code path. Asymmetric is the principled default; symmetric is a degenerate case. Serving stack: custom Python service. TEI's default-prompt-name is server-wide, set at boot, not per-request — running asymmetric models would require two TEI containers per embedder. zembed-1's trust_remote_code modeling defines the encode_query and encode_document semantics; vLLM ingests weights and applies its own inference, so it can't faithfully reproduce them. A custom Python service of about 50 LOC plus Dockerfile loads zembed-1 via sentence-transformers, exposes two endpoints /embed/query and /embed/document, routes to model.encode_query and model.encode_document respectively. Single service, single GPU instance, correct semantics by construction.",
+        "distractors": [
+          "rrc.Predicate is a typed AST for filtering chunk retrieval. Backends implement a Compile method that lowers Predicate to their native filter form. The interface is sealed via the unexported predicateMarker method, so backend type-switches can be exhaustive. New predicate types are added without touching the engine. Each backend adds a case to its compile function; backends that don't support a type return an error or fall through to a safe default. Concrete predicates: PredAll matches every chunk. PredThread matches chunks whose owning thread equals ThreadID. PredScope encodes the user-visible retrieval scope: with Scope = ScopeThread, matches chunks from CurrentThread; with Scope = ScopeAll, matches chunks from any thread. PredAnd matches chunks satisfying every child predicate. PredOr matches chunks satisfying at least one child predicate. PredNot matches chunks that do not satisfy Inner. PredHasMetadata matches chunks whose metadata Key equals Value. The metadata key/value space is open — backends decide which keys they index. Future filters such as attached-file presence, role, or time-window add new Pred types without touching the engine or the interface. The retrieval substrate gets a clean abstraction: the engine stops doing cosine math; it asks the oracle for nearest chunks under a filter, with sub-linear cost.",
+          "The vector index becomes a first-class storage primitive in the SQLite file alongside messages, chunks, scores, edges. Implementation via the sqlite-vec extension. New schema managed by service/storage/migrations: chunk_vectors is a vec0 virtual table keyed by chunk_rowid INTEGER PRIMARY KEY with payload embedding FLOAT[D] where D is the embedder's output dimension. chunk_vector_metadata is a companion regular table indexed alongside chunk_vectors with columns chunk_rowid INTEGER PK, message_id TEXT, chunk_index INTEGER, thread_id TEXT, model_id TEXT, role TEXT, has_attachments BOOL — start with the filters needed today, extend as predicates demand. The embeddings table is removed in favor of chunk_vectors as the source of truth for vector data. HNSW parameters: vec0 defaults are sane for our scale; tune M=16, ef_construction=200, ef_search=64 initially, leave knobs accessible via config for later. Filter integration: NearestChunks lowers the predicate to a SQL WHERE clause that joins chunk_vectors against chunk_vector_metadata and pushes the predicate into the vec0 KNN search. Pre-traversal filtering for high recall rather than post-filter. Concurrency: SQLite WAL handles single-writer/multi-reader. The existing engine mutex pattern continues; vector writes happen in the same transaction as the embedding insert.",
+          "zerank-2 served via vLLM, which provides causal LM serving with an OpenAI-compatible API. vLLM exposes per-token logprobs; the Go adapter extracts the Yes token logprob from the completion response and applies sigmoid of logit divided by 5.0. Prefix KV caching in vLLM is free: scoring N candidates against 1 query reuses the query-prefix's KV state across the N forward passes since the chat-template prefix through user content start is identical across them. vLLM is the principled fit because zerank-2 is a causal LM; vLLM is what causal LMs are served by; Grudge's core/adapter/openai already speaks the wire protocol; the new adapter is small with about 30-50 LOC of yes-logit extraction plus sigmoid. Production-grade serving with prefix caching, dynamic batching, paged attention — all properties zerank-2's per-call cost benefits from. Single inference stack pattern across LM-served work: future LM-as-judge, LM-as-rerank, and main completer all run via vLLM. The reranker swap drops BAAI bge-reranker-v2-m3 and the grudge-tei-rerank-1 Docker container from the production stack.",
+          "Engine.Fork shares the underlying ChunkOracle, so chunks and vector index are corpus-level, not per-fork. Forked engines diverge on the DAG which is the subagent's edge view, and on the score cache which is the subagent's scoring memory. Vector retrieval calls the same shared oracle. Confirmed: identity in fork lives in the reasoning thread; corpus is one. This is consistent with the directive that subagents share the corpus. Engine.Fork does not snapshot the chunk store or the vector index. Forks operate on the same chunks, same vectors, same index. Schema-level model identity records model_id per chunk vector, so embedder swap is index rebuild, not schema migration. zembed-1's native dim is 2560; vec0 schema is embedding FLOAT[2560]. Matryoshka truncation to 1280, 640 etc. is a future config knob if storage becomes load-bearing. The library exposes clean swap seams; library consumers can plug different models without forking. User direction grounding the scope: no backward compat, no migrations, SQLite stays, Go-idiomatic swappable defaults, filter extensibility is first-class."
+        ]
+      },
+      {
+        "id": "F4_reranker_design",
+        "query": "where in the substrate plan does it describe how the vLLM Yes-token logprob is extracted and why prefix caching matters for batched scoring",
+        "correct": "zerank-2 served via vLLM, which provides causal LM serving with an OpenAI-compatible API. vLLM exposes per-token logprobs; the Go adapter extracts the Yes token logprob from the completion response and applies sigmoid of logit divided by 5.0. Prefix KV caching in vLLM is free: scoring N candidates against 1 query reuses the query-prefix's KV state across the N forward passes since the chat-template prefix through user content start is identical across them. vLLM is the principled fit because zerank-2 is a causal LM; vLLM is what causal LMs are served by; Grudge's core/adapter/openai already speaks the wire protocol; the new adapter is small with about 30-50 LOC of yes-logit extraction plus sigmoid. Production-grade serving with prefix caching, dynamic batching, paged attention — all properties zerank-2's per-call cost benefits from. Single inference stack pattern across LM-served work: future LM-as-judge, LM-as-rerank, and main completer all run via vLLM. The reranker swap drops BAAI bge-reranker-v2-m3 and the grudge-tei-rerank-1 Docker container from the production stack.",
+        "distractors": [
+          "rrc.Predicate is a typed AST for filtering chunk retrieval. Backends implement a Compile method that lowers Predicate to their native filter form. The interface is sealed via the unexported predicateMarker method, so backend type-switches can be exhaustive. New predicate types are added without touching the engine. Each backend adds a case to its compile function; backends that don't support a type return an error or fall through to a safe default. Concrete predicates: PredAll matches every chunk. PredThread matches chunks whose owning thread equals ThreadID. PredScope encodes the user-visible retrieval scope: with Scope = ScopeThread, matches chunks from CurrentThread; with Scope = ScopeAll, matches chunks from any thread. PredAnd matches chunks satisfying every child predicate. PredOr matches chunks satisfying at least one child predicate. PredNot matches chunks that do not satisfy Inner. PredHasMetadata matches chunks whose metadata Key equals Value. The metadata key/value space is open — backends decide which keys they index. Future filters such as attached-file presence, role, or time-window add new Pred types without touching the engine or the interface. The retrieval substrate gets a clean abstraction: the engine stops doing cosine math; it asks the oracle for nearest chunks under a filter, with sub-linear cost.",
+          "The vector index becomes a first-class storage primitive in the SQLite file alongside messages, chunks, scores, edges. Implementation via the sqlite-vec extension. New schema managed by service/storage/migrations: chunk_vectors is a vec0 virtual table keyed by chunk_rowid INTEGER PRIMARY KEY with payload embedding FLOAT[D] where D is the embedder's output dimension. chunk_vector_metadata is a companion regular table indexed alongside chunk_vectors with columns chunk_rowid INTEGER PK, message_id TEXT, chunk_index INTEGER, thread_id TEXT, model_id TEXT, role TEXT, has_attachments BOOL — start with the filters needed today, extend as predicates demand. The embeddings table is removed in favor of chunk_vectors as the source of truth for vector data. HNSW parameters: vec0 defaults are sane for our scale; tune M=16, ef_construction=200, ef_search=64 initially, leave knobs accessible via config for later. Filter integration: NearestChunks lowers the predicate to a SQL WHERE clause that joins chunk_vectors against chunk_vector_metadata and pushes the predicate into the vec0 KNN search. Pre-traversal filtering for high recall rather than post-filter. Concurrency: SQLite WAL handles single-writer/multi-reader. The existing engine mutex pattern continues; vector writes happen in the same transaction as the embedding insert.",
+          "zembed-1 is asymmetric — distinct prompts for queries vs documents, applied automatically by sentence-transformers via model.encode_query and model.encode_document. The current core.Embedder interface is symmetric. Interface change: replace symmetric Embed and EmbedBatch with asymmetric EmbedQuery and EmbedDocument, both signatures taking a slice of strings and returning a slice of float32 slices. All adapters implementing the interface update accordingly. Engine call sites: the new message being processed embeds via EmbedQuery; chunks being indexed into the corpus embed via EmbedDocument. For symmetric models like bge-m3, the implementation routes both methods to the same code path. Asymmetric is the principled default; symmetric is a degenerate case. Serving stack: custom Python service. TEI's default-prompt-name is server-wide, set at boot, not per-request — running asymmetric models would require two TEI containers per embedder. zembed-1's trust_remote_code modeling defines the encode_query and encode_document semantics; vLLM ingests weights and applies its own inference, so it can't faithfully reproduce them. A custom Python service of about 50 LOC plus Dockerfile loads zembed-1 via sentence-transformers, exposes two endpoints /embed/query and /embed/document, routes to model.encode_query and model.encode_document respectively. Single service, single GPU instance, correct semantics by construction.",
+          "Engine.Fork shares the underlying ChunkOracle, so chunks and vector index are corpus-level, not per-fork. Forked engines diverge on the DAG which is the subagent's edge view, and on the score cache which is the subagent's scoring memory. Vector retrieval calls the same shared oracle. Confirmed: identity in fork lives in the reasoning thread; corpus is one. This is consistent with the directive that subagents share the corpus. Engine.Fork does not snapshot the chunk store or the vector index. Forks operate on the same chunks, same vectors, same index. Schema-level model identity records model_id per chunk vector, so embedder swap is index rebuild, not schema migration. zembed-1's native dim is 2560; vec0 schema is embedding FLOAT[2560]. Matryoshka truncation to 1280, 640 etc. is a future config knob if storage becomes load-bearing. The library exposes clean swap seams; library consumers can plug different models without forking. User direction grounding the scope: no backward compat, no migrations, SQLite stays, Go-idiomatic swappable defaults, filter extensibility is first-class."
+        ]
+      },
+      {
+        "id": "F5_subagent_design",
+        "query": "where in the substrate plan does it describe Engine.Fork sharing the chunk oracle and how identity diverges in a subagent",
+        "correct": "Engine.Fork shares the underlying ChunkOracle, so chunks and vector index are corpus-level, not per-fork. Forked engines diverge on the DAG which is the subagent's edge view, and on the score cache which is the subagent's scoring memory. Vector retrieval calls the same shared oracle. Confirmed: identity in fork lives in the reasoning thread; corpus is one. This is consistent with the directive that subagents share the corpus. Engine.Fork does not snapshot the chunk store or the vector index. Forks operate on the same chunks, same vectors, same index. Schema-level model identity records model_id per chunk vector, so embedder swap is index rebuild, not schema migration. zembed-1's native dim is 2560; vec0 schema is embedding FLOAT[2560]. Matryoshka truncation to 1280, 640 etc. is a future config knob if storage becomes load-bearing. The library exposes clean swap seams; library consumers can plug different models without forking. User direction grounding the scope: no backward compat, no migrations, SQLite stays, Go-idiomatic swappable defaults, filter extensibility is first-class.",
+        "distractors": [
+          "rrc.Predicate is a typed AST for filtering chunk retrieval. Backends implement a Compile method that lowers Predicate to their native filter form. The interface is sealed via the unexported predicateMarker method, so backend type-switches can be exhaustive. New predicate types are added without touching the engine. Each backend adds a case to its compile function; backends that don't support a type return an error or fall through to a safe default. Concrete predicates: PredAll matches every chunk. PredThread matches chunks whose owning thread equals ThreadID. PredScope encodes the user-visible retrieval scope: with Scope = ScopeThread, matches chunks from CurrentThread; with Scope = ScopeAll, matches chunks from any thread. PredAnd matches chunks satisfying every child predicate. PredOr matches chunks satisfying at least one child predicate. PredNot matches chunks that do not satisfy Inner. PredHasMetadata matches chunks whose metadata Key equals Value. The metadata key/value space is open — backends decide which keys they index. Future filters such as attached-file presence, role, or time-window add new Pred types without touching the engine or the interface. The retrieval substrate gets a clean abstraction: the engine stops doing cosine math; it asks the oracle for nearest chunks under a filter, with sub-linear cost.",
+          "The vector index becomes a first-class storage primitive in the SQLite file alongside messages, chunks, scores, edges. Implementation via the sqlite-vec extension. New schema managed by service/storage/migrations: chunk_vectors is a vec0 virtual table keyed by chunk_rowid INTEGER PRIMARY KEY with payload embedding FLOAT[D] where D is the embedder's output dimension. chunk_vector_metadata is a companion regular table indexed alongside chunk_vectors with columns chunk_rowid INTEGER PK, message_id TEXT, chunk_index INTEGER, thread_id TEXT, model_id TEXT, role TEXT, has_attachments BOOL — start with the filters needed today, extend as predicates demand. The embeddings table is removed in favor of chunk_vectors as the source of truth for vector data. HNSW parameters: vec0 defaults are sane for our scale; tune M=16, ef_construction=200, ef_search=64 initially, leave knobs accessible via config for later. Filter integration: NearestChunks lowers the predicate to a SQL WHERE clause that joins chunk_vectors against chunk_vector_metadata and pushes the predicate into the vec0 KNN search. Pre-traversal filtering for high recall rather than post-filter. Concurrency: SQLite WAL handles single-writer/multi-reader. The existing engine mutex pattern continues; vector writes happen in the same transaction as the embedding insert.",
+          "zembed-1 is asymmetric — distinct prompts for queries vs documents, applied automatically by sentence-transformers via model.encode_query and model.encode_document. The current core.Embedder interface is symmetric. Interface change: replace symmetric Embed and EmbedBatch with asymmetric EmbedQuery and EmbedDocument, both signatures taking a slice of strings and returning a slice of float32 slices. All adapters implementing the interface update accordingly. Engine call sites: the new message being processed embeds via EmbedQuery; chunks being indexed into the corpus embed via EmbedDocument. For symmetric models like bge-m3, the implementation routes both methods to the same code path. Asymmetric is the principled default; symmetric is a degenerate case. Serving stack: custom Python service. TEI's default-prompt-name is server-wide, set at boot, not per-request — running asymmetric models would require two TEI containers per embedder. zembed-1's trust_remote_code modeling defines the encode_query and encode_document semantics; vLLM ingests weights and applies its own inference, so it can't faithfully reproduce them. A custom Python service of about 50 LOC plus Dockerfile loads zembed-1 via sentence-transformers, exposes two endpoints /embed/query and /embed/document, routes to model.encode_query and model.encode_document respectively. Single service, single GPU instance, correct semantics by construction.",
+          "zerank-2 served via vLLM, which provides causal LM serving with an OpenAI-compatible API. vLLM exposes per-token logprobs; the Go adapter extracts the Yes token logprob from the completion response and applies sigmoid of logit divided by 5.0. Prefix KV caching in vLLM is free: scoring N candidates against 1 query reuses the query-prefix's KV state across the N forward passes since the chat-template prefix through user content start is identical across them. vLLM is the principled fit because zerank-2 is a causal LM; vLLM is what causal LMs are served by; Grudge's core/adapter/openai already speaks the wire protocol; the new adapter is small with about 30-50 LOC of yes-logit extraction plus sigmoid. Production-grade serving with prefix caching, dynamic batching, paged attention — all properties zerank-2's per-call cost benefits from. Single inference stack pattern across LM-served work: future LM-as-judge, LM-as-rerank, and main completer all run via vLLM. The reranker swap drops BAAI bge-reranker-v2-m3 and the grudge-tei-rerank-1 Docker container from the production stack."
+        ]
+      },
+      {
+        "id": "F6_migration_steps",
+        "query": "where in the substrate plan does it list the deployment steps for stopping the old TEI containers and bringing up the new vllm and zembed services",
+        "correct": "Per directive: no migration. On deployment: Stop the running grudge-web binary; docker compose down for the old TEI containers. Wipe embeddings, scores, edges tables, or drop the SQLite file entirely in dev environment. Apply schema migration creating chunk_vectors vec0 dim 2560 plus chunk_vector_metadata. docker compose up -d brings up grudge-vllm-1 zerank-2 and grudge-zembed-1 zembed-1 via Python service. Healthchecks green before grudge-web boots. Boot grudge-web. Vector index empty; populates as messages arrive, or eagerly via existing background backfill goroutine in service/runtime/substrate. End-to-end smoke tests: task build clean across all modules rrc plus core plus service plus web. task test clean. New tests for predicate composition and lowering, sqlitevec_oracle returning top-K under various predicates with recall vs full-scan baseline above 0.95, zerank adapter HTTP shape sigmoid math logprob extraction, zembed adapter HTTP shape asymmetric routing query vs document endpoints L2-normalization confirmation. Settings JSON reflects new providers classifier=zerank embedder=zembed.",
+        "distractors": [
+          "rrc.Predicate is a typed AST for filtering chunk retrieval. Backends implement a Compile method that lowers Predicate to their native filter form. The interface is sealed via the unexported predicateMarker method, so backend type-switches can be exhaustive. New predicate types are added without touching the engine. Each backend adds a case to its compile function; backends that don't support a type return an error or fall through to a safe default. Concrete predicates: PredAll matches every chunk. PredThread matches chunks whose owning thread equals ThreadID. PredScope encodes the user-visible retrieval scope: with Scope = ScopeThread, matches chunks from CurrentThread; with Scope = ScopeAll, matches chunks from any thread. PredAnd matches chunks satisfying every child predicate. PredOr matches chunks satisfying at least one child predicate. PredNot matches chunks that do not satisfy Inner. PredHasMetadata matches chunks whose metadata Key equals Value. The metadata key/value space is open — backends decide which keys they index. Future filters such as attached-file presence, role, or time-window add new Pred types without touching the engine or the interface. The retrieval substrate gets a clean abstraction: the engine stops doing cosine math; it asks the oracle for nearest chunks under a filter, with sub-linear cost.",
+          "The vector index becomes a first-class storage primitive in the SQLite file alongside messages, chunks, scores, edges. Implementation via the sqlite-vec extension. New schema managed by service/storage/migrations: chunk_vectors is a vec0 virtual table keyed by chunk_rowid INTEGER PRIMARY KEY with payload embedding FLOAT[D] where D is the embedder's output dimension. chunk_vector_metadata is a companion regular table indexed alongside chunk_vectors with columns chunk_rowid INTEGER PK, message_id TEXT, chunk_index INTEGER, thread_id TEXT, model_id TEXT, role TEXT, has_attachments BOOL — start with the filters needed today, extend as predicates demand. The embeddings table is removed in favor of chunk_vectors as the source of truth for vector data. HNSW parameters: vec0 defaults are sane for our scale; tune M=16, ef_construction=200, ef_search=64 initially, leave knobs accessible via config for later. Filter integration: NearestChunks lowers the predicate to a SQL WHERE clause that joins chunk_vectors against chunk_vector_metadata and pushes the predicate into the vec0 KNN search. Pre-traversal filtering for high recall rather than post-filter. Concurrency: SQLite WAL handles single-writer/multi-reader. The existing engine mutex pattern continues; vector writes happen in the same transaction as the embedding insert.",
+          "zembed-1 is asymmetric — distinct prompts for queries vs documents, applied automatically by sentence-transformers via model.encode_query and model.encode_document. The current core.Embedder interface is symmetric. Interface change: replace symmetric Embed and EmbedBatch with asymmetric EmbedQuery and EmbedDocument, both signatures taking a slice of strings and returning a slice of float32 slices. All adapters implementing the interface update accordingly. Engine call sites: the new message being processed embeds via EmbedQuery; chunks being indexed into the corpus embed via EmbedDocument. For symmetric models like bge-m3, the implementation routes both methods to the same code path. Asymmetric is the principled default; symmetric is a degenerate case. Serving stack: custom Python service. TEI's default-prompt-name is server-wide, set at boot, not per-request — running asymmetric models would require two TEI containers per embedder. zembed-1's trust_remote_code modeling defines the encode_query and encode_document semantics; vLLM ingests weights and applies its own inference, so it can't faithfully reproduce them. A custom Python service of about 50 LOC plus Dockerfile loads zembed-1 via sentence-transformers, exposes two endpoints /embed/query and /embed/document, routes to model.encode_query and model.encode_document respectively. Single service, single GPU instance, correct semantics by construction.",
+          "zerank-2 served via vLLM, which provides causal LM serving with an OpenAI-compatible API. vLLM exposes per-token logprobs; the Go adapter extracts the Yes token logprob from the completion response and applies sigmoid of logit divided by 5.0. Prefix KV caching in vLLM is free: scoring N candidates against 1 query reuses the query-prefix's KV state across the N forward passes since the chat-template prefix through user content start is identical across them. vLLM is the principled fit because zerank-2 is a causal LM; vLLM is what causal LMs are served by; Grudge's core/adapter/openai already speaks the wire protocol; the new adapter is small with about 30-50 LOC of yes-logit extraction plus sigmoid. Production-grade serving with prefix caching, dynamic batching, paged attention — all properties zerank-2's per-call cost benefits from. Single inference stack pattern across LM-served work: future LM-as-judge, LM-as-rerank, and main completer all run via vLLM. The reranker swap drops BAAI bge-reranker-v2-m3 and the grudge-tei-rerank-1 Docker container from the production stack."
+        ]
+      }
+    ]
+  }
+}

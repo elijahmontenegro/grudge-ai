@@ -46,15 +46,8 @@ func (t *Tracker) Record(threadID string, result *pb.SelectionResult) {
 	}
 	t.mu.Unlock()
 
-	// Event IDs are synthesized as sel-<target_message_id> in the
-	// engine. Strip the prefix to recover the target for the
-	// selections table FK.
-	targetID := result.EventId
-	if len(targetID) > 4 && targetID[:4] == "sel-" {
-		targetID = targetID[4:]
-	}
-	if err := t.db.SaveSelection(result, targetID, threadID); err != nil {
-		log.Printf("SaveSelection(event=%s target=%s): %v", result.EventId, targetID, err)
+	if err := t.db.SaveSelection(result, result.AnchorMessageId, threadID); err != nil {
+		log.Printf("SaveSelection(event=%s anchor=%s): %v", result.EventId, result.AnchorMessageId, err)
 	}
 }
 

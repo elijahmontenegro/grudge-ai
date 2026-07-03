@@ -8,20 +8,20 @@ func TestTickTrace_RoundTrip(t *testing.T) {
 	db := testDB(t)
 
 	trace := &TickTrace{
-		ThreadID:           "t-trace",
-		Round:              7,
-		RRCOnMessageMs:     1234,
-		SelectMs:           45,
-		AssembleMs:         12,
-		CompleteMs:         8900,
-		StreamMs:           9500,
-		PersistMs:          67,
-		TotalMs:            10800,
-		CompleterModel:     "minimax-m2.7",
-		CorpusSize:         1968,
-		SelectedCount:      8,
-		AssembledTokensEst: 142000,
-		Errored:            false,
+		ThreadID:                   "t-trace",
+		Round:                      7,
+		RRCPrerequisiteSelectionMs: 1234,
+		SelectMs:                   45,
+		AssembleMs:                 12,
+		CompleteMs:                 8900,
+		StreamMs:                   9500,
+		PersistMs:                  67,
+		TotalMs:                    10800,
+		CompleterModel:             "minimax-m2.7",
+		CorpusSize:                 1968,
+		SelectedCount:              8,
+		AssembledTokensEst:         142000,
+		Errored:                    false,
 	}
 	if err := db.InsertTickTrace(trace); err != nil {
 		t.Fatalf("InsertTickTrace: %v", err)
@@ -38,7 +38,7 @@ func TestTickTrace_RoundTrip(t *testing.T) {
 		t.Fatalf("expected 1 trace, got %d", len(got))
 	}
 	r := got[0]
-	if r.Round != 7 || r.RRCOnMessageMs != 1234 || r.SelectMs != 45 ||
+	if r.Round != 7 || r.RRCPrerequisiteSelectionMs != 1234 || r.SelectMs != 45 ||
 		r.AssembleMs != 12 || r.CompleteMs != 8900 || r.StreamMs != 9500 ||
 		r.PersistMs != 67 || r.TotalMs != 10800 {
 		t.Errorf("timing fields didn't round-trip: %+v", r)

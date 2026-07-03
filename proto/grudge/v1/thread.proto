@@ -81,6 +81,12 @@ message Message {
   int64 position = 4;
   string thread_id = 5;
   google.protobuf.Timestamp created_at = 6;
+  // Active-discourse identity. Messages produced within one outbound
+  // model call (the triggering event plus the model/tool events it
+  // spawns) share a turn_id, so the in-flight local discourse can be
+  // recovered without falling back to fixed last-N recency. Empty on
+  // messages stored before this field existed / outside a turn.
+  string turn_id = 7;
 }
 
 message Thread {

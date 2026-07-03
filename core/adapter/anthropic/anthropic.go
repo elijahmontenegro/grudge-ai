@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/core/adapter/internal/util"
 	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
@@ -42,7 +43,6 @@ func New(cfg Config) any {
 		client: httpc.New(httpc.TimeoutDefault, authFn),
 	}
 }
-
 
 func (p *provider) Completer(model string) (core.Completer, error) {
 	authFn := func(req *http.Request) {
@@ -163,8 +163,9 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			return
 		}
 		if resp.StatusCode != http.StatusOK {
+			err := httpc.NewStatusError("anthropic", resp)
 			resp.Body.Close()
-			yield(nil, &httpc.StatusError{Provider: "anthropic", StatusCode: resp.StatusCode})
+			yield(nil, err)
 			return
 		}
 		defer resp.Body.Close()
@@ -182,7 +183,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 
 			var event sseEvent
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
+				yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 				return
 			}
 
@@ -211,12 +212,12 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 				}, nil)
 				return
 			case "error":
-				yield(&pb.StreamChunk{Done: true, Error: ptr(event.Error.Message)}, nil)
+				yield(&pb.StreamChunk{Done: true, Error: util.Ptr(event.Error.Message)}, nil)
 				return
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
+			yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 		}
 	}
 }
@@ -316,5 +317,3 @@ func textFromBlocks(blocks []*pb.ContentBlock) string {
 	}
 	return s
 }
-
-func ptr(s string) *string { return &s }

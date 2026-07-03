@@ -5,7 +5,7 @@
 //
 // Stage columns:
 //
-//	rrc      — Engine.OnMessage (chunking + embed + KNN + rerank + edges)
+//	rrc      — Engine.SelectPrerequisites (serialization + KNN + rerank + gates + edges)
 //	sel      — Engine.Select (graph walk + transitive reduction)
 //	asm      — MMR + budget shed + token estimation
 //	cmpl     — time-to-first-event (model response wait, network round-trip)
@@ -85,7 +85,7 @@ func printTable(traces []*storage.TickTrace) {
 			t.Round,
 			t.CreatedAt.Format("2006-01-02 15:04:05"),
 			t.TotalMs,
-			t.RRCOnMessageMs,
+			t.RRCPrerequisiteSelectionMs,
 			t.SelectMs,
 			t.AssembleMs,
 			t.CompleteMs,
@@ -106,7 +106,7 @@ func printPercentiles(traces []*storage.TickTrace) {
 		getter func(*storage.TickTrace) int64
 	}{
 		{"total", func(t *storage.TickTrace) int64 { return t.TotalMs }},
-		{"rrc", func(t *storage.TickTrace) int64 { return t.RRCOnMessageMs }},
+		{"rrc", func(t *storage.TickTrace) int64 { return t.RRCPrerequisiteSelectionMs }},
 		{"sel", func(t *storage.TickTrace) int64 { return t.SelectMs }},
 		{"asm", func(t *storage.TickTrace) int64 { return t.AssembleMs }},
 		{"cmpl", func(t *storage.TickTrace) int64 { return t.CompleteMs }},

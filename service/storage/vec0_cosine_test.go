@@ -8,7 +8,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// TestVec0Cosine_RoundTrip pins migrationV5's distance_metric=cosine
+// TestVec0Cosine_RoundTrip pins the baseline schema's distance_metric=cosine
 // declaration. Without it sqlite-vec defaults to L2, and the
 // engine's Layer-1-score consumer (rrccache.NearestChunks) computes
 // similarity as `1.0 - row.Distance`. That conversion is correct
@@ -20,7 +20,7 @@ import (
 // This test inserts a known pair (query vec, two candidates with
 // analytically computable cosine distances), runs NearestChunkVectors,
 // and asserts `row.Distance` matches the analytical cosine distance
-// to floating-point precision. If migrationV5 regresses (someone
+// to floating-point precision. If the schema regresses (someone
 // drops the distance_metric clause), this fails immediately.
 //
 // Vectors must be 1024-dim to match the schema (chunk_vectors

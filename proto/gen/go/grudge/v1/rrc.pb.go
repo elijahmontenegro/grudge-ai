@@ -29,6 +29,14 @@ const (
 	EdgeSource_EDGE_SOURCE_CROSS_ENCODER EdgeSource = 1
 	EdgeSource_EDGE_SOURCE_QUD           EdgeSource = 2
 	EdgeSource_EDGE_SOURCE_BOTH          EdgeSource = 3
+	// Recorded at generation time: "the turn at to_message_id was generated
+	// from from_message_id." Not similarity-scored — it is a fact about what
+	// fed the turn, legible even where semantic similarity is near zero. Its
+	// `score` field carries the contribution weight (was the source
+	// load-bearing for the turn, not merely present). Provenance edges bypass
+	// EdgeThreshold; they are the structural signal that lifts required-but-
+	// weakly-connected prerequisites — roots above all — over acceptance.
+	EdgeSource_EDGE_SOURCE_PROVENANCE EdgeSource = 4
 )
 
 // Enum value maps for EdgeSource.
@@ -38,12 +46,14 @@ var (
 		1: "EDGE_SOURCE_CROSS_ENCODER",
 		2: "EDGE_SOURCE_QUD",
 		3: "EDGE_SOURCE_BOTH",
+		4: "EDGE_SOURCE_PROVENANCE",
 	}
 	EdgeSource_value = map[string]int32{
 		"EDGE_SOURCE_UNSPECIFIED":   0,
 		"EDGE_SOURCE_CROSS_ENCODER": 1,
 		"EDGE_SOURCE_QUD":           2,
 		"EDGE_SOURCE_BOTH":          3,
+		"EDGE_SOURCE_PROVENANCE":    4,
 	}
 )
 
@@ -575,14 +585,17 @@ func (x *ExcludedMessage) GetScore() float32 {
 }
 
 type SelectionResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`             // Unique ID for this RRC selection event
-	Scope         SelectionScope         `protobuf:"varint,2,opt,name=scope,proto3,enum=grudge.v1.SelectionScope" json:"scope,omitempty"` // Thread-scoped or all-threads
-	ThreadId      string                 `protobuf:"bytes,3,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`          // Thread where the prompt originated
-	Selected      []*SelectedMessage     `protobuf:"bytes,4,rep,name=selected,proto3" json:"selected,omitempty"`
-	Excluded      []*ExcludedMessage     `protobuf:"bytes,5,rep,name=excluded,proto3" json:"excluded,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	EventId                 string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`             // Unique ID for this RRC selection event
+	Scope                   SelectionScope         `protobuf:"varint,2,opt,name=scope,proto3,enum=grudge.v1.SelectionScope" json:"scope,omitempty"` // Thread-scoped or all-threads
+	ThreadId                string                 `protobuf:"bytes,3,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`          // Thread where the prompt originated
+	Selected                []*SelectedMessage     `protobuf:"bytes,4,rep,name=selected,proto3" json:"selected,omitempty"`
+	Excluded                []*ExcludedMessage     `protobuf:"bytes,5,rep,name=excluded,proto3" json:"excluded,omitempty"`
+	LocalContextFingerprint string                 `protobuf:"bytes,6,opt,name=local_context_fingerprint,json=localContextFingerprint,proto3" json:"local_context_fingerprint,omitempty"` // Exact bounded Local Context serialization
+	LocalContextMessageIds  []string               `protobuf:"bytes,7,rep,name=local_context_message_ids,json=localContextMessageIds,proto3" json:"local_context_message_ids,omitempty"`
+	AnchorMessageId         string                 `protobuf:"bytes,8,opt,name=anchor_message_id,json=anchorMessageId,proto3" json:"anchor_message_id,omitempty"` // Latest stored event receiving DAG edges
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *SelectionResult) Reset() {
@@ -648,6 +661,27 @@ func (x *SelectionResult) GetExcluded() []*ExcludedMessage {
 		return x.Excluded
 	}
 	return nil
+}
+
+func (x *SelectionResult) GetLocalContextFingerprint() string {
+	if x != nil {
+		return x.LocalContextFingerprint
+	}
+	return ""
+}
+
+func (x *SelectionResult) GetLocalContextMessageIds() []string {
+	if x != nil {
+		return x.LocalContextMessageIds
+	}
+	return nil
+}
+
+func (x *SelectionResult) GetAnchorMessageId() string {
+	if x != nil {
+		return x.AnchorMessageId
+	}
+	return ""
 }
 
 type CarryForwardInput struct {
@@ -752,23 +786,27 @@ const file_grudge_v1_rrc_proto_rawDesc = "" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x122\n" +
 	"\x06reason\x18\x02 \x01(\x0e2\x1a.grudge.v1.ExclusionReasonR\x06reason\x12\x14\n" +
-	"\x05score\x18\x03 \x01(\x02R\x05score\"\xea\x01\n" +
+	"\x05score\x18\x03 \x01(\x02R\x05score\"\x8d\x03\n" +
 	"\x0fSelectionResult\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12/\n" +
 	"\x05scope\x18\x02 \x01(\x0e2\x19.grudge.v1.SelectionScopeR\x05scope\x12\x1b\n" +
 	"\tthread_id\x18\x03 \x01(\tR\bthreadId\x126\n" +
 	"\bselected\x18\x04 \x03(\v2\x1a.grudge.v1.SelectedMessageR\bselected\x126\n" +
-	"\bexcluded\x18\x05 \x03(\v2\x1a.grudge.v1.ExcludedMessageR\bexcluded\"\x90\x01\n" +
+	"\bexcluded\x18\x05 \x03(\v2\x1a.grudge.v1.ExcludedMessageR\bexcluded\x12:\n" +
+	"\x19local_context_fingerprint\x18\x06 \x01(\tR\x17localContextFingerprint\x129\n" +
+	"\x19local_context_message_ids\x18\a \x03(\tR\x16localContextMessageIds\x12*\n" +
+	"\x11anchor_message_id\x18\b \x01(\tR\x0fanchorMessageId\"\x90\x01\n" +
 	"\x11CarryForwardInput\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1b\n" +
 	"\tthread_id\x18\x02 \x01(\tR\bthreadId\x12C\n" +
-	"\x0fthinking_blocks\x18\x03 \x03(\v2\x1a.grudge.v1.ThinkingContentR\x0ethinkingBlocks*s\n" +
+	"\x0fthinking_blocks\x18\x03 \x03(\v2\x1a.grudge.v1.ThinkingContentR\x0ethinkingBlocks*\x8f\x01\n" +
 	"\n" +
 	"EdgeSource\x12\x1b\n" +
 	"\x17EDGE_SOURCE_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19EDGE_SOURCE_CROSS_ENCODER\x10\x01\x12\x13\n" +
 	"\x0fEDGE_SOURCE_QUD\x10\x02\x12\x14\n" +
-	"\x10EDGE_SOURCE_BOTH\x10\x03*y\n" +
+	"\x10EDGE_SOURCE_BOTH\x10\x03\x12\x1a\n" +
+	"\x16EDGE_SOURCE_PROVENANCE\x10\x04*y\n" +
 	"\tQUDStatus\x12\x1a\n" +
 	"\x16QUD_STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fQUD_STATUS_OPEN\x10\x01\x12\"\n" +

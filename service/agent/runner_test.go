@@ -174,6 +174,29 @@ func TestProcessEvents_DuplicateFunctionResponseDedup(t *testing.T) {
 	}
 }
 
+func TestProcessEvents_UnmatchedToolCallGetsExactErrorResult(t *testing.T) {
+	r := newTestRunner(t, "t-unmatched")
+	_, err := r.processEvents(eventSeqThenError(
+		errors.New("cancelled"),
+		fnCallEvent("call-1", "Read", map[string]any{"path": "x"}),
+	))
+	if err == nil {
+		t.Fatal("interrupted run should still report its error")
+	}
+	corpus := corpusOf(t, r)
+	if len(corpus) != 2 {
+		t.Fatalf("stored messages=%d, want call plus exact error result", len(corpus))
+	}
+	call := corpus[0].Content[0].GetToolCall()
+	result := corpus[1].Content[0].GetToolResult()
+	if call == nil || result == nil || call.Id != result.ToolCallId {
+		t.Fatalf("protocol relation not preserved: call=%+v result=%+v", call, result)
+	}
+	if !result.IsError {
+		t.Fatal("synthesized interruption result must be marked as an error")
+	}
+}
+
 func TestProcessEvents_ThinkingFlushedBeforeToolCall(t *testing.T) {
 	// Ordering invariant: when thinking accumulates and then a tool
 	// call arrives, the thinking must be stored as its own message

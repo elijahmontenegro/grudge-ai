@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/core/adapter/internal/util"
 	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
 )
@@ -91,13 +92,12 @@ func New(cfg Config) any {
 	}
 }
 
-
 func (p *provider) Completer(model string) (core.Completer, error) {
 	return &completer{
-		model:         model,
-		baseURL:       p.cfg.BaseURL,
-		client:        p.client,
-		streamClient:  httpc.NewStreaming(nil),
+		model:        model,
+		baseURL:      p.cfg.BaseURL,
+		client:       p.client,
+		streamClient: httpc.NewStreaming(nil),
 	}, nil
 }
 
@@ -117,7 +117,6 @@ type completer struct {
 	client       *httpc.Client
 	streamClient *httpc.Client
 }
-
 
 func (c *completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error) {
 	cr := chatRequest{
@@ -232,7 +231,7 @@ func (c *completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.
 			var chunk chatResponse
 			if err := dec.Decode(&chunk); err != nil {
 				if err != io.EOF {
-					yield(&pb.StreamChunk{Done: true, Error: ptr(err.Error())}, nil)
+					yield(&pb.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 				}
 				return
 			}
@@ -286,7 +285,6 @@ type embedder struct {
 	baseURL string
 	client  *httpc.Client
 }
-
 
 // Embed routes both roles to the same /api/embed endpoint —
 // ollama's embed API doesn't differentiate query/document at the
@@ -342,44 +340,3 @@ func (e *embedder) embedOne(ctx context.Context, text string) ([]float32, error)
 	}
 	return resp.Embeddings[0], nil
 }
-
-// --- helpers ---
-
-// toLlamaMsgs converts a flat list of LLMMessages (derived from the
-// per-block pb.Message storage schema) into a wire-valid sequence for
-// OpenAI/ollama's chat protocol.
-//
-// The fundamental impedance mismatch: our storage is one-pb.Message-per-
-// content-block (a single tool call is its own row; a single tool result
-// is its own row), which preserves event ordering losslessly for the
-// corpus but produces malformed OpenAI-protocol sequences when fed
-// verbatim to the provider. The OpenAI protocol requires:
-//
-//   1. An `assistant` message carrying tool_calls is followed by `tool`
-//      messages whose tool_call_id matches each call's id, all before
-//      any subsequent non-tool message.
-//   2. `tool` messages MUST have a preceding `assistant.tool_calls[]`
-//      entry with matching id. Orphan tool messages are rejected.
-//   3. Empty `assistant` messages (no content, no thinking, no
-//      tool_calls) are invalid.
-//
-// Minimax (via ollama.com) enforces these with 503 on violation — we
-// empirically confirmed a 503 at 100% reproduction against a dumped
-// failing request, and 200 at 100% against the same body with the tool
-// protocol canonicalized.
-//
-// This canonicalizer walks the input once and emits a valid sequence:
-//
-//   - Consecutive assistant messages whose only content is tool_calls
-//     are merged into a single `assistant{tool_calls: [...]}` — ADK
-//     splits parallel tool calls across separate events, our storage
-//     captures each as its own pb.Message, the wire needs them grouped.
-//   - After each emitted assistant-with-tool_calls, we emit exactly the
-//     matching tool responses in order of appearance in the input.
-//     Tool responses with no matching call in the current emitted set
-//     are dropped (orphan — their call was likely outside the Selected
-//     window or the Radius boundary).
-//   - Text-only assistant messages, user messages, and system messages
-//     pass through unchanged.
-//   - Pure-empty assistant messages (no text, no thinking, no calls)
-//     are dropped.

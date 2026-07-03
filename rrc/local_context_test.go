@@ -1,0 +1,220 @@
+package rrc
+
+import (
+	"fmt"
+	"slices"
+	"testing"
+
+	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
+)
+
+func localMessage(id string, role pb.Role, position int64, blocks ...*pb.ContentBlock) *pb.Message {
+	return &pb.Message{Id: id, ThreadId: "t1", Role: role, Position: position, Content: blocks}
+}
+
+func textBlock(text string) *pb.ContentBlock {
+	return &pb.ContentBlock{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: text}}}
+}
+
+func TestBuildLocalContextBoundsAndReachesBackForAnchors(t *testing.T) {
+	corpus := []*pb.Message{
+		localMessage("user", pb.Role_ROLE_USER, 0, textBlock("original ask")),
+		localMessage("assistant", pb.Role_ROLE_ASSISTANT, 1, textBlock("working on it")),
+		storedCall("call", "t1", "op", 2),
+		storedResult("result", "t1", "op", 3),
+	}
+	local := BuildLocalContext(corpus, 2)
+	got := messageIDs(local)
+	want := []string{"user", "assistant", "call", "result"}
+	if !sameIDs(got, want) {
+		t.Fatalf("Local Context ids=%v, want %v", got, want)
+	}
+}
+
+func TestSerializedLocalContextUsesSameOrderedMessagesAndLabelsBlocks(t *testing.T) {
+	local := []*pb.Message{
+		localMessage("u", pb.Role_ROLE_USER, 0, textBlock("inspect the file")),
+		storedCall("c", "t1", "op-1", 1),
+		storedResult("r", "t1", "op-1", 2),
+	}
+	serialized := SerializeLocalContext(local, chunk.DefaultConfig())
+	if serialized == nil {
+		t.Fatal("serialization is nil")
+	}
+	if !sameIDs(serialized.MessageIDs, []string{"u", "c", "r"}) {
+		t.Fatalf("Local Context ids=%v", serialized.MessageIDs)
+	}
+	joined := ""
+	for _, part := range serialized.Chunks {
+		joined += part.Text
+	}
+	for _, label := range []string{"role=user", "[tool_call id=op-1", "[tool_result tool_call_id=op-1"} {
+		if !contains(joined, label) {
+			t.Fatalf("Local Context serialization missing %q:\n%s", label, joined)
+		}
+	}
+}
+
+func TestSerializedLocalContextFingerprintChangesWithOrderRoleAndContent(t *testing.T) {
+	a := localMessage("a", pb.Role_ROLE_USER, 0, textBlock("alpha"))
+	b := localMessage("b", pb.Role_ROLE_ASSISTANT, 1, textBlock("beta"))
+	base := SerializeLocalContext([]*pb.Message{a, b}, chunk.DefaultConfig()).Fingerprint
+	reordered := SerializeLocalContext([]*pb.Message{b, a}, chunk.DefaultConfig()).Fingerprint
+	roleChanged := SerializeLocalContext([]*pb.Message{
+		localMessage("a", pb.Role_ROLE_ASSISTANT, 0, textBlock("alpha")), b,
+	}, chunk.DefaultConfig()).Fingerprint
+	contentChanged := SerializeLocalContext([]*pb.Message{
+		localMessage("a", pb.Role_ROLE_USER, 0, textBlock("changed")), b,
+	}, chunk.DefaultConfig()).Fingerprint
+	if base == reordered || base == roleChanged || base == contentChanged {
+		t.Fatal("fingerprint must bind order, role, and exact serialized content")
+	}
+}
+
+func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
+	scorer := newMockScorer()
+	scorer.SetScore("prior", "query", 0.9)
+	oracle := newMockChunkOracle()
+	prior := addMsg(oracle, "p", 0, "t1", "prior")
+	anchor := addMsg(oracle, "q", 1, "t1", "query")
+	engine := testEngine(scorer, oracle)
+	serialized := testSerializedLocalContext(anchor)
+
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, []*pb.Message{prior, anchor}, pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, []*pb.Message{prior, anchor}, pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if scorer.callCount != 1 {
+		t.Fatalf("exact serialized Local Context should hit cache; scorer calls=%d", scorer.callCount)
+	}
+	changed := *serialized
+	changed.Fingerprint = serialized.Fingerprint + "-changed"
+	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, []*pb.Message{prior, anchor}, pb.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+		t.Fatal(err)
+	}
+	if scorer.callCount != 2 {
+		t.Fatalf("changed fingerprint should miss cache; scorer calls=%d", scorer.callCount)
+	}
+}
+
+func withTurn(m *pb.Message, turnID string) *pb.Message {
+	m.TurnId = turnID
+	return m
+}
+
+// TestBuildActiveDiscourse_TurnScopedWindow: Local Context is exactly the
+// active turn's messages, in corpus order, regardless of turn length. A
+// long tool loop that a fixed last-N window would truncate is kept whole.
+func TestBuildActiveDiscourse_TurnScopedWindow(t *testing.T) {
+	// Prior completed turn (turn-A) + a long current turn (turn-B) whose
+	// tool loop is longer than any small fixed N.
+	corpus := []*pb.Message{
+		withTurn(localMessage("u0", pb.Role_ROLE_USER, 0, textBlock("earlier ask")), "turn-A"),
+		withTurn(localMessage("a0", pb.Role_ROLE_ASSISTANT, 1, textBlock("earlier answer")), "turn-A"),
+		withTurn(localMessage("u1", pb.Role_ROLE_USER, 2, textBlock("current ask")), "turn-B"),
+	}
+	// 20-step tool loop in the current turn.
+	pos := int64(3)
+	for i := range 20 {
+		corpus = append(corpus, withTurn(storedCall(fmt.Sprintf("c%d", i), "t1", "op", pos), "turn-B"))
+		pos++
+		corpus = append(corpus, withTurn(storedResult(fmt.Sprintf("r%d", i), "t1", "op", pos), "turn-B"))
+		pos++
+	}
+
+	local := BuildActiveDiscourse(corpus, "turn-B", 2)
+	got := messageIDs(local)
+
+	// The current turn has a user-text anchor (u1) but no assistant-text
+	// anchor of its own (tool loop only), so reach-back pulls the prior
+	// assistant anchor a0. Window = u1 + 40 tool msgs (41); +a0 = 42.
+	// A fixed last-N=2 would have kept only the final result pair.
+	if len(got) != 42 {
+		t.Fatalf("active discourse len=%d, want 42 (a0 anchor + u1 + 20 call/result pairs)", len(got))
+	}
+	for _, id := range []string{"u1", "c0", "r0", "c19", "r19"} {
+		if !containsID(got, id) {
+			t.Fatalf("active discourse missing %q (turn truncated?): %v", id, got)
+		}
+	}
+	// u0 (prior turn's user, already satisfied by u1) must NOT be pulled.
+	if containsID(got, "u0") {
+		t.Fatalf("prior turn's redundant user anchor leaked into active discourse: %v", got)
+	}
+	// a0 IS present — reached back as the missing assistant-text anchor.
+	if !containsID(got, "a0") {
+		t.Fatalf("assistant anchor a0 should be reached back: %v", got)
+	}
+}
+
+// TestBuildActiveDiscourse_ReachesBackForAnchors: when the current turn
+// lacks an assistant-text anchor, the builder reaches back for it (shared
+// reach-back with BuildLocalContext) so the span disambiguates.
+func TestBuildActiveDiscourse_ReachesBackForAnchors(t *testing.T) {
+	corpus := []*pb.Message{
+		withTurn(localMessage("u0", pb.Role_ROLE_USER, 0, textBlock("original ask")), "turn-A"),
+		withTurn(localMessage("a0", pb.Role_ROLE_ASSISTANT, 1, textBlock("prior assistant text")), "turn-A"),
+		// Current turn is a tool-only continuation: no assistant text of its own.
+		withTurn(storedCall("c", "t1", "op", 2), "turn-B"),
+		withTurn(storedResult("r", "t1", "op", 3), "turn-B"),
+	}
+	local := BuildActiveDiscourse(corpus, "turn-B", 2)
+	got := messageIDs(local)
+	// Reach-back pulls the missing assistant anchor (a0) — and its
+	// preceding user anchor is already satisfied by... none in-window, so
+	// u0 is also reached. Window itself is c,r.
+	if !containsID(got, "a0") {
+		t.Fatalf("reach-back did not pull assistant anchor: %v", got)
+	}
+	if !containsID(got, "c") || !containsID(got, "r") {
+		t.Fatalf("active turn window missing: %v", got)
+	}
+}
+
+// TestBuildActiveDiscourse_FallsBackWhenNoTurnID: empty turn id (legacy
+// rows / autonomous first call) falls back to the bounded recency window,
+// preserving prior behavior.
+func TestBuildActiveDiscourse_FallsBackWhenNoTurnID(t *testing.T) {
+	corpus := []*pb.Message{
+		localMessage("user", pb.Role_ROLE_USER, 0, textBlock("original ask")),
+		localMessage("assistant", pb.Role_ROLE_ASSISTANT, 1, textBlock("working on it")),
+		storedCall("call", "t1", "op", 2),
+		storedResult("result", "t1", "op", 3),
+	}
+	// Empty turn id → identical to BuildLocalContext(corpus, 2).
+	got := messageIDs(BuildActiveDiscourse(corpus, "", 2))
+	want := messageIDs(BuildLocalContext(corpus, 2))
+	if !sameIDs(got, want) {
+		t.Fatalf("fallback mismatch: active=%v localContext=%v", got, want)
+	}
+}
+
+// TestBuildActiveDiscourse_UnknownTurnIDFallsBack: a turn id present on the
+// RRCLLM but with no stored message yet (autonomous tick before any event
+// of the tick lands) falls back to recency rather than returning empty.
+func TestBuildActiveDiscourse_UnknownTurnIDFallsBack(t *testing.T) {
+	corpus := []*pb.Message{
+		localMessage("user", pb.Role_ROLE_USER, 0, textBlock("ask")),
+		localMessage("assistant", pb.Role_ROLE_ASSISTANT, 1, textBlock("answer")),
+	}
+	got := messageIDs(BuildActiveDiscourse(corpus, "turn-not-yet-stored", 2))
+	if len(got) == 0 {
+		t.Fatal("unknown turn id must fall back to recency, not return empty")
+	}
+}
+
+func containsID(ids []string, id string) bool {
+	return slices.Contains(ids, id)
+}
+
+func contains(text, part string) bool {
+	for i := 0; i+len(part) <= len(text); i++ {
+		if text[i:i+len(part)] == part {
+			return true
+		}
+	}
+	return false
+}

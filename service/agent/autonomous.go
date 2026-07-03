@@ -73,7 +73,7 @@ func (a *AutonomousState) waitIfPaused(ctx context.Context) error {
 // RunAutonomous starts the autonomous loop. Each round is a real Event
 // in the Store — the loop prompts the agent with a continuation directive
 // ("continue"), which flows through SendMessage exactly like a user turn:
-// stored as a user message in the corpus, becomes the Query for RRC, drives
+// stored as a user message in the corpus, enters Local Context for RRC, drives
 // Selection. The autonomous intent lives at THIS layer; downstream
 // assembly and adapters stay pure (no prompt augmentation). Attachments
 // supplied here land on the initial kickoff message only.

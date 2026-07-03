@@ -80,3 +80,11 @@ type PredHasMetadata struct {
 }
 
 func (PredHasMetadata) predicateMarker() {}
+
+// PredExcludeMessageIDs rejects chunks whose owning message is already
+// present in bounded Local Context.
+type PredExcludeMessageIDs struct {
+	MessageIDs []string
+}
+
+func (PredExcludeMessageIDs) predicateMarker() {}

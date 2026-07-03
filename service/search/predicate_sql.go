@@ -51,6 +51,8 @@ func compilePredicate(p rrc.Predicate) (string, []any, error) {
 		// Surface as unsupported so the caller can decide instead of
 		// silently returning empty results.
 		return "", nil, fmt.Errorf("PredHasMetadata not supported by chunk_vectors backend (key=%q)", v.Key)
+	case rrc.PredExcludeMessageIDs:
+		return "", nil, fmt.Errorf("PredExcludeMessageIDs is evaluated after adaptive KNN overfetch")
 	default:
 		return "", nil, fmt.Errorf("unknown predicate type %T", p)
 	}

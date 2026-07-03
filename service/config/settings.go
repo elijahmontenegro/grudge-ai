@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	net_http "net/http"
 	"os"
 	"path/filepath"
@@ -28,16 +30,70 @@ type Settings struct {
 // Engine means "use the rrc default" — handled at the service
 // boundary.
 type EngineConfig struct {
-	EdgeThreshold         float64 `json:"edge_threshold"`
-	ScoreFloor            float64 `json:"score_floor"`
-	ZScoreThreshold       float64 `json:"z_score_threshold"`
+	// LossRatio is the live acceptance operating point (the precision
+	// stance): a candidate is accepted when its calibrated P(prereq)
+	// clears LossRatio (plus the budget's marginal token price). This is
+	// the knob that actually gates edge formation and DAG traversal.
+	LossRatio float64 `json:"loss_ratio"`
+
+	// EdgeThreshold, ScoreFloor, ZScoreThreshold are DEPRECATED: retained
+	// so existing settings files still parse and so telemetry keeps
+	// reporting them, but they no longer gate anything (A4 replaced the
+	// flat cutoffs with calibrated expected value). Setting them has no
+	// effect on selection; tune LossRatio instead.
+	EdgeThreshold   float64 `json:"edge_threshold"`
+	ScoreFloor      float64 `json:"score_floor"`
+	ZScoreThreshold float64 `json:"z_score_threshold"`
+
 	MinBatchStdDev        float64 `json:"min_batch_stddev"`
-	RadiusSize            int     `json:"radius_size"`
+	LocalContextSize      int     `json:"local_context_size"`
 	RerankTopK            int     `json:"rerank_top_k"`
 	ContextBudgetTokens   int     `json:"context_budget_tokens"`
 	DiversityLambda       float64 `json:"diversity_lambda"`
 	BudgetHeadroomPct     float64 `json:"budget_headroom_pct"`
 	PerMsgDelimiterTokens int     `json:"per_msg_delimiter_tokens"`
+}
+
+func (e *EngineConfig) UnmarshalJSON(data []byte) error {
+	type plain EngineConfig
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded plain
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	required := []string{
+		"edge_threshold", "score_floor", "z_score_threshold",
+		"min_batch_stddev", "local_context_size", "rerank_top_k",
+		"context_budget_tokens", "diversity_lambda",
+		"budget_headroom_pct", "per_msg_delimiter_tokens",
+	}
+	for _, key := range required {
+		if _, ok := fields[key]; !ok {
+			return fmt.Errorf("engine config missing required field %q", key)
+		}
+	}
+	*e = EngineConfig(decoded)
+	return e.Validate()
+}
+
+func (e EngineConfig) Validate() error {
+	if e.EdgeThreshold < 0 ||
+		e.ScoreFloor < 0 ||
+		e.ZScoreThreshold < 0 || e.MinBatchStdDev < 0 ||
+		e.LocalContextSize <= 0 || e.RerankTopK <= 0 ||
+		e.ContextBudgetTokens < 0 ||
+		e.DiversityLambda < 0 || e.DiversityLambda > 1 ||
+		e.BudgetHeadroomPct < 0 || e.BudgetHeadroomPct > 1 ||
+		e.LossRatio < 0 || e.LossRatio > 1 ||
+		e.PerMsgDelimiterTokens < 0 {
+		return fmt.Errorf("engine config: Local Context size and top-K must be positive; other values cannot be negative; lambda, headroom, and loss_ratio must be in [0,1]")
+	}
+	return nil
 }
 
 // GetUserName returns the configured display name. Priority:
@@ -64,6 +120,9 @@ type ProviderConfig struct {
 	Model   string `json:"model"`
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key,omitempty"`
+	// Options carries provider-specific transport config (e.g. GCP
+	// project/location for vertex). Passed through to core.ProviderConfig.
+	Options map[string]string `json:"options,omitempty"`
 }
 
 // ToCore converts to a core.ProviderConfig, resolving the API key
@@ -80,6 +139,7 @@ func (p ProviderConfig) ToCore() core.ProviderConfig {
 		Model:   p.Model,
 		BaseURL: p.BaseURL,
 		APIKey:  apiKey,
+		Options: p.Options,
 	}
 }
 
@@ -133,8 +193,17 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	if err := json.Unmarshal(data, &cfg.Settings); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg.Settings); err != nil {
 		return nil, err
+	}
+	var topLevel map[string]json.RawMessage
+	if err := json.Unmarshal(data, &topLevel); err != nil {
+		return nil, err
+	}
+	if _, ok := topLevel["engine"]; !ok {
+		return nil, fmt.Errorf("settings missing required field %q", "engine")
 	}
 
 	return cfg, nil
@@ -151,7 +220,7 @@ func (c *Config) Save() error {
 
 func defaultSettings() Settings {
 	s := Settings{
-		Providers:   make(map[string]ProviderConfig),
+		Providers: make(map[string]ProviderConfig),
 		Permissions: map[string]string{
 			"FileRead":  "allow",
 			"Glob":      "allow",
@@ -163,6 +232,18 @@ func defaultSettings() Settings {
 			"Bash":      "ask",
 		},
 		Preferences: make(map[string]string),
+		Engine: EngineConfig{
+			EdgeThreshold:         0.60,
+			ScoreFloor:            0.3,
+			ZScoreThreshold:       0,
+			MinBatchStdDev:        0.05,
+			LocalContextSize:      10,
+			RerankTopK:            64,
+			ContextBudgetTokens:   150000,
+			DiversityLambda:       0.7,
+			BudgetHeadroomPct:     0.90,
+			PerMsgDelimiterTokens: 5,
+		},
 	}
 	// Auto-detect local providers on first run
 	probeProviders(&s)

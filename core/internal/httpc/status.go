@@ -2,10 +2,34 @@ package httpc
 
 import (
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 
 	"github.com/elijahmontenegro/grudge/core"
 )
+
+// statusBodyLimit bounds how much of an error response body is captured into
+// a StatusError — enough to diagnose (provider error messages are short),
+// not enough to blow up logs on a huge error page.
+const statusBodyLimit = 8 << 10 // 8 KiB
+
+// NewStatusError builds a StatusError from a non-2xx streaming response,
+// capturing up to statusBodyLimit of the body for diagnostics. Streaming
+// adapters previously constructed StatusError{Provider, StatusCode} directly
+// and dropped the body entirely, so a streaming 429/5xx lost its message;
+// this helper unifies that path with the non-streaming one (which already
+// reads the body via DoJSON). It does not close resp.Body — the caller's
+// defer owns that.
+func NewStatusError(provider string, resp *http.Response) *StatusError {
+	e := &StatusError{Provider: provider, StatusCode: resp.StatusCode}
+	if resp.Body != nil {
+		if b, err := io.ReadAll(io.LimitReader(resp.Body, statusBodyLimit)); err == nil {
+			e.Body = strings.TrimSpace(string(b))
+		}
+	}
+	return e
+}
 
 // StatusError is the typed error returned when an upstream provider
 // responds with a non-2xx status. Adapters wrap their non-2xx

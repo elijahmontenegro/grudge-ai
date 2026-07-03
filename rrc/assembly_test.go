@@ -1,12 +1,15 @@
 package rrc
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
 
-// hasTextBlock guards dynamical Radius reachback (Phase B.2). The
+// hasTextBlock guards Local Context anchor reachback. The
 // invariant: only externalized user / assistant text counts as a
 // conversational anchor. Tool plumbing and internal thinking do not.
 // A break here lets a deep tool loop hide the most-recent real reply.
@@ -64,5 +67,104 @@ func TestHasTextBlock_MixedPrefersText(t *testing.T) {
 	}
 	if !hasTextBlock(blocks) {
 		t.Error("thinking+text content should qualify via the text block")
+	}
+}
+
+func TestAssembleMissingExactCounterpartFails(t *testing.T) {
+	scorer := newMockScorer()
+	oracle := newMockChunkOracle()
+	call := storedCall("call", "t1", "op", 0)
+	anchor := makeMsg("q", 1, "t1", "current")
+	oracle.Register(call.Id, TextFromBlocks(call.Content))
+	oracle.Register(anchor.Id, TextFromBlocks(anchor.Content))
+	scorer.SetScore(TextFromBlocks(call.Content), strings.TrimSpace(TextFromBlocks(anchor.Content)), 0.9)
+	engine := testEngine(scorer, oracle)
+
+	_, err := engine.Assemble(context.Background(), AssembleRequest{
+		SerializedLocalContext: testSerializedLocalContext(anchor), Anchor: anchor,
+		Corpus: []*pb.Message{call, anchor}, LocalContext: []*pb.Message{anchor},
+		Scope: pb.SelectionScope_SELECTION_SCOPE_THREAD, ThreadID: "t1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires exact tool result") {
+		t.Fatalf("expected integrity error, got %v", err)
+	}
+}
+
+func TestAssembleShedsSelectedProtocolClosureAtomically(t *testing.T) {
+	scorer := newMockScorer()
+	oracle := newMockChunkOracle()
+	call := storedCall("call", "t1", "op", 0)
+	result := storedResult("result", "t1", "op", 1)
+	anchor := makeMsg("q", 2, "t1", "current")
+	for _, message := range []*pb.Message{call, result, anchor} {
+		oracle.Register(message.Id, TextFromBlocks(message.Content))
+	}
+	scorer.SetScore(TextFromBlocks(call.Content), strings.TrimSpace(TextFromBlocks(anchor.Content)), 0.9)
+	scorer.SetScore(TextFromBlocks(result.Content), strings.TrimSpace(TextFromBlocks(anchor.Content)), 0.8)
+	engine := testEngine(scorer, oracle)
+	localTokens := chunk.EstimateTokens(TextFromBlocks(anchor.Content))
+
+	assembled, err := engine.Assemble(context.Background(), AssembleRequest{
+		SerializedLocalContext: testSerializedLocalContext(anchor), Anchor: anchor,
+		Corpus: []*pb.Message{call, result, anchor}, LocalContext: []*pb.Message{anchor},
+		Scope: pb.SelectionScope_SELECTION_SCOPE_THREAD, ThreadID: "t1",
+		Budget: localTokens + 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range assembled.Wire {
+		for _, block := range message.Content {
+			if block.GetToolCall() != nil || block.GetToolResult() != nil {
+				t.Fatal("budgeting emitted a partial selected protocol group")
+			}
+		}
+	}
+	if len(assembled.Shed) == 0 {
+		t.Fatal("expected selected protocol group to be shed")
+	}
+}
+
+func TestDeliveryGroupsPreserveStoredChronology(t *testing.T) {
+	call := storedCall("call", "t1", "op", 0)
+	middle := makeMsg("middle", 1, "t1", "between call and result")
+	result := storedResult("result", "t1", "op", 2)
+	index := NewProtocolIndex([]*pb.Message{call, middle, result})
+
+	callGroup, err := index.CloseGroup(call, 0.9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	middleGroup, err := index.CloseGroup(middle, 0.8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := groupsToWire([]DeliveryGroup{callGroup, middleGroup}, nil)
+	if len(wire) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(wire))
+	}
+	if got := strings.TrimSpace(TextFromBlocks(wire[1].Content)); got != "between call and result" {
+		t.Fatalf("middle message moved out of chronology: %q", got)
+	}
+}
+
+func TestEquivalentProtocolClosuresShedTogether(t *testing.T) {
+	call := storedCall("call", "t1", "op", 0)
+	result := storedResult("result", "t1", "op", 1)
+	index := NewProtocolIndex([]*pb.Message{call, result})
+	callGroup, err := index.CloseGroup(call, 0.9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultGroup, err := index.CloseGroup(result, 0.8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := mergeDeliveryGroups([]DeliveryGroup{callGroup, resultGroup})
+	if len(groups) != 1 {
+		t.Fatalf("expected one closure group, got %d", len(groups))
+	}
+	if strings.Join(groups[0].RootIDs, ",") != "call,result" {
+		t.Fatalf("unexpected roots: %v", groups[0].RootIDs)
 	}
 }

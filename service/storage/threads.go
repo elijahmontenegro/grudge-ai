@@ -163,48 +163,6 @@ func (d *DB) UpdateThreadName(id, name string) error {
 	return err
 }
 
-// BackfillThreadNames names any threads still called "New Thread" using their
-// first user message content. Called once at startup.
-func (d *DB) BackfillThreadNames() int {
-	rows, err := d.Query(`SELECT id FROM threads WHERE name = 'New Thread' OR name = '' OR name IS NULL`)
-	if err != nil {
-		return 0
-	}
-	defer rows.Close()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err == nil {
-			ids = append(ids, id)
-		}
-	}
-
-	count := 0
-	for _, id := range ids {
-		msgs, err := d.ListMessages(id, 1, 0)
-		if err != nil || len(msgs) == 0 {
-			continue
-		}
-		// Extract text from first message's content blocks
-		var text string
-		for _, block := range msgs[0].Content {
-			if t := block.GetText(); t != nil {
-				text = t.Text
-				break
-			}
-		}
-		if text == "" {
-			continue
-		}
-		name := TruncateThreadName(text)
-		if d.UpdateThreadName(id, name) == nil {
-			count++
-		}
-	}
-	return count
-}
-
 // TruncateThreadName truncates a thread name to ~60 chars at a word boundary.
 func TruncateThreadName(name string) string {
 	if len(name) <= 60 {

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"strings"
 	"testing"
 
 	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -102,6 +104,12 @@ func (o *mockChunkOracle) NearestChunks(_ context.Context, _ string, k int, _ Pr
 			RetrievalScore: o.retrieval[t],
 		})
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].RetrievalScore != out[j].RetrievalScore {
+			return out[i].RetrievalScore > out[j].RetrievalScore
+		}
+		return out[i].MessageID < out[j].MessageID
+	})
 	if k > 0 && len(out) > k {
 		out = out[:k]
 	}
@@ -149,10 +157,26 @@ func addMsg(o *mockChunkOracle, id string, position int64, threadID string, text
 // adaptive gates have their own dedicated test suite further down.
 func testEngine(mc *mockScorer, o *mockChunkOracle) *Engine {
 	cfg := DefaultConfig()
+	// Legacy fixtures assert accept/reject at a 0.5 similarity boundary.
+	// Post-A4 acceptance is calibrated, so install a bootstrap calibrator
+	// centered at 0.5 (Predict(0.5,0)=0.5=LossRatio → the boundary) with the
+	// mass term off, reproducing the old flat-0.5 semantics through the new
+	// path. steep=40 makes it effectively a hard step so 0.5-vs-0.49 tests
+	// stay crisp.
+	cfg.Calibrator = calibrate.Bootstrap(0.5, 40.0, 0)
 	cfg.EdgeThreshold = 0.5
 	cfg.ZScoreThreshold = 0
 	cfg.MinBatchStdDev = 0
 	return NewEngine(cfg, mc, WithChunkOracle(o))
+}
+
+func testSerializedLocalContext(anchor *pb.Message) *SerializedLocalContext {
+	return &SerializedLocalContext{
+		EventID:     "sel-" + anchor.Id,
+		Fingerprint: "test-" + anchor.Id,
+		MessageIDs:  []string{anchor.Id},
+		Chunks:      []SerializedLocalContextChunk{{Index: 0, Text: strings.TrimSpace(TextFromBlocks(anchor.Content))}},
+	}
 }
 
 // --- Tests ---
@@ -539,25 +563,24 @@ func TestDAG_DualIndex(t *testing.T) {
 func TestScoreCache(t *testing.T) {
 	sc := newScoreCache()
 
-	// Score cache is chunk-granular: key is (fromMsgID, fromChunkIdx,
-	// toMsgID, toChunkIdx). Messages with a single chunk use index 0.
-	sc.set("a", 0, "b", 0, 0.75)
+	// Score cache is keyed by exact Local Context serialization and candidate chunk.
+	sc.setLocalContext("context-a", 0, "candidate-b", 0, 0.75)
 
-	score, ok := sc.get("a", 0, "b", 0)
+	score, ok := sc.getLocalContext("context-a", 0, "candidate-b", 0)
 	if !ok || score != 0.75 {
 		t.Fatalf("expected 0.75, got %f (ok=%v)", score, ok)
 	}
 
-	if _, ok := sc.get("b", 0, "a", 0); ok {
-		t.Fatal("reverse direction should not be cached")
+	if _, ok := sc.getLocalContext("context-b", 0, "candidate-b", 0); ok {
+		t.Fatal("different Local Context fingerprint should not be cached")
 	}
 
-	if _, ok := sc.get("x", 0, "y", 0); ok {
-		t.Fatal("unknown pair should return false")
+	if _, ok := sc.getLocalContext("context-a", 0, "candidate-x", 0); ok {
+		t.Fatal("unknown candidate should return false")
 	}
 
-	if _, ok := sc.get("a", 1, "b", 0); ok {
-		t.Fatal("different chunk index should not be cached")
+	if _, ok := sc.getLocalContext("context-a", 1, "candidate-b", 0); ok {
+		t.Fatal("different Local Context chunk should not be cached")
 	}
 }
 
@@ -623,7 +646,7 @@ func TestOnMessage_ScoreCachePopulated(t *testing.T) {
 	// chunk at index 0). The reranker score is cached even when no
 	// edge was emitted — future OnMessage calls touching this pair
 	// skip the reranker entirely.
-	score, ok := e.scores.get("m0", 0, "m1", 0)
+	score, ok := e.scores.getLocalContext("fixture-m1", 0, "m0", 0)
 	if !ok {
 		t.Fatal("score should be cached")
 	}
@@ -671,11 +694,14 @@ func TestOnMessage_SkipsSelf(t *testing.T) {
 // distribution directly.
 func threeGateConfig() EngineConfig {
 	cfg := DefaultConfig()
-	// Pin EdgeThreshold=0.5 (legacy test fixtures use 0.1/0.4/0.5/0.6
-	// CE values calibrated to that boundary) and enable z-gate +
-	// stddev-gate for these legacy three-gate behavior tests. The
-	// production default (0.60 / z-off) is decoupled from these
-	// test cases by setting explicit values here.
+	// Bootstrap calibrator centered at 0.5 with the mass term off, so the
+	// legacy fixtures' 0.1/0.4/0.5/0.6 CE values map to accept/reject at the
+	// same boundary through A4's calibrated path (Predict(0.5,0)=0.5). steep
+	// makes it a near-hard step for crisp boundary assertions. MinBatchStdDev
+	// (Gate 3) is retained — it's orthogonal to acceptance and survived A4.
+	// The z-score gate (Gate 2) was subsumed by calibration and removed;
+	// Gate-2-specific tests are updated to the calibrated model.
+	cfg.Calibrator = calibrate.Bootstrap(0.5, 40.0, 0)
 	cfg.EdgeThreshold = 0.5
 	cfg.ZScoreThreshold = 1.0
 	cfg.MinBatchStdDev = 0.05
@@ -732,6 +758,11 @@ func TestOnMessage_CrossThreadGatesUniformly(t *testing.T) {
 	mc.SetScore("cross", "q", 0.6)
 	mc.SetScore("same", "q", 0.6)
 	o := newMockChunkOracle()
+	o.SetRetrievalScore("a", 0.9)
+	o.SetRetrievalScore("b", 0.8)
+	o.SetRetrievalScore("c", 0.7)
+	o.SetRetrievalScore("d", 0.6)
+	o.SetRetrievalScore("e", 0.5)
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
 	mCross := addMsg(o, "mCross", 0, "tOther", "cross")
@@ -766,12 +797,14 @@ func TestOnMessage_CrossThreadGatesUniformly(t *testing.T) {
 	}
 }
 
-func TestOnMessage_Gate2_ZScoreBlocksCluster(t *testing.T) {
-	// Three priors all above absolute threshold. Two form a cluster,
-	// one is a clear outlier. Gate 2 keeps the outlier only — the
-	// cluster z-scores sit below ZScoreThreshold.
-	//   CE=0.55  (x2, cluster)
-	//   CE=0.70  (outlier)
+func TestOnMessage_ZScoreGateRemoved_ClusterAllAccepted(t *testing.T) {
+	// A4 removed the z-score "relative standout" gate: it was a statistical
+	// patch for a flat threshold's brittleness, and calibrated probability
+	// subsumes that job. So a cluster of candidates that all clear the
+	// calibrated acceptance floor now ALL form edges — the relative-standout
+	// suppression is gone by design. (Before A4 this kept only the 0.70
+	// outlier; the assertion is inverted to document the new contract.)
+	//   CE=0.55 (x2, cluster) + CE=0.70 (outlier) — all clear the 0.5 floor.
 	mc := newMockScorer()
 	mc.SetScore("a", "q", 0.55)
 	mc.SetScore("b", "q", 0.55)
@@ -788,15 +821,8 @@ func TestOnMessage_Gate2_ZScoreBlocksCluster(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Batch [0.55, 0.55, 0.70]: mean=0.60, stddev=sqrt(0.005)=0.0707.
-	// Gate 3: 0.0707 > 0.05 — no fire.
-	// Gate 1: all >= 0.5 — all pass.
-	// Gate 2: z(0.55) = -0.707 < 1.0 — skipped. z(0.70) = 1.414 — passes.
-	if len(edges) != 1 {
-		t.Fatalf("expected 1 edge (outlier only, cluster blocked by gate 2), got %d", len(edges))
-	}
-	if edges[0].FromMessageId != "m2" {
-		t.Fatalf("expected outlier m2 to emit edge, got %s", edges[0].FromMessageId)
+	if len(edges) != 3 {
+		t.Fatalf("z-gate removed: all 3 cluster members clearing the floor should form edges, got %d", len(edges))
 	}
 }
 
@@ -858,10 +884,11 @@ func TestOnMessage_Gate3_BatchIndiscriminate(t *testing.T) {
 }
 
 func TestOnMessage_Gate3_Disabled(t *testing.T) {
-	// MinBatchStdDev=0 disables gate 3 — tight cluster still has to
-	// pass gates 1 and 2. With all three so close, z-scores all sit
-	// below 1.0 except the max. Expect exactly 1 edge (top of
-	// cluster clears gate 2 with z ≈ 1.22).
+	// MinBatchStdDev=0 disables gate 3 (the batch-flatness kill, which
+	// survived A4 — it's orthogonal to acceptance). With gate 3 off, a tight
+	// cluster that all clears the calibrated floor forms edges for every
+	// member — there is no longer a z-score gate to keep only the top. (Pre-
+	// A4 this expected 1; post-A4 the z-gate is gone, so all 3 form edges.)
 	cfg := threeGateConfig()
 	cfg.MinBatchStdDev = 0
 	mc := newMockScorer()
@@ -880,11 +907,8 @@ func TestOnMessage_Gate3_Disabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(edges) != 1 {
-		t.Fatalf("expected 1 edge (top of cluster clears gate 2), got %d", len(edges))
-	}
-	if edges[0].FromMessageId != "m2" {
-		t.Fatalf("top-of-cluster should be m2, got %s", edges[0].FromMessageId)
+	if len(edges) != 3 {
+		t.Fatalf("gate 3 off + z-gate removed: all 3 clearing the floor should form edges, got %d", len(edges))
 	}
 }
 
@@ -979,7 +1003,7 @@ func TestOnMessage_CachedScoresCountAsRescored(t *testing.T) {
 
 	// Pre-seed the score cache for the m0→q pair. The engine should
 	// see the cached value instead of calling Rerank on this pair.
-	e.scores.set("m0", 0, "q", 0, 0.8)
+	e.scores.setLocalContext("fixture-q", 0, "m0", 0, 0.8)
 
 	_, _, err := e.OnMessage(context.Background(), q, []*pb.Message{m0, m1})
 	if err != nil {
@@ -1264,5 +1288,3 @@ func TestApplyMMR_LambdaExtremesNoOp(t *testing.T) {
 		}
 	}
 }
-
-

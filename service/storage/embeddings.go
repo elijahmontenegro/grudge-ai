@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"database/sql"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 )
@@ -139,44 +141,6 @@ func (d *DB) GetChunkEmbeddingsForMessages(messageIDs []string, modelID string) 
 	return out, rows.Err()
 }
 
-// ChunksMissingEmbeddings returns the chunks that have no vector
-// stored under the given model. Drives startup backfill and catch-up
-// after model swaps. Resumable.
-type ChunkMissing struct {
-	MessageID  string
-	ChunkIndex int
-	Text       string
-}
-
-func (d *DB) ChunksMissingEmbeddings(modelID string) ([]ChunkMissing, error) {
-	rows, err := d.Query(`
-		SELECT c.message_id, c.chunk_index, c.text
-		FROM chunks c
-		LEFT JOIN chunk_vectors cv
-		  ON cv.message_id = c.message_id
-		 AND cv.chunk_index = c.chunk_index
-		 AND cv.model_id = ?
-		WHERE cv.message_id IS NULL
-		ORDER BY c.message_id, c.chunk_index
-	`, modelID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []ChunkMissing
-	for rows.Next() {
-		var cm ChunkMissing
-		if err := rows.Scan(&cm.MessageID, &cm.ChunkIndex, &cm.Text); err != nil {
-			return nil, err
-		}
-		if cm.Text == "" {
-			continue
-		}
-		out = append(out, cm)
-	}
-	return out, rows.Err()
-}
-
 // AllChunkEmbeddingsForModel loads every (message_id, chunk_index,
 // vector) under one embedder. Used by user-facing search features.
 func (d *DB) AllChunkEmbeddingsForModel(modelID string) ([]ChunkEmbedding, error) {
@@ -207,7 +171,7 @@ func (d *DB) AllChunkEmbeddingsForModel(modelID string) ([]ChunkEmbedding, error
 // for additional aux-column filters (compiled by the search package's
 // predicate compiler) — empty means no extra filter beyond model_id.
 //
-// model_id is a vec0 partition key (post-migrationV6) so `WHERE
+// model_id is a vec0 partition key so `WHERE
 // model_id = ?` is native — the index partitions by it and the KNN
 // runs only within the chosen model's vectors. Aux columns
 // (+message_id, +chunk_index, +thread_id, +role) can't appear in
@@ -305,4 +269,81 @@ func decodeVector(buf []byte) []float32 {
 		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(buf[i*4:]))
 	}
 	return vec
+}
+
+// EnsureEmbeddingDim reconciles the vector cache to the configured
+// embedder's native dimension. Callers pass the probed dim (from a live
+// embed of a canary string) and the model id, so storage stays free of any
+// core/embedder dependency. embedding_meta is the single source of truth
+// for the current dim.
+//
+//   - First run (no meta row) or dim unchanged: upsert the meta row, done.
+//   - Dim changed: drop and recreate chunk_vectors (+ rowids + trigger) at
+//     the new width via chunkVectorsDDL, in one transaction, then upsert.
+//
+// The drop touches only the derived vector cache; chunks/messages/threads/
+// scores/edges are untouched (the "vector cache is rebuildable from chunks"
+// invariant). After a rebuild the cache is empty, so the caller's normal
+// backfill (ChunksMissingEmbeddings + BackfillEmbeddings) re-embeds the
+// whole corpus under the new dim. Idempotent on reboot: unchanged dim is a
+// no-op and backfill finds nothing missing.
+func (d *DB) EnsureEmbeddingDim(dim int, modelID string) error {
+	if dim <= 0 {
+		return fmt.Errorf("EnsureEmbeddingDim: non-positive dim %d", dim)
+	}
+
+	var storedDim int
+	err := d.QueryRow(`SELECT dim FROM embedding_meta WHERE id = 1`).Scan(&storedDim)
+	if errors.Is(err, sql.ErrNoRows) {
+		// First run — no meta row yet. The bootstrap chunk_vectors is at
+		// defaultEmbeddingDim; if the probed dim differs we must still
+		// rebuild, so fall through to the dim-change path rather than just
+		// recording. Treat "no row" as stored == defaultEmbeddingDim.
+		storedDim = defaultEmbeddingDim
+	} else if err != nil {
+		return fmt.Errorf("read embedding_meta: %w", err)
+	}
+
+	if storedDim == dim {
+		return d.upsertEmbeddingMeta(dim, modelID)
+	}
+
+	// Dimension changed: rebuild the vector cache at the new width.
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, stmt := range []string{
+		`DROP TRIGGER IF EXISTS trg_cv_cascade_chunks`,
+		`DROP TABLE IF EXISTS chunk_vectors`,
+		`DROP TABLE IF EXISTS chunk_vector_rowids`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return fmt.Errorf("drop vector cache: %w", err)
+		}
+	}
+	if _, err := tx.Exec(chunkVectorsDDL(dim)); err != nil {
+		return fmt.Errorf("recreate vector cache at dim %d: %w", dim, err)
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO embedding_meta (id, dim, model_id, updated_at)
+		 VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(id) DO UPDATE SET dim = excluded.dim, model_id = excluded.model_id, updated_at = CURRENT_TIMESTAMP`,
+		dim, modelID,
+	); err != nil {
+		return fmt.Errorf("upsert embedding_meta: %w", err)
+	}
+	return tx.Commit()
+}
+
+func (d *DB) upsertEmbeddingMeta(dim int, modelID string) error {
+	_, err := d.Exec(
+		`INSERT INTO embedding_meta (id, dim, model_id, updated_at)
+		 VALUES (1, ?, ?, CURRENT_TIMESTAMP)
+		 ON CONFLICT(id) DO UPDATE SET dim = excluded.dim, model_id = excluded.model_id, updated_at = CURRENT_TIMESTAMP`,
+		dim, modelID,
+	)
+	return err
 }

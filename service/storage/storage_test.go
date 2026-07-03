@@ -322,40 +322,6 @@ func TestDeleteEdgesForThread(t *testing.T) {
 	}
 }
 
-// --- Backfill test ---
-
-func TestBackfillThreadNames(t *testing.T) {
-	db := testDB(t)
-
-	// Thread with default name
-	db.CreateThread(&pb.Thread{Id: "t1", Name: "New Thread", CreatedAt: timestamppb.Now()})
-	// Thread with real name
-	db.CreateThread(&pb.Thread{Id: "t2", Name: "My Real Thread", CreatedAt: timestamppb.Now()})
-
-	// Add a message to t1
-	db.InsertMessage(&pb.Message{
-		Id: "m1", ThreadId: "t1", Role: pb.Role_ROLE_USER,
-		Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: "What is quantum computing?"}}}},
-		Position: 0, CreatedAt: timestamppb.Now(),
-	}, nil)
-
-	count := db.BackfillThreadNames()
-	if count != 1 {
-		t.Fatalf("expected 1 backfilled, got %d", count)
-	}
-
-	got, _ := db.GetThread("t1")
-	if got.Name != "What is quantum computing?" {
-		t.Fatalf("expected backfilled name, got %q", got.Name)
-	}
-
-	// t2 should be unchanged
-	got2, _ := db.GetThread("t2")
-	if got2.Name != "My Real Thread" {
-		t.Fatalf("named thread should be unchanged, got %q", got2.Name)
-	}
-}
-
 // --- DB creation test ---
 
 func TestOpen_CreatesDB(t *testing.T) {

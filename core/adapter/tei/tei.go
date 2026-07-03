@@ -5,32 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
-	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 	"github.com/elijahmontenegro/grudge/core/httpc/retry"
+	"github.com/elijahmontenegro/grudge/core/internal/httpc"
 )
-
-// teiRetryPolicy is the retry shape for a single TEI HTTP call.
-// Tighter than the default because TEI is a local service — a real
-// wedge won't fix itself within seconds, but a transient slow batch
-// or a just-restarted container (healthcheck kicked in) will. The
-// 120s per-attempt ceiling (via httpc.TimeoutTEI) × 3 attempts gives
-// a ~6-minute window that accommodates one full restart-and-warmup
-// cycle; beyond that the error propagates and RRC pauses the round
-// per spec.
-func teiRetryPolicy() retry.Policy {
-	return retry.Policy{
-		MaxAttempts: 3,
-		BaseDelay:   1 * time.Second,
-		MaxDelay:    10 * time.Second,
-		Multiplier:  3.0,
-		Jitter:      0.25,
-	}
-}
 
 // Config for the TEI (Hugging Face Text Embeddings Inference) provider.
 //
@@ -63,7 +43,6 @@ func New(cfg Config) any {
 		client: httpc.New(httpc.TimeoutTEI, nil),
 	}
 }
-
 
 func (p *provider) Embedder(_ string) (core.Embedder, error) {
 	return &embedder{
@@ -127,7 +106,7 @@ func (e *embedder) embed(ctx context.Context, texts []string) ([][]float32, erro
 	}
 
 	var resp [][]float32
-	err = retry.Do(ctx, teiRetryPolicy(), logRetryEvent("tei embed"), func(ctx context.Context) error {
+	err = retry.Do(ctx, retry.LocalServicePolicy(), retry.LogRetryEvent("tei embed"), func(ctx context.Context) error {
 		httpReq, err := http.NewRequest("POST", e.baseURL+"/embed", bytes.NewReader(body))
 		if err != nil {
 			return err
@@ -150,27 +129,6 @@ func (e *embedder) embed(ctx context.Context, texts []string) ([][]float32, erro
 		return nil, fmt.Errorf("%w: tei returned %d embeddings for %d inputs", core.ErrProviderUnavailable, len(resp), len(texts))
 	}
 	return resp, nil
-}
-
-// logRetryEvent produces a retry.Do event handler that surfaces
-// TEI retries into the server log. The standard [Retry] prefix lets
-// operators grep a single stream for transient-infrastructure events
-// across all providers. Only retry events (Err != nil, !Final) and
-// terminal failure events are logged — successes are silent to keep
-// log volume sane under healthy load.
-func logRetryEvent(op string) func(retry.Event) {
-	return func(e retry.Event) {
-		if e.Err == nil {
-			return
-		}
-		if e.Final {
-			log.Printf("[Retry] %s exhausted after attempt %d/%d: %v",
-				op, e.Attempt, e.MaxAttempts, e.Err)
-			return
-		}
-		log.Printf("[Retry] %s attempt %d/%d failed: %v — next attempt in %s",
-			op, e.Attempt, e.MaxAttempts, e.Err, e.NextDelay.Round(100*time.Millisecond))
-	}
 }
 
 // --- Scorer (reranker) ---
@@ -249,7 +207,7 @@ func (s *scorer) scoreOnce(ctx context.Context, query string, slice []string, ou
 	if err != nil {
 		return err
 	}
-	return retry.Do(ctx, teiRetryPolicy(), logRetryEvent("tei rerank"), func(ctx context.Context) error {
+	return retry.Do(ctx, retry.LocalServicePolicy(), retry.LogRetryEvent("tei rerank"), func(ctx context.Context) error {
 		httpReq, err := http.NewRequest("POST", s.baseURL+"/rerank", bytes.NewReader(body))
 		if err != nil {
 			return err
@@ -276,4 +234,3 @@ func (s *scorer) scoreOnce(ctx context.Context, query string, slice []string, ou
 		return nil
 	})
 }
-
