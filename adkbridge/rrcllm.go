@@ -443,15 +443,21 @@ func (r *RRCLLM) tryStream(ctx context.Context, req *llmv1.CompletionRequest, yi
 			}
 		}
 		if thinking := chunk.GetThinking(); thinking != nil {
-			response.Content = &genai.Content{Role: "model", Parts: []*genai.Part{{Text: thinking.Text, Thought: true}}}
-			if r.OnStream != nil {
+			response.Content = &genai.Content{Role: "model", Parts: []*genai.Part{{
+				Text: thinking.Text, Thought: true, ThoughtSignature: thinking.Signature,
+			}}}
+			// A signature-only terminator (e.g. Anthropic's zero-text
+			// chunk closing a signed thinking block) carries no new
+			// text to show — skip the callback so it doesn't fire an
+			// empty delta.
+			if r.OnStream != nil && thinking.Text != "" {
 				r.OnStream("", thinking.Text, false)
 			}
 		}
 		if call := chunk.GetToolCall(); call != nil {
 			part := &genai.Part{FunctionCall: &genai.FunctionCall{
 				ID: call.Id, Name: call.Name, Args: parseToolArgs(call.Arguments),
-			}}
+			}, ThoughtSignature: call.Signature}
 			pendingCalls = append(pendingCalls, part)
 			response.Content = &genai.Content{Role: "model", Parts: []*genai.Part{part}}
 		}

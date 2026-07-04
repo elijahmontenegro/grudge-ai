@@ -68,11 +68,26 @@ type completer struct {
 }
 
 type messagesRequest struct {
-	Model     string       `json:"model"`
-	Messages  []apiMessage `json:"messages"`
-	MaxTokens int32        `json:"max_tokens"`
-	System    string       `json:"system,omitempty"`
-	Stream    bool         `json:"stream"`
+	Model      string         `json:"model"`
+	Messages   []apiMessage   `json:"messages"`
+	MaxTokens  int32          `json:"max_tokens"`
+	System     string         `json:"system,omitempty"`
+	Stream     bool           `json:"stream"`
+	Tools      []apiTool      `json:"tools,omitempty"`
+	ToolChoice *apiToolChoice `json:"tool_choice,omitempty"`
+}
+
+type apiTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// apiToolChoice mirrors Anthropic's tool_choice union: Type selects
+// "auto" | "any" | "tool" | "none"; Name is consulted only for "tool".
+type apiToolChoice struct {
+	Type string `json:"type"`
+	Name string `json:"name,omitempty"`
 }
 
 type apiMessage struct {
@@ -81,20 +96,33 @@ type apiMessage struct {
 }
 
 type apiContentPart struct {
-	Type    string `json:"type"`
-	Text    string `json:"text,omitempty"`
-	ID      string `json:"id,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Input   string `json:"input,omitempty"`
-	ToolID  string `json:"tool_use_id,omitempty"`
-	Content string `json:"content,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// Thinking is the reasoning text on a "thinking" part — Anthropic
+	// nests it here, not in Text.
+	Thinking string `json:"thinking,omitempty"`
+	// Signature binds a thinking block to its exact text; Anthropic
+	// rejects a modified pairing on replay. Empty means unsigned.
+	Signature string `json:"signature,omitempty"`
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	// Input is tool_use's arguments. Anthropic requires a JSON OBJECT
+	// here, not a string — encode always normalizes to a non-empty
+	// RawMessage first (never emit "input":null: a nil RawMessage
+	// marshals as null, which Anthropic rejects, and omitempty on a
+	// non-nil-but-empty RawMessage would emit invalid JSON).
+	Input   json.RawMessage `json:"input,omitempty"`
+	ToolID  string          `json:"tool_use_id,omitempty"`
+	Content string          `json:"content,omitempty"`
+	IsError bool            `json:"is_error,omitempty"`
 }
 
 type messagesResponse struct {
-	ID      string           `json:"id"`
-	Content []apiContentPart `json:"content"`
-	Model   string           `json:"model"`
-	Usage   apiUsage         `json:"usage"`
+	ID         string           `json:"id"`
+	Content    []apiContentPart `json:"content"`
+	Model      string           `json:"model"`
+	Usage      apiUsage         `json:"usage"`
+	StopReason string           `json:"stop_reason"`
 }
 
 // apiUsage decodes Anthropic's usage object. input_tokens EXCLUDES
@@ -116,7 +144,10 @@ func (u apiUsage) promptTotal() int32 {
 }
 
 func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
-	apiReq := toAPIRequest(c.model, req, false)
+	apiReq, err := toAPIRequest(c.model, req, false)
+	if err != nil {
+		return nil, err
+	}
 
 	body, err := json.Marshal(apiReq)
 	if err != nil {
@@ -153,12 +184,17 @@ func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) 
 			PromptTokens:     resp.Usage.promptTotal(),
 			CompletionTokens: resp.Usage.OutputTokens,
 		},
+		FinishReason: normalizeStopReason(resp.StopReason),
 	}, nil
 }
 
 func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
 	return func(yield func(*llmv1.StreamChunk, error) bool) {
-		apiReq := toAPIRequest(c.model, req, true)
+		apiReq, err := toAPIRequest(c.model, req, true)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
 		body, err := json.Marshal(apiReq)
 		if err != nil {
 			yield(nil, err)
@@ -186,6 +222,16 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 
 		scanner := bufio.NewScanner(resp.Body)
 		var promptTokens int32
+		// blocks tracks per-index streaming state between
+		// content_block_start and content_block_stop: a tool_use
+		// block accumulates its input_json_delta fragments (the
+		// object arrives piecewise, like OpenAI's argument
+		// fragmentation); a thinking block accumulates its
+		// signature_delta (arrives once, after the thinking text,
+		// before the block closes). Neither is emitted until its
+		// content_block_stop — the object isn't complete, and the
+		// signature isn't attached, until then.
+		blocks := make(map[int]*anthropicBlockState)
 		for scanner.Scan() {
 			line := scanner.Text()
 			if !strings.HasPrefix(line, "data: ") {
@@ -208,18 +254,73 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 				// message.usage — message_delta carries just the output
 				// side. Hold them for the terminal chunk.
 				promptTokens = event.Message.Usage.promptTotal()
+			case "content_block_start":
+				if event.ContentBlock != nil {
+					blocks[event.Index] = &anthropicBlockState{
+						kind: event.ContentBlock.Type,
+						id:   event.ContentBlock.ID,
+						name: event.ContentBlock.Name,
+					}
+				}
 			case "content_block_delta":
-				if event.Delta.Type == "text_delta" {
+				switch event.Delta.Type {
+				case "text_delta":
 					if !yield(&llmv1.StreamChunk{
 						Delta: &llmv1.StreamChunk_Text{Text: &threadv1.TextContent{Text: event.Delta.Text}},
 					}, nil) {
 						return
 					}
-				} else if event.Delta.Type == "thinking_delta" {
+				case "thinking_delta":
 					if !yield(&llmv1.StreamChunk{
 						Delta: &llmv1.StreamChunk_Thinking{Thinking: &threadv1.ThinkingContent{Text: event.Delta.Thinking}},
 					}, nil) {
 						return
+					}
+				case "input_json_delta":
+					if b := blocks[event.Index]; b != nil {
+						b.args.WriteString(event.Delta.PartialJSON)
+					}
+				case "signature_delta":
+					if b := blocks[event.Index]; b != nil {
+						b.signature = event.Delta.Signature
+					}
+				}
+			case "content_block_stop":
+				b := blocks[event.Index]
+				delete(blocks, event.Index)
+				if b == nil {
+					continue
+				}
+				switch b.kind {
+				case "tool_use":
+					args := b.args.String()
+					if args == "" {
+						args = "{}"
+					}
+					if !yield(&llmv1.StreamChunk{
+						Delta: &llmv1.StreamChunk_ToolCall{ToolCall: &threadv1.ToolCallContent{
+							Id: b.id, Name: b.name, Arguments: args,
+						}},
+					}, nil) {
+						return
+					}
+				case "thinking":
+					// Only a SIGNED thinking block is worth surfacing —
+					// an unsigned one can never be replayed (Anthropic
+					// rejects it), so emitting it would just be text the
+					// runner stores and later drops. The signature
+					// arrives after all the thinking text, so this is a
+					// dedicated zero-text chunk: the runner reads it as
+					// "attach this signature to the block just
+					// accumulated," not as more text to append.
+					if b.signature != "" {
+						if !yield(&llmv1.StreamChunk{
+							Delta: &llmv1.StreamChunk_Thinking{Thinking: &threadv1.ThinkingContent{
+								Signature: []byte(b.signature),
+							}},
+						}, nil) {
+							return
+						}
 					}
 				}
 			case "message_delta":
@@ -235,6 +336,7 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 						PromptTokens:     promptTokens,
 						CompletionTokens: event.Usage.OutputTokens,
 					},
+					FinishReason: normalizeStopReason(event.Delta.StopReason),
 				}, nil)
 				return
 			case "error":
@@ -248,14 +350,33 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 	}
 }
 
+// anthropicBlockState is per-content-block-index streaming state,
+// live between content_block_start and content_block_stop.
+type anthropicBlockState struct {
+	kind      string // "text" | "thinking" | "tool_use"
+	id, name  string
+	args      strings.Builder
+	signature string
+}
+
 type sseEvent struct {
-	Type  string   `json:"type"`
-	Delta sseDelta `json:"delta,omitempty"`
-	Usage apiUsage `json:"usage,omitempty"`
-	Error sseError `json:"error,omitempty"`
+	Type         string           `json:"type"`
+	Index        int              `json:"index"`
+	ContentBlock *sseContentBlock `json:"content_block,omitempty"`
+	Delta        sseDelta         `json:"delta,omitempty"`
+	Usage        apiUsage         `json:"usage,omitempty"`
+	Error        sseError         `json:"error,omitempty"`
 	// Message is populated on message_start events — the prompt-side
 	// usage nests inside it, not at the event's top level.
 	Message sseMessage `json:"message"`
+}
+
+// sseContentBlock is content_block_start's payload — announces a new
+// block's type and (for tool_use) its id/name before any deltas.
+type sseContentBlock struct {
+	Type string `json:"type"` // "text" | "thinking" | "tool_use"
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
 }
 
 type sseMessage struct {
@@ -263,9 +384,17 @@ type sseMessage struct {
 }
 
 type sseDelta struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	Thinking string `json:"thinking,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// Thinking, PartialJSON, and Signature are each populated on a
+	// different delta.type: thinking_delta, input_json_delta, and
+	// signature_delta respectively.
+	Thinking    string `json:"thinking,omitempty"`
+	PartialJSON string `json:"partial_json,omitempty"`
+	Signature   string `json:"signature,omitempty"`
+	// StopReason is populated on message_delta — Anthropic's
+	// terminal-stop vocabulary, mapped by normalizeStopReason.
+	StopReason string `json:"stop_reason,omitempty"`
 }
 
 type sseError struct {
@@ -274,7 +403,7 @@ type sseError struct {
 
 // --- helpers ---
 
-func toAPIRequest(model string, req *llmv1.CompletionRequest, stream bool) messagesRequest {
+func toAPIRequest(model string, req *llmv1.CompletionRequest, stream bool) (messagesRequest, error) {
 	var system string
 	var msgs []apiMessage
 	for _, m := range req.Messages {
@@ -293,12 +422,60 @@ func toAPIRequest(model string, req *llmv1.CompletionRequest, stream bool) messa
 		maxTokens = *req.MaxTokens
 	}
 
+	toolChoice, err := toAPIToolChoice(req.ToolChoice)
+	if err != nil {
+		return messagesRequest{}, err
+	}
+
 	return messagesRequest{
-		Model:     model,
-		Messages:  msgs,
-		MaxTokens: maxTokens,
-		System:    system,
-		Stream:    stream,
+		Model:      model,
+		Messages:   msgs,
+		MaxTokens:  maxTokens,
+		System:     system,
+		Stream:     stream,
+		Tools:      toAPITools(req.Tools),
+		ToolChoice: toolChoice,
+	}, nil
+}
+
+func toAPITools(tools []*llmv1.ToolDeclaration) []apiTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]apiTool, len(tools))
+	for i, t := range tools {
+		schema := json.RawMessage(t.ParametersJson)
+		if len(schema) == 0 {
+			// Anthropic requires an object schema, not an absent one.
+			schema = json.RawMessage(`{"type":"object"}`)
+		}
+		out[i] = apiTool{Name: t.Name, Description: t.Description, InputSchema: schema}
+	}
+	return out
+}
+
+// toAPIToolChoice maps the proto ToolChoice to Anthropic's wire
+// shape. Unset or UNSPECIFIED omits the field — the model decides,
+// Anthropic's own default. NAMED with an empty tool name can't be
+// encoded and is refused rather than silently sent as AUTO.
+func toAPIToolChoice(tc *llmv1.ToolChoice) (*apiToolChoice, error) {
+	if tc == nil || tc.Mode == llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_UNSPECIFIED {
+		return nil, nil
+	}
+	switch tc.Mode {
+	case llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_AUTO:
+		return &apiToolChoice{Type: "auto"}, nil
+	case llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_NONE:
+		return &apiToolChoice{Type: "none"}, nil
+	case llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_REQUIRED:
+		return &apiToolChoice{Type: "any"}, nil
+	case llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_NAMED:
+		if tc.NamedTool == "" {
+			return nil, fmt.Errorf("anthropic: tool_choice NAMED requires a non-empty named_tool")
+		}
+		return &apiToolChoice{Type: "tool", Name: tc.NamedTool}, nil
+	default:
+		return nil, fmt.Errorf("anthropic: unknown tool_choice mode %v", tc.Mode)
 	}
 }
 
@@ -308,10 +485,43 @@ func toAPIContent(blocks []*threadv1.ContentBlock) []apiContentPart {
 		switch v := b.Block.(type) {
 		case *threadv1.ContentBlock_Text:
 			parts = append(parts, apiContentPart{Type: "text", Text: v.Text.Text})
+		case *threadv1.ContentBlock_Thinking:
+			// Anthropic REJECTS a thinking block on replay unless it
+			// carries the exact signature the model issued for that
+			// exact text — never fabricate one for an unsigned block.
+			// A block is replayable only when the model actually
+			// signed it (requires extended thinking enabled on the
+			// request, which this adapter doesn't do yet — dormant
+			// until it does, fixture-tested regardless).
+			//
+			// Pairing: only the CURRENT turn's thinking block must
+			// survive to the next request — it lives in Local Context
+			// via turn_id, which RRC never sheds mid-turn (see
+			// BuildActiveDiscourse in rrc/local_context.go). A signed
+			// thinking block that has aged into deep history and gets
+			// replayed without its neighbors is contract-acceptable:
+			// Anthropic only requires the signed block on the turn
+			// immediately preceding a tool_result, not on every
+			// historical tool loop.
+			if len(v.Thinking.Signature) == 0 {
+				continue
+			}
+			parts = append(parts, apiContentPart{
+				Type:      "thinking",
+				Thinking:  v.Thinking.Text,
+				Signature: string(v.Thinking.Signature),
+			})
 		case *threadv1.ContentBlock_ToolCall:
-			parts = append(parts, apiContentPart{Type: "tool_use", ID: v.ToolCall.Id, Name: v.ToolCall.Name, Input: v.ToolCall.Arguments})
+			args := v.ToolCall.Arguments
+			if args == "" {
+				args = "{}"
+			}
+			parts = append(parts, apiContentPart{Type: "tool_use", ID: v.ToolCall.Id, Name: v.ToolCall.Name, Input: json.RawMessage(args)})
 		case *threadv1.ContentBlock_ToolResult:
-			parts = append(parts, apiContentPart{Type: "tool_result", ToolID: v.ToolResult.ToolCallId, Content: v.ToolResult.Content})
+			parts = append(parts, apiContentPart{
+				Type: "tool_result", ToolID: v.ToolResult.ToolCallId,
+				Content: v.ToolResult.Content, IsError: v.ToolResult.IsError,
+			})
 		}
 	}
 	return parts
@@ -324,10 +534,42 @@ func fromAPIContent(parts []apiContentPart) []*threadv1.ContentBlock {
 		case "text":
 			blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: p.Text}}})
 		case "thinking":
-			blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: p.Text}}})
+			// Anthropic nests thinking text at "thinking", not "text".
+			blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{
+				Text:      p.Thinking,
+				Signature: []byte(p.Signature),
+			}}})
+		case "tool_use":
+			args := string(p.Input)
+			if args == "" {
+				args = "{}"
+			}
+			blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{
+				Id: p.ID, Name: p.Name, Arguments: args,
+			}}})
 		}
 	}
 	return blocks
+}
+
+// normalizeStopReason maps Anthropic's stop_reason vocabulary to the
+// grudge-normalized set (llm.proto's CompletionResponse.finish_reason
+// doc: "stop", "length", "tool_calls", "content_filter"). Unrecognized
+// or empty values pass through raw rather than being silently
+// discarded.
+func normalizeStopReason(reason string) string {
+	switch reason {
+	case "end_turn", "stop_sequence":
+		return "stop"
+	case "max_tokens":
+		return "length"
+	case "tool_use":
+		return "tool_calls"
+	case "refusal":
+		return "content_filter"
+	default:
+		return reason
+	}
 }
 
 func roleStr(r threadv1.Role) string {

@@ -314,8 +314,13 @@ func (x *TextContent) GetText() string {
 }
 
 type ThinkingContent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Text  string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	// Provider signature binding this block's exact text (Anthropic's
+	// base64 signature bytes, or a Gemini thought signature). Empty
+	// means unsigned. A signed block must be replayed with its text
+	// and signature unchanged — providers reject a modified pairing.
+	Signature     []byte `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -357,11 +362,23 @@ func (x *ThinkingContent) GetText() string {
 	return ""
 }
 
+func (x *ThinkingContent) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
+}
+
 type ToolCallContent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Arguments     string                 `protobuf:"bytes,3,opt,name=arguments,proto3" json:"arguments,omitempty"` // JSON-encoded arguments
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Arguments string                 `protobuf:"bytes,3,opt,name=arguments,proto3" json:"arguments,omitempty"` // JSON-encoded arguments
+	// Gemini's Part-level thought signature attached to this function
+	// call. Required for Gemini 3 tool-loop continuity; empty on
+	// providers that don't use it (Anthropic carries its signature on
+	// the thinking block instead, not the tool call).
+	Signature     []byte `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -415,6 +432,13 @@ func (x *ToolCallContent) GetArguments() string {
 		return x.Arguments
 	}
 	return ""
+}
+
+func (x *ToolCallContent) GetSignature() []byte {
+	if x != nil {
+		return x.Signature
+	}
+	return nil
 }
 
 type ToolResultContent struct {
@@ -833,13 +857,15 @@ const file_grudge_thread_v1_thread_proto_rawDesc = "" +
 	"attachmentB\a\n" +
 	"\x05block\"!\n" +
 	"\vTextContent\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"%\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\"C\n" +
 	"\x0fThinkingContent\x12\x12\n" +
-	"\x04text\x18\x01 \x01(\tR\x04text\"S\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1c\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\"q\n" +
 	"\x0fToolCallContent\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1c\n" +
-	"\targuments\x18\x03 \x01(\tR\targuments\"j\n" +
+	"\targuments\x18\x03 \x01(\tR\targuments\x12\x1c\n" +
+	"\tsignature\x18\x04 \x01(\fR\tsignature\"j\n" +
 	"\x11ToolResultContent\x12 \n" +
 	"\ftool_call_id\x18\x01 \x01(\tR\n" +
 	"toolCallId\x12\x18\n" +

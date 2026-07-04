@@ -191,6 +191,50 @@ func TestInsertAndGetMessage(t *testing.T) {
 	}
 }
 
+// A signed thinking block and a signed tool-call block both survive
+// the storage round-trip byte-for-byte — content is a binary protobuf
+// blob (marshalContentBlocks/unmarshalContentBlocks), so the additive
+// signature proto fields need no schema change to persist correctly.
+func TestInsertAndGetMessage_SignatureBytesRoundTrip(t *testing.T) {
+	db := testDB(t)
+	db.CreateThread(&threadv1.Thread{Id: "t1", Name: "Test", CreatedAt: timestamppb.Now()})
+
+	msg := &threadv1.Message{
+		Id:       "m1",
+		ThreadId: "t1",
+		Role:     threadv1.Role_ROLE_ASSISTANT,
+		Content: []*threadv1.ContentBlock{
+			{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{
+				Text: "reasoning", Signature: []byte("thought-signature-bytes"),
+			}}},
+			{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{
+				Id: "c1", Name: "read", Arguments: `{"path":"x"}`, Signature: []byte("call-signature-bytes"),
+			}}},
+		},
+		Position:  0,
+		CreatedAt: timestamppb.Now(),
+	}
+	if err := db.InsertMessage(msg, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.GetMessage("m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(got.Content))
+	}
+	th := got.Content[0].GetThinking()
+	if th == nil || th.Text != "reasoning" || string(th.Signature) != "thought-signature-bytes" {
+		t.Fatalf("thinking signature did not survive the round trip: %+v", th)
+	}
+	tc := got.Content[1].GetToolCall()
+	if tc == nil || string(tc.Signature) != "call-signature-bytes" {
+		t.Fatalf("tool_call signature did not survive the round trip: %+v", tc)
+	}
+}
+
 func TestListMessages_Order(t *testing.T) {
 	db := testDB(t)
 

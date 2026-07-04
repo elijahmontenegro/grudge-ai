@@ -110,6 +110,38 @@ func textEvent(text string, thought bool) *session.Event {
 	}
 }
 
+// thinkingChunkEvent builds one thinking Part carrying an optional
+// signature — mirrors what the bridge yields per streamed thinking
+// chunk: a text-bearing part with no signature, or (per Anthropic's
+// zero-text terminator) an empty-text part carrying only the
+// signature that closes the block.
+func thinkingChunkEvent(text string, signature []byte) *session.Event {
+	return &session.Event{
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Role:  "model",
+				Parts: []*genai.Part{{Text: text, Thought: true, ThoughtSignature: signature}},
+			},
+		},
+	}
+}
+
+// fnCallEventSigned is fnCallEvent with a Gemini-style Part-level
+// thought signature attached to the function call.
+func fnCallEventSigned(id, name string, args map[string]any, signature []byte) *session.Event {
+	return &session.Event{
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Role: "model",
+				Parts: []*genai.Part{{
+					FunctionCall:     &genai.FunctionCall{ID: id, Name: name, Args: args},
+					ThoughtSignature: signature,
+				}},
+			},
+		},
+	}
+}
+
 // corpusOf returns the stored corpus for the runner's thread. Helper
 // shared by tests that check message ordering and dedup.
 func corpusOf(t *testing.T, r *Runner) []*threadv1.Message {
@@ -260,6 +292,86 @@ func TestProcessEvents_TextAndThinkingAccumulateSeparately(t *testing.T) {
 	}
 	if tx := msg.Content[1].GetText(); tx == nil || tx.Text != "final answer: 42." {
 		t.Fatalf("response text wrong: %+v", msg.Content[1])
+	}
+}
+
+// A signature binds to the exact text accumulated when it arrives —
+// two independently signed thinking segments must become two
+// separately stored messages, each with its own signature, not one
+// merged message under either signature.
+func TestProcessEvents_SignatureTriggersThinkingFlush(t *testing.T) {
+	r := newTestRunner(t, "thread-1")
+	events := eventSeq(
+		thinkingChunkEvent("first reasoning", nil),
+		thinkingChunkEvent("", []byte("sig-1")),
+		thinkingChunkEvent("second reasoning", nil),
+		thinkingChunkEvent("", []byte("sig-2")),
+		textEvent("done", false),
+	)
+
+	msg, err := r.processEvents(events)
+	if err != nil {
+		t.Fatalf("processEvents: %v", err)
+	}
+	if msg == nil || msg.Content[0].GetText() == nil || msg.Content[0].GetText().Text != "done" {
+		t.Fatalf("expected final text message \"done\", got %+v", msg)
+	}
+
+	corpus := corpusOf(t, r)
+	if len(corpus) != 3 {
+		t.Fatalf("expected 2 signed thinking messages + 1 final text, got %d: %+v", len(corpus), corpus)
+	}
+	th1 := corpus[0].Content[0].GetThinking()
+	if th1 == nil || th1.Text != "first reasoning" || string(th1.Signature) != "sig-1" {
+		t.Fatalf("first thinking block wrong: %+v", th1)
+	}
+	th2 := corpus[1].Content[0].GetThinking()
+	if th2 == nil || th2.Text != "second reasoning" || string(th2.Signature) != "sig-2" {
+		t.Fatalf("second thinking block wrong: %+v", th2)
+	}
+	if corpus[2].Content[0].GetText() == nil {
+		t.Fatalf("third stored message should be the final text, got %+v", corpus[2])
+	}
+}
+
+// A Gemini function call's Part-level thought signature is stored on
+// the persisted ToolCallContent block.
+func TestProcessEvents_ToolCallSignatureStored(t *testing.T) {
+	r := newTestRunner(t, "thread-1")
+	events := eventSeq(
+		fnCallEventSigned("c1", "Bash", map[string]any{"cmd": "ls"}, []byte("call-sig")),
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "out"}),
+		textEvent("done", false),
+	)
+
+	_, err := r.processEvents(events)
+	if err != nil {
+		t.Fatalf("processEvents: %v", err)
+	}
+
+	corpus := corpusOf(t, r)
+	call := corpus[0].Content[0].GetToolCall()
+	if call == nil || string(call.Signature) != "call-sig" {
+		t.Fatalf("tool_call signature not stored: %+v", call)
+	}
+}
+
+// Thinking that never receives a signature accumulates exactly as
+// before — no premature flush, no signature on the eventual message.
+func TestProcessEvents_UnsignedThinkingAccumulatesAsBefore(t *testing.T) {
+	r := newTestRunner(t, "thread-1")
+	events := eventSeq(
+		textEvent("reasoning", true),
+		textEvent("more", true),
+	)
+
+	msg, err := r.processEvents(events)
+	if err != nil {
+		t.Fatalf("processEvents: %v", err)
+	}
+	th := msg.Content[0].GetThinking()
+	if th == nil || th.Text != "reasoningmore" || len(th.Signature) != 0 {
+		t.Fatalf("unsigned thinking should accumulate with no signature: %+v", th)
 	}
 }
 

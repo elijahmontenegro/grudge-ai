@@ -37,12 +37,22 @@ message TextContent {
 
 message ThinkingContent {
   string text = 1;
+  // Provider signature binding this block's exact text (Anthropic's
+  // base64 signature bytes, or a Gemini thought signature). Empty
+  // means unsigned. A signed block must be replayed with its text
+  // and signature unchanged — providers reject a modified pairing.
+  bytes signature = 2;
 }
 
 message ToolCallContent {
   string id = 1;
   string name = 2;
   string arguments = 3; // JSON-encoded arguments
+  // Gemini's Part-level thought signature attached to this function
+  // call. Required for Gemini 3 tool-loop continuity; empty on
+  // providers that don't use it (Anthropic carries its signature on
+  // the thinking block instead, not the tool call).
+  bytes signature = 4;
 }
 
 message ToolResultContent {

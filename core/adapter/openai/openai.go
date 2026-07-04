@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/core/adapter/internal/chatwire"
 	"github.com/elijahmontenegro/grudge/core/adapter/internal/util"
 	"github.com/elijahmontenegro/grudge/core/httpc"
 	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
@@ -88,10 +89,36 @@ type chatRequest struct {
 	// rejects it fails loudly rather than silently losing the
 	// ground-truth token counts.
 	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	Tools         []chatTool     `json:"tools,omitempty"`
+	// ToolChoice is either the bare string "auto"/"none"/"required" or
+	// {"type":"function","function":{"name":...}} — the shape varies
+	// by mode, so it's built directly as `any` rather than a fixed
+	// struct with omitted fields.
+	ToolChoice any `json:"tool_choice,omitempty"`
 }
 
 type streamOptions struct {
 	IncludeUsage bool `json:"include_usage"`
+}
+
+type chatTool struct {
+	Type     string           `json:"type"` // "function"
+	Function chatToolFunction `json:"function"`
+}
+
+type chatToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+type namedToolChoice struct {
+	Type     string              `json:"type"` // "function"
+	Function namedToolChoiceFunc `json:"function"`
+}
+
+type namedToolChoiceFunc struct {
+	Name string `json:"name"`
 }
 
 type chatMessage struct {
@@ -102,13 +129,17 @@ type chatMessage struct {
 }
 
 type toolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"`
+	// Index identifies which parallel call a streamed argument
+	// fragment belongs to. Present on stream deltas; absent (and
+	// ignored) on a complete non-stream response or on replay.
+	Index    *int         `json:"index,omitempty"`
+	ID       string       `json:"id,omitempty"`
+	Type     string       `json:"type,omitempty"`
 	Function toolFunction `json:"function"`
 }
 
 type toolFunction struct {
-	Name      string `json:"name"`
+	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments"`
 }
 
@@ -120,8 +151,9 @@ type chatResponse struct {
 }
 
 type chatChoice struct {
-	Message chatMessage `json:"message"`
-	Delta   chatMessage `json:"delta"`
+	Message      chatMessage `json:"message"`
+	Delta        chatMessage `json:"delta"`
+	FinishReason string      `json:"finish_reason"`
 }
 
 type apiUsage struct {
@@ -130,7 +162,11 @@ type apiUsage struct {
 }
 
 func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
-	body, err := json.Marshal(toChatRequest(c.model, req, false))
+	creq, err := toChatRequest(c.model, req, false)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(creq)
 	if err != nil {
 		return nil, err
 	}
@@ -168,12 +204,18 @@ func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) 
 			PromptTokens:     resp.Usage.PromptTokens,
 			CompletionTokens: resp.Usage.CompletionTokens,
 		},
+		FinishReason: normalizeFinishReason(resp.Choices[0].FinishReason),
 	}, nil
 }
 
 func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
 	return func(yield func(*llmv1.StreamChunk, error) bool) {
-		body, err := json.Marshal(toChatRequest(c.model, req, true))
+		creq, err := toChatRequest(c.model, req, true)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		body, err := json.Marshal(creq)
 		if err != nil {
 			yield(nil, err)
 			return
@@ -199,6 +241,8 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 		defer resp.Body.Close()
 
 		var totalUsage *llmv1.Usage
+		var finishReason string
+		calls := newToolCallAccumulator()
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -207,7 +251,13 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 			}
 			data := line[6:]
 			if data == "[DONE]" {
-				yield(&llmv1.StreamChunk{Done: true, Usage: totalUsage}, nil)
+				// Tool calls are fragmented across many deltas keyed by
+				// index; only [DONE] guarantees every fragment has
+				// arrived, so reassembly emits here rather than per-delta.
+				if !calls.emit(yield) {
+					return
+				}
+				yield(&llmv1.StreamChunk{Done: true, Usage: totalUsage, FinishReason: finishReason}, nil)
 				return
 			}
 
@@ -228,8 +278,11 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 				continue
 			}
 
-			delta := chunk.Choices[0].Delta
-			content, _ := delta.Content.(string)
+			choice := chunk.Choices[0]
+			if choice.FinishReason != "" {
+				finishReason = normalizeFinishReason(choice.FinishReason)
+			}
+			content, _ := choice.Delta.Content.(string)
 			if content != "" {
 				if !yield(&llmv1.StreamChunk{
 					Delta: &llmv1.StreamChunk_Text{Text: &threadv1.TextContent{Text: content}},
@@ -237,14 +290,9 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 					return
 				}
 			}
-			for _, tc := range delta.ToolCalls {
-				if !yield(&llmv1.StreamChunk{
-					Delta: &llmv1.StreamChunk_ToolCall{ToolCall: &threadv1.ToolCallContent{
-						Id:        tc.ID,
-						Name:      tc.Function.Name,
-						Arguments: tc.Function.Arguments,
-					}},
-				}, nil) {
+			for _, tc := range choice.Delta.ToolCalls {
+				if err := calls.add(tc); err != nil {
+					yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 					return
 				}
 			}
@@ -252,6 +300,93 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 		if err := scanner.Err(); err != nil {
 			yield(&llmv1.StreamChunk{Done: true, Error: util.Ptr(err.Error())}, nil)
 		}
+	}
+}
+
+// toolCallAccumulator reassembles OpenAI's fragmented streaming tool
+// calls: each delta carries one fragment of one call's arguments,
+// keyed by an index shared across the whole stream (id/name arrive
+// only on the fragment that starts a call). Real OpenAI traffic
+// always introduces indices in ascending order, so first-seen order
+// already matches index order — no explicit sort is needed.
+type toolCallAccumulator struct {
+	order []*toolCallBuild
+	byIdx map[int]*toolCallBuild
+}
+
+type toolCallBuild struct {
+	id, name string
+	args     strings.Builder
+}
+
+func newToolCallAccumulator() *toolCallAccumulator {
+	return &toolCallAccumulator{byIdx: make(map[int]*toolCallBuild)}
+}
+
+// add ingests one streamed tool-call fragment. Compat endpoints that
+// omit the index field are handled leniently: a fragment carrying an
+// id starts a new call, a fragment with no id continues the most
+// recently started one. A continuation before any call has started is
+// a malformed stream — fail fast rather than guess.
+func (a *toolCallAccumulator) add(tc toolCall) error {
+	var b *toolCallBuild
+	switch {
+	case tc.Index != nil:
+		b = a.byIdx[*tc.Index]
+		if b == nil {
+			b = &toolCallBuild{}
+			a.byIdx[*tc.Index] = b
+			a.order = append(a.order, b)
+		}
+	case tc.ID != "":
+		b = &toolCallBuild{}
+		a.order = append(a.order, b)
+	case len(a.order) > 0:
+		b = a.order[len(a.order)-1]
+	default:
+		return fmt.Errorf("openai stream: tool_call fragment has no index and no id, and no call is open to continue")
+	}
+	if tc.ID != "" {
+		b.id = tc.ID
+	}
+	if tc.Function.Name != "" {
+		b.name = tc.Function.Name
+	}
+	b.args.WriteString(tc.Function.Arguments)
+	return nil
+}
+
+// emit yields one StreamChunk_ToolCall per accumulated call, in
+// first-seen order. Returns false if the consumer stopped iterating.
+func (a *toolCallAccumulator) emit(yield func(*llmv1.StreamChunk, error) bool) bool {
+	for _, b := range a.order {
+		args := b.args.String()
+		if args == "" {
+			args = "{}"
+		}
+		if !yield(&llmv1.StreamChunk{
+			Delta: &llmv1.StreamChunk_ToolCall{ToolCall: &threadv1.ToolCallContent{
+				Id: b.id, Name: b.name, Arguments: args,
+			}},
+		}, nil) {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizeFinishReason maps OpenAI's finish_reason vocabulary to the
+// grudge-normalized set (llm.proto's CompletionResponse.finish_reason
+// doc: "stop", "length", "tool_calls", "content_filter"). OpenAI's
+// names already match except the legacy "function_call" alias;
+// anything unrecognized passes through raw rather than being silently
+// discarded.
+func normalizeFinishReason(reason string) string {
+	switch reason {
+	case "function_call":
+		return "tool_calls"
+	default:
+		return reason
 	}
 }
 
@@ -321,10 +456,15 @@ func (e *embedder) embed(ctx context.Context, texts []string) ([][]float32, erro
 
 // --- helpers ---
 
-func toChatRequest(model string, req *llmv1.CompletionRequest, stream bool) chatRequest {
-	msgs := make([]chatMessage, 0, len(req.Messages))
-	for _, m := range req.Messages {
-		msgs = append(msgs, toChatMessage(m))
+func toChatRequest(model string, req *llmv1.CompletionRequest, stream bool) (chatRequest, error) {
+	canon := chatwire.Canonicalize(req.Messages)
+	msgs := make([]chatMessage, len(canon))
+	for i, m := range canon {
+		msgs[i] = fromCanonicalMessage(m)
+	}
+	toolChoice, err := toChatToolChoice(req.ToolChoice)
+	if err != nil {
+		return chatRequest{}, err
 	}
 	out := chatRequest{
 		Model:       model,
@@ -334,53 +474,82 @@ func toChatRequest(model string, req *llmv1.CompletionRequest, stream bool) chat
 		TopP:        req.TopP,
 		Stop:        req.Stop,
 		Stream:      stream,
+		Tools:       toChatTools(req.Tools),
+		ToolChoice:  toolChoice,
 	}
 	if stream {
 		out.StreamOptions = &streamOptions{IncludeUsage: true}
 	}
+	return out, nil
+}
+
+// fromCanonicalMessage converts one chatwire.Message to OpenAI's wire
+// shape. OpenAI never receives thinking — chatwire.Message.Thinking is
+// discarded, matching what this codec actually sends. A tool_call-only
+// assistant or a role="tool" carrier sends Content as a plain string
+// (possibly empty), which OpenAI accepts.
+func fromCanonicalMessage(m chatwire.Message) chatMessage {
+	cm := chatMessage{
+		Role:       m.Role,
+		Content:    m.Text,
+		ToolCallID: m.ToolCallID,
+	}
+	if len(m.ToolCalls) > 0 {
+		cm.ToolCalls = make([]toolCall, len(m.ToolCalls))
+		for i, c := range m.ToolCalls {
+			cm.ToolCalls[i] = toolCall{ID: c.ID, Type: "function"}
+			cm.ToolCalls[i].Function.Name = c.Name
+			cm.ToolCalls[i].Function.Arguments = c.Arguments
+		}
+	}
+	return cm
+}
+
+func toChatTools(tools []*llmv1.ToolDeclaration) []chatTool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]chatTool, len(tools))
+	for i, t := range tools {
+		params := json.RawMessage(t.ParametersJson)
+		if len(params) == 0 {
+			params = json.RawMessage(`{}`)
+		}
+		out[i] = chatTool{
+			Type: "function",
+			Function: chatToolFunction{
+				Name:        t.Name,
+				Description: t.Description,
+				Parameters:  params,
+			},
+		}
+	}
 	return out
 }
 
-func toChatMessage(m *llmv1.LLMMessage) chatMessage {
-	role := "user"
-	switch m.Role {
-	case threadv1.Role_ROLE_ASSISTANT:
-		role = "assistant"
-	case threadv1.Role_ROLE_SYSTEM:
-		role = "system"
+// toChatToolChoice maps the proto ToolChoice to OpenAI's wire shape.
+// Unset or UNSPECIFIED omits the field — the model decides, OpenAI's
+// own default. NAMED with an empty tool name can't be encoded and is
+// refused rather than silently sent as AUTO.
+func toChatToolChoice(tc *llmv1.ToolChoice) (any, error) {
+	if tc == nil || tc.Mode == llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_UNSPECIFIED {
+		return nil, nil
 	}
-
-	// If only text blocks, use simple string content.
-	allText := true
-	for _, b := range m.Content {
-		if _, ok := b.Block.(*threadv1.ContentBlock_Text); !ok {
-			allText = false
-			break
+	switch tc.Mode {
+	case llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_AUTO:
+		return "auto", nil
+	case llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_NONE:
+		return "none", nil
+	case llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_REQUIRED:
+		return "required", nil
+	case llmv1.ToolChoiceMode_TOOL_CHOICE_MODE_NAMED:
+		if tc.NamedTool == "" {
+			return nil, fmt.Errorf("openai: tool_choice NAMED requires a non-empty named_tool")
 		}
+		return namedToolChoice{Type: "function", Function: namedToolChoiceFunc{Name: tc.NamedTool}}, nil
+	default:
+		return nil, fmt.Errorf("openai: unknown tool_choice mode %v", tc.Mode)
 	}
-
-	msg := chatMessage{Role: role}
-	if allText {
-		var sb strings.Builder
-		for _, b := range m.Content {
-			sb.WriteString(b.GetText().Text)
-		}
-		msg.Content = sb.String()
-	} else {
-		msg.Content = toMultipart(m.Content)
-	}
-	return msg
-}
-
-func toMultipart(blocks []*threadv1.ContentBlock) []map[string]any {
-	parts := make([]map[string]any, 0, len(blocks))
-	for _, b := range blocks {
-		switch v := b.Block.(type) {
-		case *threadv1.ContentBlock_Text:
-			parts = append(parts, map[string]any{"type": "text", "text": v.Text.Text})
-		}
-	}
-	return parts
 }
 
 func fromChatMessage(m chatMessage) []*threadv1.ContentBlock {
@@ -389,10 +558,14 @@ func fromChatMessage(m chatMessage) []*threadv1.ContentBlock {
 		blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: s}}})
 	}
 	for _, tc := range m.ToolCalls {
+		args := tc.Function.Arguments
+		if args == "" {
+			args = "{}"
+		}
 		blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{
 			Id:        tc.ID,
 			Name:      tc.Function.Name,
-			Arguments: tc.Function.Arguments,
+			Arguments: args,
 		}}})
 	}
 	return blocks

@@ -556,6 +556,13 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*threadv1.Message, error) {
 	var lastErr error
 	var thinkingBuf strings.Builder
+	// thinkingSig is the signature attached to the thinking text
+	// currently in thinkingBuf, if any. A provider signature binds to
+	// the EXACT text it was issued for — set alongside a
+	// signature-bearing part, then storeThinking flushes immediately
+	// (see below) so a later, unsigned continuation never accumulates
+	// into an already-signed buffer under a stale signature.
+	var thinkingSig []byte
 	var textBuf strings.Builder
 	var lastAssistantMsg *threadv1.Message
 
@@ -567,7 +574,8 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 	seenCallIDs := make(map[string]string)
 	seenResultIDs := make(map[string]bool)
 
-	// storeThinking flushes accumulated thinking as its own message in the turn.
+	// storeThinking flushes accumulated thinking as its own message in
+	// the turn, carrying whatever signature (if any) is bound to it.
 	storeThinking := func() {
 		if thinkingBuf.Len() == 0 {
 			return
@@ -575,7 +583,7 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 		msg := &threadv1.Message{
 			Id:       r.nextMsgID(),
 			Role:     threadv1.Role_ROLE_ASSISTANT,
-			Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: thinkingBuf.String()}}}},
+			Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: thinkingBuf.String(), Signature: thinkingSig}}}},
 			Position: r.msgSeq.Load(),
 			ThreadId: r.threadID,
 		}
@@ -583,6 +591,7 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 			log.Printf("[Runner] indexMessage(thinking) thread=%s: %v", r.threadID, err)
 		}
 		thinkingBuf.Reset()
+		thinkingSig = nil
 	}
 
 	for event, err := range events {
@@ -632,7 +641,7 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 				toolCallMsg := &threadv1.Message{
 					Id:       r.nextMsgID(),
 					Role:     threadv1.Role_ROLE_ASSISTANT,
-					Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{Id: fc.ID, Name: fc.Name, Arguments: argsJSON}}}},
+					Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{Id: fc.ID, Name: fc.Name, Arguments: argsJSON, Signature: part.ThoughtSignature}}}},
 					Position: r.msgSeq.Load(),
 					ThreadId: r.threadID,
 				}
@@ -675,12 +684,24 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 				}
 			}
 
-			if part.Text != "" && part.FunctionCall == nil {
-				if part.Thought {
-					thinkingBuf.WriteString(part.Text)
-				} else {
-					textBuf.WriteString(part.Text)
+			// A thought part with no text can still carry a signature —
+			// e.g. the bridge's zero-text terminator that closes a
+			// signed Anthropic thinking block. Widen past the
+			// text != "" gate so that signature is never silently
+			// dropped.
+			if part.FunctionCall == nil && part.Thought && (part.Text != "" || len(part.ThoughtSignature) > 0) {
+				thinkingBuf.WriteString(part.Text)
+				if len(part.ThoughtSignature) > 0 {
+					// The signature binds to exactly the text
+					// accumulated up to this point — flush now rather
+					// than let further unsigned thinking extend the
+					// buffer under a signature that no longer matches
+					// its full contents.
+					thinkingSig = part.ThoughtSignature
+					storeThinking()
 				}
+			} else if part.Text != "" && part.FunctionCall == nil {
+				textBuf.WriteString(part.Text)
 			}
 		}
 	}
@@ -722,7 +743,7 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 	var finalContent []*threadv1.ContentBlock
 	if thinkingBuf.Len() > 0 {
 		finalContent = append(finalContent, &threadv1.ContentBlock{
-			Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: thinkingBuf.String()}},
+			Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: thinkingBuf.String(), Signature: thinkingSig}},
 		})
 	}
 	if textBuf.Len() > 0 {

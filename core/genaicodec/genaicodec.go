@@ -24,16 +24,24 @@ func ContentToProto(c *genai.Content) *llmv1.LLMMessage {
 		Role: RoleToProto(c.Role),
 	}
 	for _, p := range c.Parts {
-		if p.Text != "" {
-			if p.Thought {
-				msg.Content = append(msg.Content, &threadv1.ContentBlock{
-					Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: p.Text}},
-				})
-			} else {
-				msg.Content = append(msg.Content, &threadv1.ContentBlock{
-					Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: p.Text}},
-				})
-			}
+		switch {
+		case p.Thought && (p.Text != "" || len(p.ThoughtSignature) > 0):
+			// ThoughtSignature is Part-level (sibling of Text), so a
+			// signed thought part carries both together — unlike
+			// Anthropic's streaming protocol, Gemini never needs a
+			// zero-text terminator to carry a trailing signature.
+			// The condition still tolerates one (text empty, signature
+			// present) so a signature is never silently dropped.
+			msg.Content = append(msg.Content, &threadv1.ContentBlock{
+				Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{
+					Text:      p.Text,
+					Signature: p.ThoughtSignature,
+				}},
+			})
+		case p.Text != "":
+			msg.Content = append(msg.Content, &threadv1.ContentBlock{
+				Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: p.Text}},
+			})
 		}
 		if p.FunctionCall != nil {
 			argsJSON := "{}"
@@ -47,6 +55,11 @@ func ContentToProto(c *genai.Content) *llmv1.LLMMessage {
 					Id:        p.FunctionCall.ID,
 					Name:      p.FunctionCall.Name,
 					Arguments: argsJSON,
+					// Gemini's thought signature is Part-level, so a
+					// signed function call carries it directly on the
+					// same part as the call itself (required for
+					// Gemini 3 tool-loop continuity).
+					Signature: p.ThoughtSignature,
 				}},
 			})
 		}
@@ -87,7 +100,10 @@ func ProtoToContent(msg *llmv1.LLMMessage) *genai.Content {
 		case *threadv1.ContentBlock_Text:
 			c.Parts = append(c.Parts, &genai.Part{Text: v.Text.Text})
 		case *threadv1.ContentBlock_Thinking:
-			c.Parts = append(c.Parts, &genai.Part{Text: v.Thinking.Text, Thought: true})
+			c.Parts = append(c.Parts, &genai.Part{
+				Text: v.Thinking.Text, Thought: true,
+				ThoughtSignature: v.Thinking.Signature,
+			})
 		case *threadv1.ContentBlock_ToolCall:
 			var args map[string]any
 			if v.ToolCall.Arguments != "" {
@@ -99,6 +115,7 @@ func ProtoToContent(msg *llmv1.LLMMessage) *genai.Content {
 					Name: v.ToolCall.Name,
 					Args: args,
 				},
+				ThoughtSignature: v.ToolCall.Signature,
 			})
 		case *threadv1.ContentBlock_ToolResult:
 			// Re-hydrate the stored JSON back into a map so the model

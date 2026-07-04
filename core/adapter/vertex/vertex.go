@@ -24,6 +24,7 @@ import (
 	"os"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/core/adapter/internal/genaikit"
 	"google.golang.org/genai"
 )
 
@@ -59,11 +60,11 @@ func New(cfg core.ProviderConfig) (any, error) {
 }
 
 func (p *provider) Completer(model string) (core.Completer, error) {
-	return &completer{client: p.client, model: model}, nil
+	return &genaikit.Completer{Client: p.client, Model: model, Name: "vertex"}, nil
 }
 
 func (p *provider) Embedder(model string) (core.Embedder, error) {
-	return &embedder{client: p.client, model: model}, nil
+	return &genaikit.Embedder{Client: p.client, Model: model, Name: "vertex"}, nil
 }
 
 func firstNonEmpty(vals ...string) string {
