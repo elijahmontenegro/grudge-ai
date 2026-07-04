@@ -7,6 +7,7 @@ import (
 
 	"github.com/elijahmontenegro/grudge/core/httpc/retry"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/rrc/tokenscale"
 	"github.com/elijahmontenegro/grudge/service/agent"
 	"github.com/elijahmontenegro/grudge/service/approvals"
 	"github.com/elijahmontenegro/grudge/service/config"
@@ -48,6 +49,7 @@ type Resolver struct {
 	mcpTools   []tool.Tool
 	assembler  *prompt.Assembler
 	hooks      *hooks.Dispatcher
+	scales     *tokenscale.Store
 
 	// Per-thread fan-out topics for UI subscriptions. Each is a
 	// thin instance of pubsub.Topic / pubsub.Broadcast.
@@ -75,6 +77,9 @@ type Deps struct {
 	MCPTools   []tool.Tool
 	Assembler  *prompt.Assembler
 	Hooks      *hooks.Dispatcher
+	// Scales is the process-wide learned token-scale store; owned by
+	// main.go (composition root), threaded to the runner factory.
+	Scales *tokenscale.Store
 }
 
 // NewResolver wires the GraphQL resolver from the application's
@@ -94,6 +99,7 @@ func NewResolver(d Deps) *Resolver {
 		mcpTools:   d.MCPTools,
 		assembler:  d.Assembler,
 		hooks:      d.Hooks,
+		scales:     d.Scales,
 
 		streams:   pubsub.NewTopic[*StreamEvent](),
 		agents:    pubsub.NewTopic[*AgentState](),

@@ -14,6 +14,7 @@ import (
 
 	"github.com/elijahmontenegro/grudge/adkbridge"
 	"github.com/elijahmontenegro/grudge/core"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
 	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/proto/pbtext"
@@ -72,6 +73,12 @@ type Runner struct {
 	// runner's indexMessage go through this single inserter so chunk
 	// derivation lives in one place.
 	inserter *messages.Inserter
+	// scales grounds the token budget in provider-reported usage;
+	// countText is the completer adapter's counting projection. Both
+	// immutable after NewRunner and inherited by subagent forks (same
+	// model, same store).
+	scales    adkbridge.TokenScales
+	countText func(*llmv1.LLMMessage) string
 	// OnAutonomousError fires when a mid-run SendMessage fails during an
 	// autonomous loop. Per spec the loop pauses rather than exits — the
 	// handler is expected to pause autoState, publish Paused agent state
@@ -93,6 +100,13 @@ type Runner struct {
 	tickFirstEventSeen bool
 	tickPersistMs      int64 // accumulator: sum of InsertMessage durations inside processEvents
 	tickCorpusSize     int   // size of the corpus RRC saw on this tick
+	// The last usage-bearing model call's (prediction, reported)
+	// triple, latched as one atomic event from OnUsage — so the
+	// trace row's predicted/reported ratio always describes a single
+	// call, even when the turn's final call exited without usage.
+	tickUsagePredicted  int
+	tickUsagePrompt     int
+	tickUsageCompletion int
 	// SetTickRound (called by the autonomous loop just before
 	// SendMessage) records the round THIS tick belongs to. Reset to
 	// 0 at SendMessage entry so non-autonomous sends record round=0.
@@ -146,7 +160,13 @@ func (r *Runner) SetRoundCallback(cb func(round int, elapsed time.Duration)) {
 //
 // rerankerModelID identifies the score model inherited by subagent
 // runners. Local-Context score persistence is wired into the shared engine.
-func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName, instruction, rerankerModelID string, inserter *messages.Inserter) (*Runner, error) {
+//
+// scales and countText ground token accounting for the completer
+// model: scales converts the budget via the learned usage-grounded
+// scale and receives per-call observations; countText is the
+// adapter's counting projection. Either may be nil (ungrounded /
+// count-everything).
+func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName, instruction, rerankerModelID string, inserter *messages.Inserter, scales adkbridge.TokenScales, countText func(*llmv1.LLMMessage) string) (*Runner, error) {
 	r := &Runner{
 		engine:          engine,
 		completer:       completer,
@@ -157,12 +177,24 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 		instruction:     instruction,
 		rerankerModelID: rerankerModelID,
 		inserter:        inserter,
+		scales:          scales,
+		countText:       countText,
 	}
 
 	// RRC-as-LLM: ADK calls this thinking it's an LLM. Engine owns its
 	// own lock now; rrcLLM acquires it directly via engine.Lock /
 	// Unlock — no shared mutex passed in.
 	rrcLLM := adkbridge.NewRRCLLM(engine, completer, db, threadID, modelName)
+	rrcLLM.Scales = scales
+	rrcLLM.CountText = countText
+	rrcLLM.OnUsage = func(predicted int, usage *llmv1.Usage) {
+		// Latch the pair for the tick trace. Same concurrency contract
+		// as tickAssemble: SendMessage holds r.mu for its duration and
+		// resets these at entry.
+		r.tickUsagePredicted = predicted
+		r.tickUsagePrompt = int(usage.PromptTokens)
+		r.tickUsageCompletion = int(usage.CompletionTokens)
+	}
 	rrcLLM.OnStream = func(delta, thinking string, done bool) {
 		if r.onStream != nil {
 			r.onStream(delta, thinking, done)
@@ -321,6 +353,9 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope threadv1
 	r.tickFirstEventSeen = false
 	r.tickPersistMs = 0
 	r.tickCorpusSize = 0
+	r.tickUsagePredicted = 0
+	r.tickUsagePrompt = 0
+	r.tickUsageCompletion = 0
 	// tickRound is NOT reset here — the autonomous loop sets it via
 	// SetTickRound immediately before this call. Non-autonomous sends
 	// never invoke SetTickRound, so the field is already 0 from the
@@ -487,6 +522,9 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 		CorpusSize:                 r.tickCorpusSize,
 		SelectedCount:              r.tickAssemble.SelectedCount,
 		AssembledTokensEst:         r.tickAssemble.TotalTokens,
+		UsagePredictedTokens:       r.tickUsagePredicted,
+		UsagePromptTokens:          r.tickUsagePrompt,
+		UsageCompletionTokens:      r.tickUsageCompletion,
 	}
 	if callErr != nil {
 		trace.Errored = true

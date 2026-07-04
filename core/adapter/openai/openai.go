@@ -82,6 +82,16 @@ type chatRequest struct {
 	TopP        *float32      `json:"top_p,omitempty"`
 	Stop        []string      `json:"stop,omitempty"`
 	Stream      bool          `json:"stream"`
+	// StreamOptions requests the final usage frame on streamed
+	// completions — without it OpenAI omits usage from streams
+	// entirely. Standard since mid-2024; a compat endpoint that
+	// rejects it fails loudly rather than silently losing the
+	// ground-truth token counts.
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type chatMessage struct {
@@ -316,7 +326,7 @@ func toChatRequest(model string, req *llmv1.CompletionRequest, stream bool) chat
 	for _, m := range req.Messages {
 		msgs = append(msgs, toChatMessage(m))
 	}
-	return chatRequest{
+	out := chatRequest{
 		Model:       model,
 		Messages:    msgs,
 		MaxTokens:   req.MaxTokens,
@@ -325,6 +335,10 @@ func toChatRequest(model string, req *llmv1.CompletionRequest, stream bool) chat
 		Stop:        req.Stop,
 		Stream:      stream,
 	}
+	if stream {
+		out.StreamOptions = &streamOptions{IncludeUsage: true}
+	}
+	return out
 }
 
 func toChatMessage(m *llmv1.LLMMessage) chatMessage {

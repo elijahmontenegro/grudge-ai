@@ -2,8 +2,8 @@ package storage
 
 import "fmt"
 
-const schemaVersion = 3
-const schemaIdentity = "rrc-calibrated-acceptance-lean-tables-v3"
+const schemaVersion = 4
+const schemaIdentity = "rrc-usage-grounded-accounting-v4"
 
 // defaultEmbeddingDim is the bootstrap vector width. It is only a
 // bootstrap default: the runtime probe (EnsureEmbeddingDim) reconciles it
@@ -197,6 +197,9 @@ CREATE TABLE tick_traces (
     corpus_size INTEGER NOT NULL,
     selected_count INTEGER NOT NULL,
     assembled_tokens_est INTEGER NOT NULL,
+    usage_predicted_tokens INTEGER NOT NULL DEFAULT 0,
+    usage_prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    usage_completion_tokens INTEGER NOT NULL DEFAULT 0,
     errored INTEGER NOT NULL DEFAULT 0,
     error_msg TEXT
 );

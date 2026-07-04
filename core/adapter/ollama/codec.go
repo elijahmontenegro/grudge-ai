@@ -302,6 +302,13 @@ func providerOpts(req *llmv1.CompletionRequest) map[string]any {
 	if len(req.Stop) > 0 {
 		opts["stop"] = req.Stop
 	}
+	// Without num_ctx ollama serves the model's default context
+	// (often 4096) and SILENTLY truncates the prompt head past it —
+	// HTTP 200, no error, prompt_eval_count capped at the truncation.
+	// The caller's declared window is the only defense.
+	if req.ContextWindowTokens != nil && *req.ContextWindowTokens > 0 {
+		opts["num_ctx"] = *req.ContextWindowTokens
+	}
 	if len(opts) == 0 {
 		return nil
 	}

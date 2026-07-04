@@ -10,6 +10,7 @@
 //	{DataDir}/sandboxes/sbx-{threadID}/_attachments/  attachment store
 //	{DataDir}/plans/plan-{threadID}/                  plan documents
 //	{DataDir}/calibrator.json                         fitted acceptance calibrator
+//	{DataDir}/tokenscale.json                         learned per-model token scales
 //	{DataDir}/skills/                                 user skills
 package datadir
 
@@ -77,6 +78,13 @@ func AttachmentsDir(dataDir, threadID string) (string, error) {
 // by the substrate Holder's background self-fit and loaded at boot.
 func CalibratorPath(dataDir string) string {
 	return filepath.Join(dataDir, "calibrator.json")
+}
+
+// TokenScalePath is the learned per-model token-scale artifact,
+// written by rrc/tokenscale as completions report usage and loaded at
+// boot.
+func TokenScalePath(dataDir string) string {
+	return filepath.Join(dataDir, "tokenscale.json")
 }
 
 // SkillsDir is where user skills are loaded from.

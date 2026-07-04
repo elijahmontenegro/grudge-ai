@@ -31,6 +31,7 @@ import (
 	_ "github.com/elijahmontenegro/grudge/core/adapter/zerank"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/rrc/tiktoken"
+	"github.com/elijahmontenegro/grudge/rrc/tokenscale"
 	"github.com/elijahmontenegro/grudge/sandbox"
 	"github.com/elijahmontenegro/grudge/service/approvals"
 	"github.com/elijahmontenegro/grudge/service/attachments"
@@ -84,6 +85,19 @@ func main() {
 	tokenEst, err := tiktoken.New()
 	if err != nil {
 		log.Fatalf("token estimator: %v", err)
+	}
+
+	// The token-scale store grounds the estimator's absolute scale in
+	// provider-reported usage, per completer model. A corrupt artifact
+	// is a refittable cache — log loudly and run with the empty store
+	// (the next admitted observation overwrites it); only a genuine
+	// read failure refuses boot.
+	scales, err := tokenscale.Open(datadir.TokenScalePath(cfg.DataDir))
+	if err != nil {
+		if scales == nil {
+			log.Fatalf("token scales: %v", err)
+		}
+		log.Printf("Token scales: %v", err)
 	}
 
 	db, err := storage.Open(cfg.DataDir)
@@ -158,6 +172,7 @@ func main() {
 		MCPTools:   mcpTools,
 		Assembler:  assembler,
 		Hooks:      hookDispatcher,
+		Scales:     scales,
 	})
 
 	// Reconcile agent_state rows left non-Idle by the previous process

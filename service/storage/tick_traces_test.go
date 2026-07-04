@@ -21,6 +21,9 @@ func TestTickTrace_RoundTrip(t *testing.T) {
 		CorpusSize:                 1968,
 		SelectedCount:              8,
 		AssembledTokensEst:         142000,
+		UsagePredictedTokens:       141000,
+		UsagePromptTokens:          138500,
+		UsageCompletionTokens:      910,
 		Errored:                    false,
 	}
 	if err := db.InsertTickTrace(trace); err != nil {
@@ -49,6 +52,10 @@ func TestTickTrace_RoundTrip(t *testing.T) {
 	if r.CorpusSize != 1968 || r.SelectedCount != 8 || r.AssembledTokensEst != 142000 {
 		t.Errorf("counters didn't round-trip: corpus=%d selected=%d tokens=%d",
 			r.CorpusSize, r.SelectedCount, r.AssembledTokensEst)
+	}
+	if r.UsagePredictedTokens != 141000 || r.UsagePromptTokens != 138500 || r.UsageCompletionTokens != 910 {
+		t.Errorf("usage triple didn't round-trip: pred=%d prompt=%d completion=%d",
+			r.UsagePredictedTokens, r.UsagePromptTokens, r.UsageCompletionTokens)
 	}
 	if r.Errored {
 		t.Errorf("Errored should be false, got true")

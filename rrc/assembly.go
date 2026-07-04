@@ -44,7 +44,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 			return AssembleResult{}, err
 		}
 		wire := groupsToWire(groups, nil)
-		total := e.wireTokens(req.System, nil, wire, req.FixedTokens, req.PerMsgDelim)
+		total := e.wireTokens(req.CountText, req.System, nil, wire, req.FixedTokens, req.PerMsgDelim)
 		if req.Budget <= 0 || total <= effectiveBudget {
 			localGroups, localWire = groups, wire
 			break
@@ -171,7 +171,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 		}
 		finalWire = append(finalWire, selectedWire...)
 		finalWire = append(finalWire, localWire...)
-		total = e.wireTokens(nil, finalWire, nil, req.FixedTokens, req.PerMsgDelim)
+		total = e.wireTokens(req.CountText, nil, finalWire, nil, req.FixedTokens, req.PerMsgDelim)
 		if req.Budget <= 0 || total <= effectiveBudget {
 			finalSelected = groups
 			break
@@ -230,6 +230,17 @@ type AssembleRequest struct {
 	PerMsgDelim            int
 	FixedTokens            int
 	ExcludeIDs             []string
+
+	// CountText overrides how a wire message's text is extracted for
+	// budget counting. Providers' codecs send different subsets of a
+	// message's content blocks (some drop thinking, some send text
+	// only), so the caller injects the projection matching what its
+	// adapter will actually put on the wire — counting content that
+	// is never sent systematically overstates the prompt and sheds
+	// context for nothing. Nil counts everything
+	// (pbtext.TextFromBlocks), which is exact only for adapters that
+	// resend all block types.
+	CountText func(*llmv1.LLMMessage) string
 
 	// PriorSelection, when set, makes Assemble reuse an earlier selection
 	// verbatim instead of re-running prerequisite selection — the overflow-
@@ -316,13 +327,16 @@ func groupsToWire(groups []DeliveryGroup, already map[string]bool) []*llmv1.LLMM
 	return out
 }
 
-func (e *Engine) wireTokens(system *llmv1.LLMMessage, head, tail []*llmv1.LLMMessage, fixed, delim int) int {
+func (e *Engine) wireTokens(countText func(*llmv1.LLMMessage) string, system *llmv1.LLMMessage, head, tail []*llmv1.LLMMessage, fixed, delim int) int {
+	if countText == nil {
+		countText = func(m *llmv1.LLMMessage) string { return pbtext.TextFromBlocks(m.Content) }
+	}
 	total := fixed
 	if system != nil {
 		head = append([]*llmv1.LLMMessage{system}, head...)
 	}
 	for _, m := range append(head, tail...) {
-		total += e.cfg.Chunk.Estimate(pbtext.TextFromBlocks(m.Content)) + delim
+		total += e.cfg.Chunk.Estimate(countText(m)) + delim
 	}
 	return total
 }

@@ -73,13 +73,15 @@ type EngineConfig struct {
 	// when the estimator undercounts, not as steady-state traffic.
 	//
 	// Zero disables proactive budgeting entirely; the reactive
-	// overflow loop (now with exponential shed step) still runs as
-	// the safety net.
+	// overflow loop (which sheds one delivery group per provider
+	// round trip) still runs as the safety net.
 	//
-	// Set conservatively relative to the model's advertised context
-	// so there's headroom for: the provider's own system-prompt
-	// overhead, tool-declaration blocks, max output tokens, and the
-	// inherent imprecision of character-based token estimation.
+	// This is the caller's statement of the model's usable window
+	// (prompt + generation): callers forward it to the provider where
+	// the serving window is caller-controlled (ollama num_ctx), and
+	// convert it into counter units via a learned per-model scale
+	// grounded in provider-reported usage. Set it to the model's real
+	// context size, reserving max output tokens via BudgetHeadroomPct.
 	ContextBudgetTokens int
 
 	// DiversityLambda is the MMR tradeoff between relevance and
@@ -95,14 +97,13 @@ type EngineConfig struct {
 
 	// BudgetHeadroomPct is a fixed global margin on the context
 	// budget. estimate ≤ ContextBudgetTokens × BudgetHeadroomPct.
-	// Absorbs tokenizer divergence (cl100k_base proxy vs the real
-	// model's BPE), chat-template preambles, and server-side
-	// wrapping without claiming to know any of them. One knob,
-	// globally tunable; per-model calibration is explicitly out of
-	// scope (best-effort estimate). 0.90 means we target 90% of
-	// the advertised budget, holding 10% in reserve for the
-	// inherent imprecision of a cross-tokenizer estimator. Zero
-	// disables the margin (estimate compared directly to budget).
+	// A pure safety margin: output-token reserve plus residual
+	// estimation noise (token-boundary effects at message joins,
+	// template deltas the projection approximates). Tokenizer-scale
+	// divergence is NOT its job — that is corrected by the learned
+	// per-model scale (rrc/tokenscale), grounded in the provider's
+	// own reported usage. 0.90 targets 90% of the window, holding
+	// 10% for generation and noise. Zero disables the margin.
 	BudgetHeadroomPct float64
 
 	// PerMsgDelimiterTokens is a fixed small constant added per
@@ -142,31 +143,30 @@ func DefaultConfig() EngineConfig {
 		MinBatchStdDev:   0.05,
 		RerankTopK:       64,
 		LocalContextSize: 10,
-		Chunk:            chunk.DefaultConfig(),
-		// Safety-net boundary for the Network payload. Measured in
-		// "approximate tokens" — specifically (UTF-8 rune count)/4,
-		// a rough English-prose heuristic, not an actual tokenizer
-		// output. This is deliberately a proxy: we do not commit to
-		// per-provider tokenizers (dependency weight, provider drift)
-		// and paid /tokenize endpoints (latency, cost). The budget's
-		// role per protocol §3.3 is to enforce Network-regime
-		// overflow resolution — when the estimated assembly exceeds,
+		Chunk: chunk.DefaultConfig(),
+		// Boundary for the Network payload, in the configured
+		// counter's units (chunk.Config.Estimator; the app installs
+		// cl100k BPE). The counter is a lookalike, not the model's
+		// tokenizer — its absolute scale is grounded per model by
+		// rrc/tokenscale against provider-reported usage, so exact
+		// per-provider tokenizers are deliberately not a dependency.
+		// The budget's role per protocol §3.3 is Network-regime
+		// overflow resolution: when the estimated assembly exceeds,
 		// the assembler sheds lowest-score Selected entries. The
-		// provider's 400 response remains the ground truth for
-		// "actually fits" via the reactive exponential shed layer.
+		// provider's reported usage remains the ground truth for
+		// "actually fits", with the reactive one-group-per-retry
+		// shed loop as the last-resort floor.
 		//
-		// 150000 corresponds to ~600k characters, sized for 200k-
-		// context models (Claude, minimax-m2.7) with headroom for
-		// provider overhead + tool declarations + output reserve.
-		// For 128k-context models (GPT-4o, Llama 3.1) this is too
-		// aggressive on paper; reactive shed catches the residual.
+		// 150000 is sized for 200k-context models (Claude,
+		// minimax-m2.7) with headroom for provider overhead + tool
+		// declarations + output reserve. For 128k-context models
+		// (GPT-4o, Llama 3.1) set it to the real window.
 		ContextBudgetTokens: 150000,
 
 		// MMR diversity default per Carbonell & Goldstein (1998).
 		DiversityLambda: 0.7,
-		// 10% margin absorbs cl100k_base-vs-real-tokenizer drift,
-		// template preambles, and other observable byte-level
-		// accounting gaps that aren't worth enumerating individually.
+		// 10% margin holds output reserve + residual estimation
+		// noise; tokenizer-scale drift is the learned scale's job.
 		BudgetHeadroomPct: 0.90,
 		// 5 tokens/message covers ChatML / Llama 3 / Mistral role
 		// delimiters to within ±1.

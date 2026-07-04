@@ -28,6 +28,18 @@ import (
 
 type StreamCallback func(delta, thinking string, done bool)
 
+// TokenScales grounds the pre-send token counter in provider-reported
+// usage: Scale converts the model-truth budget into counter units;
+// Observe feeds back one (predicted, observed) pair per successful
+// send, with the counter-unit budget the assembly ran under.
+// Consumer-defined interface (rrc/tokenscale's *Bound satisfies it);
+// nil means ungrounded — the budget is used unconverted and nothing
+// is observed.
+type TokenScales interface {
+	Scale() float64
+	Observe(predicted, observed, budget int) error
+}
+
 // CorpusStore is the two-method corpus access the bridge needs.
 // Consumer-defined interface; grudge's *storage.DB satisfies it
 // structurally with zero changes.
@@ -57,6 +69,19 @@ type RRCLLM struct {
 	OnSelection func(result *rrcv1.SelectionResult)
 	OnEdge      func(edge *rrcv1.Edge)
 	OnAssemble  func(t rrc.AssembleTelemetry)
+	// OnUsage fires once per completed model call with the assembler's
+	// counter-unit prediction for the sent wire and the provider's
+	// reported usage — one atomic event, so a consumer can never pair
+	// a prediction with another call's usage. predicted is 0 on the
+	// empty-corpus forwarding path (no assembly ran).
+	OnUsage func(predicted int, usage *llmv1.Usage)
+
+	// Scales grounds budget conversion and receives observations.
+	// Optional; set at composition alongside the callbacks.
+	Scales TokenScales
+	// CountText is the adapter's counting projection (what the codec
+	// actually sends per message). Optional; nil counts every block.
+	CountText func(*llmv1.LLMMessage) string
 }
 
 func NewRRCLLM(engine *rrc.Engine, completer core.Completer, db CorpusStore, threadID, modelName string) *RRCLLM {
@@ -112,6 +137,20 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			serializedLocal = rrc.SerializeLocalContext(localContext, cfg.Chunk)
 		}
 
+		// Budget conversion: ContextBudgetTokens is model truth (the
+		// window the user declared); the engine counts in the configured
+		// counter's units. The learned scale — grounded in the provider's
+		// own reported usage — converts between them. Ungrounded (no
+		// scale yet) means the budget passes through unconverted.
+		budget := cfg.ContextBudgetTokens
+		scale := 0.0
+		if r.Scales != nil {
+			if s := r.Scales.Scale(); s > 0 {
+				scale = s
+				budget = int(float64(cfg.ContextBudgetTokens) / s)
+			}
+		}
+
 		var excludeIDs []string
 		published := false
 		// priorSelection carries the first attempt's selection into any
@@ -124,11 +163,12 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			result, err := r.engine.Assemble(ctx, rrc.AssembleRequest{
 				SerializedLocalContext: serializedLocal, Anchor: anchor, Corpus: corpus, LocalContext: localContext,
 				Scope: r.Scope, ThreadID: r.threadID, System: systemMsg,
-				Budget: cfg.ContextBudgetTokens, HeadroomPct: cfg.BudgetHeadroomPct,
+				Budget: budget, HeadroomPct: cfg.BudgetHeadroomPct,
 				PerMsgDelim:    cfg.PerMsgDelimiterTokens,
 				FixedTokens:    estimateToolSchemaTokens(protoTools, cfg.Chunk),
 				ExcludeIDs:     excludeIDs,
 				PriorSelection: priorSelection,
+				CountText:      r.CountText,
 			})
 			if err != nil {
 				yield(nil, err)
@@ -152,18 +192,20 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 				r.OnAssemble(result.Telemetry)
 			}
 			t := result.Telemetry
-			log.Printf("RRC: assembly thread=%s selected=%d local=%d closure=%d shed=%d total=%d budget=%d wire=%d",
+			log.Printf("RRC: assembly thread=%s selected=%d local=%d closure=%d shed=%d total=%d budget=%d scale=%.3f wire=%d",
 				r.threadID, t.SelectedCount, t.LocalContextCount, t.ClosureCount,
-				t.SheddedCount, t.TotalTokens, t.EffectiveBudget, len(result.Wire))
+				t.SheddedCount, t.TotalTokens, t.EffectiveBudget, scale, len(result.Wire))
 
-			protoReq := completionRequest(req, stream, result.Wire, protoTools)
+			protoReq := completionRequest(req, stream, result.Wire, protoTools, cfg.ContextBudgetTokens)
+			var usage *llmv1.Usage
 			var sendErr error
 			if stream {
-				sendErr = r.tryStream(ctx, protoReq, yield)
+				usage, sendErr = r.tryStream(ctx, protoReq, yield)
 			} else {
-				sendErr = r.tryComplete(ctx, protoReq, yield)
+				usage, sendErr = r.tryComplete(ctx, protoReq, yield)
 			}
 			if sendErr == nil {
+				r.observeUsage(t.TotalTokens, budget, usage)
 				r.recordProvenance(anchor, localContext, result.Selection)
 				return
 			}
@@ -178,6 +220,26 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			}
 			excludeIDs = append(excludeIDs, drop)
 		}
+	}
+}
+
+// observeUsage feeds telemetry and the grounding learner after a
+// successful send. usage is nil when the provider reported nothing or
+// the stream ended without a clean terminal chunk — nil is not an
+// observation. An admission rejection or persistence failure is
+// logged loudly and never fails the turn (which already succeeded).
+func (r *RRCLLM) observeUsage(predicted, budget int, usage *llmv1.Usage) {
+	if usage == nil {
+		return
+	}
+	if r.OnUsage != nil {
+		r.OnUsage(predicted, usage)
+	}
+	if r.Scales == nil || usage.PromptTokens <= 0 {
+		return
+	}
+	if err := r.Scales.Observe(predicted, int(usage.PromptTokens), budget); err != nil {
+		log.Printf("RRC: token-scale observation failed thread=%s model=%s: %v", r.threadID, r.modelName, err)
 	}
 }
 
@@ -249,8 +311,12 @@ func toolDeclarations(req *model.LLMRequest) []*llmv1.ToolDeclaration {
 	return tools
 }
 
-func completionRequest(req *model.LLMRequest, stream bool, messages []*llmv1.LLMMessage, tools []*llmv1.ToolDeclaration) *llmv1.CompletionRequest {
+func completionRequest(req *model.LLMRequest, stream bool, messages []*llmv1.LLMMessage, tools []*llmv1.ToolDeclaration, contextWindow int) *llmv1.CompletionRequest {
 	out := &llmv1.CompletionRequest{Messages: messages, Model: req.Model, Stream: stream, Tools: tools}
+	if contextWindow > 0 {
+		window := int32(contextWindow)
+		out.ContextWindowTokens = &window
+	}
 	if req.Config == nil {
 		return out
 	}
@@ -276,16 +342,22 @@ func (r *RRCLLM) forwardCurrentTurn(ctx context.Context, req *model.LLMRequest, 
 	for _, content := range req.Contents {
 		messages = append(messages, genaicodec.ContentToProto(content))
 	}
-	protoReq := completionRequest(req, stream, messages, tools)
+	protoReq := completionRequest(req, stream, messages, tools, r.engine.Config().ContextBudgetTokens)
+	var usage *llmv1.Usage
 	var err error
 	if stream {
-		err = r.tryStream(ctx, protoReq, yield)
+		usage, err = r.tryStream(ctx, protoReq, yield)
 	} else {
-		err = r.tryComplete(ctx, protoReq, yield)
+		usage, err = r.tryComplete(ctx, protoReq, yield)
 	}
 	if err != nil {
 		yield(nil, err)
+		return
 	}
+	// No assembly ran on this path — there is no prediction to pair,
+	// so the learner is not fed (observeUsage skips predicted 0), but
+	// telemetry still sees the reported usage.
+	r.observeUsage(0, 0, usage)
 }
 
 func lowestSurvivingScore(result *rrcv1.SelectionResult, excludedIDs []string) string {
@@ -332,25 +404,34 @@ func estimateToolSchemaTokens(tools []*llmv1.ToolDeclaration, chunkCfg chunk.Con
 	return total
 }
 
-func (r *RRCLLM) tryComplete(ctx context.Context, req *llmv1.CompletionRequest, yield func(*model.LLMResponse, error) bool) error {
+// tryComplete sends the request and returns the provider's reported
+// usage alongside the transport error. Usage is non-nil only on a
+// successful response that carried it.
+func (r *RRCLLM) tryComplete(ctx context.Context, req *llmv1.CompletionRequest, yield func(*model.LLMResponse, error) bool) (*llmv1.Usage, error) {
 	response, err := r.completer.Complete(ctx, req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	yield(&model.LLMResponse{Content: genaicodec.ProtoToContent(response.Message), TurnComplete: true}, nil)
-	return nil
+	return response.Usage, nil
 }
 
-func (r *RRCLLM) tryStream(ctx context.Context, req *llmv1.CompletionRequest, yield func(*model.LLMResponse, error) bool) error {
+// tryStream sends the request and returns the provider's reported
+// usage alongside the transport error. The usage contract is strict:
+// non-nil iff a terminal chunk with Done and no Error carried it.
+// Consumer abort, a stream that ends without a Done chunk, a
+// mid-stream error, and a provider error chunk all return nil usage —
+// no usage means no observation.
+func (r *RRCLLM) tryStream(ctx context.Context, req *llmv1.CompletionRequest, yield func(*model.LLMResponse, error) bool) (*llmv1.Usage, error) {
 	next, stop := iter.Pull2(r.completer.Stream(ctx, req))
 	defer stop()
 
 	chunk, err, ok := next()
 	if !ok {
-		return r.finishEmpty(yield)
+		return nil, r.finishEmpty(yield)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var pendingCalls []*genai.Part
 	for {
@@ -389,19 +470,25 @@ func (r *RRCLLM) tryStream(ctx context.Context, req *llmv1.CompletionRequest, yi
 				r.OnStream("", "", true)
 			}
 			yield(response, nil)
-			return nil
+			// A provider error chunk is a failed generation — its usage
+			// (if any) describes an aborted call and must not ground the
+			// learner.
+			if chunk.Error != nil {
+				return nil, nil
+			}
+			return chunk.Usage, nil
 		}
 		if !yield(response, nil) {
-			return nil
+			return nil, nil
 		}
 
 		chunk, err, ok = next()
 		if !ok {
-			return r.finishEmpty(yield)
+			return nil, r.finishEmpty(yield)
 		}
 		if err != nil {
 			yield(&model.LLMResponse{TurnComplete: true, ErrorMessage: err.Error()}, nil)
-			return nil
+			return nil, nil
 		}
 	}
 }

@@ -260,9 +260,15 @@ type CompletionRequest struct {
 	// Tool declarations — functions the model can call.
 	Tools []*ToolDeclaration `protobuf:"bytes,9,rep,name=tools,proto3" json:"tools,omitempty"`
 	// Tool-choice constraint. Optional — unset means model decides.
-	ToolChoice    *ToolChoice `protobuf:"bytes,10,opt,name=tool_choice,json=toolChoice,proto3" json:"tool_choice,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ToolChoice *ToolChoice `protobuf:"bytes,10,opt,name=tool_choice,json=toolChoice,proto3" json:"tool_choice,omitempty"`
+	// The caller's intended total context window in tokens (prompt +
+	// generation). Adapters that control the serving-side window apply
+	// it (ollama maps it to options.num_ctx — without that, ollama
+	// silently truncates the prompt head at the model's default);
+	// hosted providers manage their own windows and ignore it.
+	ContextWindowTokens *int32 `protobuf:"varint,11,opt,name=context_window_tokens,json=contextWindowTokens,proto3,oneof" json:"context_window_tokens,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *CompletionRequest) Reset() {
@@ -358,6 +364,13 @@ func (x *CompletionRequest) GetToolChoice() *ToolChoice {
 	return nil
 }
 
+func (x *CompletionRequest) GetContextWindowTokens() int32 {
+	if x != nil && x.ContextWindowTokens != nil {
+		return *x.ContextWindowTokens
+	}
+	return 0
+}
+
 type CompletionResponse struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Id      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -437,6 +450,17 @@ func (x *CompletionResponse) GetFinishReason() string {
 	return ""
 }
 
+// Usage is the provider's own token accounting for one request —
+// ground truth, at request granularity: one total for the entire
+// serialized prompt window, one for the entire generation. No
+// provider reports per-message counts; message-level numbers can
+// only ever be derived by a consumer.
+//
+// prompt_tokens includes cached portions where the provider reports
+// them (adapters sum cache-read/cache-write breakdowns into it).
+// Providers that count only newly-evaluated tokens — local KV-prefix
+// caches like ollama's — may under-report, so consumers must treat
+// the value as a lower bound on the true prompt size.
 type Usage struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	PromptTokens     int32                  `protobuf:"varint,1,opt,name=prompt_tokens,json=promptTokens,proto3" json:"prompt_tokens,omitempty"`
@@ -666,7 +690,7 @@ const file_grudge_llm_v1_llm_proto_rawDesc = "" +
 	"ToolChoice\x121\n" +
 	"\x04mode\x18\x01 \x01(\x0e2\x1d.grudge.llm.v1.ToolChoiceModeR\x04mode\x12\x1d\n" +
 	"\n" +
-	"named_tool\x18\x02 \x01(\tR\tnamedTool\"\x8c\x03\n" +
+	"named_tool\x18\x02 \x01(\tR\tnamedTool\"\xdf\x03\n" +
 	"\x11CompletionRequest\x125\n" +
 	"\bmessages\x18\x01 \x03(\v2\x19.grudge.llm.v1.LLMMessageR\bmessages\x12\x14\n" +
 	"\x05model\x18\x02 \x01(\tR\x05model\x12\"\n" +
@@ -679,10 +703,12 @@ const file_grudge_llm_v1_llm_proto_rawDesc = "" +
 	"\x05tools\x18\t \x03(\v2\x1e.grudge.llm.v1.ToolDeclarationR\x05tools\x12:\n" +
 	"\vtool_choice\x18\n" +
 	" \x01(\v2\x19.grudge.llm.v1.ToolChoiceR\n" +
-	"toolChoiceB\r\n" +
+	"toolChoice\x127\n" +
+	"\x15context_window_tokens\x18\v \x01(\x05H\x03R\x13contextWindowTokens\x88\x01\x01B\r\n" +
 	"\v_max_tokensB\x0e\n" +
 	"\f_temperatureB\b\n" +
-	"\x06_top_p\"\xc0\x01\n" +
+	"\x06_top_pB\x18\n" +
+	"\x16_context_window_tokens\"\xc0\x01\n" +
 	"\x12CompletionResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x123\n" +
 	"\amessage\x18\x02 \x01(\v2\x19.grudge.llm.v1.LLMMessageR\amessage\x12*\n" +

@@ -12,13 +12,14 @@ import (
 // Must NOT acquire r.mu: SpawnSubagent is invoked from the Agent tool during
 // the parent runner's SendMessage, which already holds r.mu. sync.Mutex is
 // not reentrant, so re-locking would deadlock the thread. The accessed
-// fields (engine, threadID, completer, db, tools, modelName, instruction)
-// are either immutable after NewRunner or have their own synchronization
-// (engine owns its own lock; db internally).
+// fields (engine, threadID, completer, db, tools, modelName, instruction,
+// scales, countText) are either immutable after NewRunner or have their
+// own synchronization (engine owns its own lock; db internally; the
+// token-scale store is one leaf mutex shared across all runners).
 func (r *Runner) SpawnSubagent(ctx context.Context, task string, forkThreadID string) (*Runner, error) {
 	forkedEngine := r.engine.Fork()
 
-	fork, err := NewRunner(forkedEngine, r.completer, r.db, forkThreadID, r.tools, r.modelName, r.instruction, r.rerankerModelID, r.inserter)
+	fork, err := NewRunner(forkedEngine, r.completer, r.db, forkThreadID, r.tools, r.modelName, r.instruction, r.rerankerModelID, r.inserter, r.scales, r.countText)
 	if err != nil {
 		return nil, fmt.Errorf("create fork runner: %w", err)
 	}

@@ -6,11 +6,14 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/elijahmontenegro/grudge/adkbridge"
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/core/httpc/retry"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
 	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc/tokenscale"
 	"github.com/elijahmontenegro/grudge/service/agent"
 	"github.com/elijahmontenegro/grudge/service/agent/tools"
 	"github.com/elijahmontenegro/grudge/service/config"
@@ -44,6 +47,13 @@ type Deps struct {
 	PlanStore     PlanStore
 	Selections    Selections
 	EmbedEnqueuer EmbedEnqueuer
+
+	// Scales is the process-wide token-scale store (learned per-model
+	// counter→model ratios, grounded in provider-reported usage).
+	// Owned by the composition root, not the settings-rebuild
+	// lifecycle — the store is keyed by adapter/model and survives
+	// provider swaps. Nil runs ungrounded.
+	Scales *tokenscale.Store
 }
 
 // Build constructs an Entry (runner + lifecycle handles) for
@@ -99,7 +109,23 @@ func Build(threadID string, deps Deps) (*Entry, error) {
 	if c, ok := deps.Config.Settings.Providers["scorer"]; ok {
 		rerankerModelID = c.Model
 	}
-	runner, err := agent.NewRunner(deps.Engine, mainWithRetry, deps.DB, threadID, toolList, modelName, instruction, rerankerModelID, deps.Inserter)
+	// Token grounding for the main completer: the scale handle is
+	// pre-bound to adapter/model (the codec is part of the scale — the
+	// same model behind two adapters sends different subsets), and the
+	// counting projection comes from the adapter's own registration.
+	// Both nil when no main provider is configured — ungrounded,
+	// count-everything, today's exact behavior.
+	var scales adkbridge.TokenScales
+	var countText func(m *llmv1.LLMMessage) string
+	if c, ok := deps.Config.Settings.Providers["main"]; ok {
+		if deps.Scales != nil && c.Adapter != "" && c.Model != "" {
+			if bound := deps.Scales.Bound(c.Adapter + "/" + c.Model); bound != nil {
+				scales = bound
+			}
+		}
+		countText = core.CountProjection(c.Adapter)
+	}
+	runner, err := agent.NewRunner(deps.Engine, mainWithRetry, deps.DB, threadID, toolList, modelName, instruction, rerankerModelID, deps.Inserter, scales, countText)
 	if err != nil {
 		return nil, err
 	}

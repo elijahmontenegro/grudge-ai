@@ -97,9 +97,22 @@ type messagesResponse struct {
 	Usage   apiUsage         `json:"usage"`
 }
 
+// apiUsage decodes Anthropic's usage object. input_tokens EXCLUDES
+// the cached portions — Anthropic reports cache writes and reads as
+// separate fields — so the true prompt size is the three-way sum
+// (promptTotal), never input_tokens alone.
 type apiUsage struct {
-	InputTokens  int32 `json:"input_tokens"`
-	OutputTokens int32 `json:"output_tokens"`
+	InputTokens              int32 `json:"input_tokens"`
+	OutputTokens             int32 `json:"output_tokens"`
+	CacheCreationInputTokens int32 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int32 `json:"cache_read_input_tokens"`
+}
+
+// promptTotal is the full prompt-side token count: freshly evaluated
+// plus cache-written plus cache-read — everything occupying the
+// model's window on this request.
+func (u apiUsage) promptTotal() int32 {
+	return u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
 }
 
 func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
@@ -137,7 +150,7 @@ func (c *completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) 
 			Content: fromAPIContent(resp.Content),
 		},
 		Usage: &llmv1.Usage{
-			PromptTokens:     resp.Usage.InputTokens,
+			PromptTokens:     resp.Usage.promptTotal(),
 			CompletionTokens: resp.Usage.OutputTokens,
 		},
 	}, nil
@@ -172,6 +185,7 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 		defer resp.Body.Close()
 
 		scanner := bufio.NewScanner(resp.Body)
+		var promptTokens int32
 		for scanner.Scan() {
 			line := scanner.Text()
 			if !strings.HasPrefix(line, "data: ") {
@@ -189,6 +203,11 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 			}
 
 			switch event.Type {
+			case "message_start":
+				// The prompt-side counts arrive ONLY here, nested at
+				// message.usage — message_delta carries just the output
+				// side. Hold them for the terminal chunk.
+				promptTokens = event.Message.Usage.promptTotal()
 			case "content_block_delta":
 				if event.Delta.Type == "text_delta" {
 					if !yield(&llmv1.StreamChunk{
@@ -204,10 +223,16 @@ func (c *completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) it
 					}
 				}
 			case "message_delta":
+				// Some API versions repeat cumulative input-side usage
+				// on the delta — trust whichever report is larger (both
+				// are lower bounds on the same truth).
+				if t := event.Usage.promptTotal(); t > promptTokens {
+					promptTokens = t
+				}
 				yield(&llmv1.StreamChunk{
 					Done: true,
 					Usage: &llmv1.Usage{
-						PromptTokens:     event.Usage.InputTokens,
+						PromptTokens:     promptTokens,
 						CompletionTokens: event.Usage.OutputTokens,
 					},
 				}, nil)
@@ -228,6 +253,13 @@ type sseEvent struct {
 	Delta sseDelta `json:"delta,omitempty"`
 	Usage apiUsage `json:"usage,omitempty"`
 	Error sseError `json:"error,omitempty"`
+	// Message is populated on message_start events — the prompt-side
+	// usage nests inside it, not at the event's top level.
+	Message sseMessage `json:"message"`
+}
+
+type sseMessage struct {
+	Usage apiUsage `json:"usage"`
 }
 
 type sseDelta struct {

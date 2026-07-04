@@ -54,6 +54,12 @@ message CompletionRequest {
   repeated ToolDeclaration tools = 9;
   // Tool-choice constraint. Optional — unset means model decides.
   ToolChoice tool_choice = 10;
+  // The caller's intended total context window in tokens (prompt +
+  // generation). Adapters that control the serving-side window apply
+  // it (ollama maps it to options.num_ctx — without that, ollama
+  // silently truncates the prompt head at the model's default);
+  // hosted providers manage their own windows and ignore it.
+  optional int32 context_window_tokens = 11;
 }
 
 message CompletionResponse {
@@ -67,6 +73,17 @@ message CompletionResponse {
   string finish_reason = 5;
 }
 
+// Usage is the provider's own token accounting for one request —
+// ground truth, at request granularity: one total for the entire
+// serialized prompt window, one for the entire generation. No
+// provider reports per-message counts; message-level numbers can
+// only ever be derived by a consumer.
+//
+// prompt_tokens includes cached portions where the provider reports
+// them (adapters sum cache-read/cache-write breakdowns into it).
+// Providers that count only newly-evaluated tokens — local KV-prefix
+// caches like ollama's — may under-report, so consumers must treat
+// the value as a lower bound on the true prompt size.
 message Usage {
   int32 prompt_tokens = 1;
   int32 completion_tokens = 2;
