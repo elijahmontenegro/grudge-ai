@@ -75,6 +75,17 @@ type messagesRequest struct {
 	Stream     bool           `json:"stream"`
 	Tools      []apiTool      `json:"tools,omitempty"`
 	ToolChoice *apiToolChoice `json:"tool_choice,omitempty"`
+	Thinking   *apiThinking   `json:"thinking,omitempty"`
+}
+
+// apiThinking requests extended thinking. Display "summarized" is the
+// only setting that gives grudge's corpus real reasoning text —
+// "omitted" (several current models' default) returns empty text with
+// only a signature, which is real for tool-loop replay but dead
+// weight for RRC's prerequisite-detection signal.
+type apiThinking struct {
+	Type    string `json:"type"`
+	Display string `json:"display,omitempty"`
 }
 
 type apiTool struct {
@@ -417,7 +428,16 @@ func toAPIRequest(model string, req *llmv1.CompletionRequest, stream bool) (mess
 		})
 	}
 
-	maxTokens := int32(4096)
+	// Nothing upstream of this adapter ever sets CompletionRequest.MaxTokens
+	// (ADK sets no default GenerateContentConfig; the runner never
+	// populates one) — this fallback is the only ceiling in the whole
+	// stack on every real call. Sized per the provider's own guidance:
+	// enough that extended thinking (which bills against this same
+	// budget) has real room without truncating the answer that follows.
+	maxTokens := int32(16000)
+	if stream {
+		maxTokens = 64000
+	}
 	if req.MaxTokens != nil {
 		maxTokens = *req.MaxTokens
 	}
@@ -425,6 +445,11 @@ func toAPIRequest(model string, req *llmv1.CompletionRequest, stream bool) (mess
 	toolChoice, err := toAPIToolChoice(req.ToolChoice)
 	if err != nil {
 		return messagesRequest{}, err
+	}
+
+	var thinking *apiThinking
+	if thinkingCapable(model) {
+		thinking = &apiThinking{Type: "adaptive", Display: "summarized"}
 	}
 
 	return messagesRequest{
@@ -435,7 +460,31 @@ func toAPIRequest(model string, req *llmv1.CompletionRequest, stream bool) (mess
 		Stream:     stream,
 		Tools:      toAPITools(req.Tools),
 		ToolChoice: toolChoice,
+		Thinking:   thinking,
 	}, nil
+}
+
+// thinkingCapable reports whether model supports Anthropic's modern
+// adaptive-thinking request shape. A static allowlist, not a live
+// capability probe — same style as normalizeStopReason below. Sending
+// {"type":"adaptive"} to a model that doesn't support it is a 400 on
+// every request, and several real, currently-common models don't:
+// Haiku 4.5 (no adaptive-thinking/effort support), and the 4.5-and-
+// earlier Sonnet/Opus line (legacy budget_tokens-only shape, when they
+// support thinking at all). An unrecognized model name defaults to
+// false — the safe direction; it just doesn't get the feature until
+// this table is updated, rather than a guessed-wrong model breaking
+// every request. Update when Anthropic ships new adaptive-thinking-
+// capable models.
+func thinkingCapable(model string) bool {
+	switch model {
+	case "claude-fable-5", "claude-mythos-5",
+		"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+		"claude-sonnet-5", "claude-sonnet-4-6":
+		return true
+	default:
+		return false
+	}
 }
 
 func toAPITools(tools []*llmv1.ToolDeclaration) []apiTool {

@@ -446,6 +446,81 @@ func TestStream_UnsignedThinkingBlockEmitsNoTerminator(t *testing.T) {
 	}
 }
 
+// A model on the adaptive-thinking allowlist gets the thinking field
+// wired to adaptive + summarized display — the only display mode that
+// gives RRC's corpus real reasoning text instead of an empty string.
+func TestToAPIRequest_EnablesAdaptiveThinkingForCapableModels(t *testing.T) {
+	req := &llmv1.CompletionRequest{Messages: []*llmv1.LLMMessage{userMsg("hi")}}
+	for _, model := range []string{
+		"claude-fable-5", "claude-mythos-5",
+		"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+		"claude-sonnet-5", "claude-sonnet-4-6",
+	} {
+		areq, err := toAPIRequest(model, req, false)
+		if err != nil {
+			t.Fatalf("model %s: toAPIRequest: %v", model, err)
+		}
+		if areq.Thinking == nil || areq.Thinking.Type != "adaptive" || areq.Thinking.Display != "summarized" {
+			t.Fatalf("model %s: expected adaptive+summarized thinking, got %+v", model, areq.Thinking)
+		}
+	}
+}
+
+// A model not on the allowlist (including ones that don't support the
+// modern adaptive shape at all) gets no thinking field — sending one
+// would 400 every request rather than silently degrading.
+func TestToAPIRequest_OmitsThinkingForIncapableModels(t *testing.T) {
+	req := &llmv1.CompletionRequest{Messages: []*llmv1.LLMMessage{userMsg("hi")}}
+	for _, model := range []string{
+		"claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-5",
+		"claude-opus-4-1", "claude-opus-4-0", "claude-sonnet-4-0",
+		"claude-3-5-sonnet-20241022", "some-unknown-future-model",
+	} {
+		areq, err := toAPIRequest(model, req, false)
+		if err != nil {
+			t.Fatalf("model %s: toAPIRequest: %v", model, err)
+		}
+		if areq.Thinking != nil {
+			t.Fatalf("model %s: expected no thinking field, got %+v", model, areq.Thinking)
+		}
+	}
+}
+
+// Nothing upstream of this adapter ever sets CompletionRequest.MaxTokens
+// today, so this fallback is the only ceiling in the stack — it must
+// leave real headroom for thinking (which bills against the same
+// budget) without silently truncating the answer that follows.
+func TestToAPIRequest_MaxTokensDefaultsAreStreamAware(t *testing.T) {
+	req := &llmv1.CompletionRequest{Messages: []*llmv1.LLMMessage{userMsg("hi")}}
+
+	nonStream, err := toAPIRequest("claude-test", req, false)
+	if err != nil {
+		t.Fatalf("toAPIRequest: %v", err)
+	}
+	if nonStream.MaxTokens != 16000 {
+		t.Fatalf("non-stream default MaxTokens = %d, want 16000", nonStream.MaxTokens)
+	}
+
+	streamed, err := toAPIRequest("claude-test", req, true)
+	if err != nil {
+		t.Fatalf("toAPIRequest: %v", err)
+	}
+	if streamed.MaxTokens != 64000 {
+		t.Fatalf("stream default MaxTokens = %d, want 64000", streamed.MaxTokens)
+	}
+
+	// An explicit caller-supplied value always wins over the default.
+	explicit := int32(500)
+	req.MaxTokens = &explicit
+	got, err := toAPIRequest("claude-test", req, false)
+	if err != nil {
+		t.Fatalf("toAPIRequest: %v", err)
+	}
+	if got.MaxTokens != 500 {
+		t.Fatalf("explicit MaxTokens override = %d, want 500", got.MaxTokens)
+	}
+}
+
 // CountText mirrors toAPIContent: text + tool_use + tool_result are
 // sent; thinking is counted only when signed (mirroring the
 // signed-only replay rule) and attachments are never sent.
