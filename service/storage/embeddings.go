@@ -9,10 +9,13 @@ import (
 )
 
 // Embedding cache — one vector per (chunk, embedder model) triple.
-// Storage is the sqlite-vec vec0 virtual table chunk_vectors. The vec0
-// engine builds an internal index for sub-linear KNN; auxiliary columns
-// (message_id, chunk_index, thread_id, model_id, role) are pushed into
-// the MATCH query as filter predicates.
+// Storage is the sqlite-vec vec0 virtual table chunk_vectors. sqlite-vec
+// v0.1.6 has no ANN index: KNN is an exhaustive brute-force scan, LINEAR
+// in the vector count under the model_id partition (measured in
+// service/rrcbench). Auxiliary columns (message_id, chunk_index,
+// thread_id, model_id, role) are pushed into the MATCH query as filter
+// predicates; model_id, as a partition key, narrows the scan set but does
+// not make it sub-linear.
 //
 // chunk_rowid is sourced from the chunk_vector_rowids mapping table:
 // SQLite AUTOINCREMENT gives unique int64 ids with no collision risk,
@@ -165,14 +168,21 @@ func (d *DB) AllChunkEmbeddingsForModel(modelID string) ([]ChunkEmbedding, error
 	return out, rows.Err()
 }
 
-// NearestChunkVectors runs sub-linear KNN against the vec0 ANN index.
+// NearestChunkVectors runs a k-nearest-neighbour query against vec0.
+// sqlite-vec v0.1.6 ships no ANN index, so this is an exhaustive
+// brute-force scan: cost is LINEAR in the number of vectors under the
+// model_id partition (measured in service/rrcbench — ~0.011 ms/vector on
+// top of a ~108 ms fixed WASM-SQLite/result-decode floor). This is RRC's
+// dominant per-step cost and the primary corpus-invariance leak; an ANN
+// index (or a bounded candidate window) is what would restore invariance.
+//
 // queryVec is encoded as the vec0 BLOB format (little-endian float32);
 // k bounds the result set; predicateClause is the compiled SQL fragment
 // for additional aux-column filters (compiled by the search package's
 // predicate compiler) — empty means no extra filter beyond model_id.
 //
 // model_id is a vec0 partition key so `WHERE
-// model_id = ?` is native — the index partitions by it and the KNN
+// model_id = ?` is native — vec0 partitions by it and the KNN
 // runs only within the chosen model's vectors. Aux columns
 // (+message_id, +chunk_index, +thread_id, +role) can't appear in
 // the KNN WHERE; if the caller needs to filter on those, the
