@@ -40,7 +40,10 @@ func TestNearestChunksAdaptivelyFindsEligibleCandidate(t *testing.T) {
 	eligibleVector[0], eligibleVector[1] = 0.8, 0.2
 	insertVectorMessage(t, db, "eligible", "current", 0, eligibleVector)
 
-	oracle := NewChunkOracle(db, fixedEmbedder{vector: queryVector}, "model")
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: queryVector}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := oracle.NearestChunks(t.Context(), "query", 1, rrc.PredThread{ThreadID: "current"})
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +67,10 @@ func TestNearestChunksExcludesLocalMessagesWithoutLosingK(t *testing.T) {
 	candidate[0], candidate[1] = 0.8, 0.2
 	insertVectorMessage(t, db, "candidate", "t1", 1, candidate)
 
-	oracle := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
 	got, err := oracle.NearestChunks(t.Context(), "query", 1, rrc.PredExcludeMessageIDs{MessageIDs: []string{"local"}})
 	if err != nil {
 		t.Fatal(err)

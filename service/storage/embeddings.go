@@ -73,7 +73,17 @@ func (d *DB) InsertChunkEmbedding(messageID string, chunkIndex int, modelID stri
 	); err != nil {
 		return fmt.Errorf("InsertChunkEmbedding: insert: %w", err)
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Notify the ANN index (if wired) of the freshly-stored vector, after
+	// the commit so it never sees a vector the DB rolled back. threadID was
+	// resolved above; passing it lets the index's owner keep predicate
+	// metadata in RAM instead of re-querying it per search.
+	if p := d.onEmbed.Load(); p != nil {
+		(*p)(messageID, chunkIndex, threadID, vec)
+	}
+	return nil
 }
 
 // GetChunkEmbedding returns (vec, true) if cached, (nil, false) if

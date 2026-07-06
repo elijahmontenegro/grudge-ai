@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 
 	_ "github.com/asg017/sqlite-vec-go-bindings/ncruces"
 	_ "github.com/ncruces/go-sqlite3/driver"
@@ -11,6 +12,17 @@ import (
 
 type DB struct {
 	*sql.DB
+	onEmbed atomic.Pointer[func(messageID string, chunkIndex int, threadID string, vec []float32)]
+}
+
+// SetEmbeddingObserver registers a callback invoked after every successful
+// InsertChunkEmbedding, with the (message, chunk, thread, vector) just written.
+// The substrate wires this to the ANN index so every embedding-insert path —
+// lazy EnsureVector, the post-insert embed queue, the backfill — keeps both the
+// index and its RAM-resident predicate metadata (thread) current without those
+// writers importing it. Set once at boot, before concurrent inserts begin.
+func (d *DB) SetEmbeddingObserver(f func(messageID string, chunkIndex int, threadID string, vec []float32)) {
+	d.onEmbed.Store(&f)
 }
 
 // Open creates the canonical pre-release database or opens a database

@@ -9,6 +9,27 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// MessageThreads returns every message's thread id — the boot-time source
+// for the ANN retrieval path's RAM-resident thread map, so thread-scope
+// predicates never hit the database per search. O(messages), read once at
+// startup; live inserts keep the map current through the embedding observer.
+func (d *DB) MessageThreads() (map[string]string, error) {
+	rows, err := d.Query(`SELECT id, thread_id FROM messages`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var id, threadID string
+		if err := rows.Scan(&id, &threadID); err != nil {
+			return nil, err
+		}
+		out[id] = threadID
+	}
+	return out, rows.Err()
+}
+
 // InsertMessage stores a message with proto-encoded content and its
 // caller-supplied chunks in one transaction. Chunks are the scoring
 // substrate for RRC — a message without chunks is invisible to

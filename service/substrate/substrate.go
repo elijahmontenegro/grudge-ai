@@ -235,7 +235,15 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		s.ChunkOracle = o.chunkOracle
 	} else if s.Embedder != nil && s.EmbedModelID != "" {
 		s.Searcher = search.NewSearcher(s.Embedder, s.EmbedModelID, db)
-		s.ChunkOracle = oracle.NewChunkOracle(db, s.Embedder, s.EmbedModelID)
+		oc, err := oracle.NewChunkOracle(db, s.Embedder, s.EmbedModelID)
+		if err != nil {
+			return nil, fmt.Errorf("build chunk oracle: %w", err)
+		}
+		s.ChunkOracle = oc
+		// Every embedding-insert path (lazy EnsureVector, the post-insert
+		// embed queue, the backfill) feeds the ANN index through this hook,
+		// so the index stays current without those writers importing it.
+		db.SetEmbeddingObserver(oc.IndexAdd)
 	}
 
 	// Engine constructed in one shot with everything wired:

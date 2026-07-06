@@ -257,7 +257,10 @@ func buildCorpus(db *storage.DB, threadID string, n, localWindow, dim int) (*cor
 
 	var embedCalls, scorerCalls, scorerPairs int64
 	embedder := hashEmbedder{dim: dim, calls: &embedCalls}
-	o := oracle.NewChunkOracle(db, embedder, benchModel)
+	o, err := oracle.NewChunkOracle(db, embedder, benchModel)
+	if err != nil {
+		return nil, fmt.Errorf("build chunk oracle: %w", err)
+	}
 	scorer := countingScorer{calls: &scorerCalls, pairs: &scorerPairs}
 
 	edges, err := db.AllEdges()
