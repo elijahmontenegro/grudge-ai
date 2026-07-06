@@ -2,6 +2,7 @@ package oracle
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/elijahmontenegro/grudge/core"
@@ -32,7 +33,7 @@ func TestNearestChunksAdaptivelyFindsEligibleCandidate(t *testing.T) {
 	}
 
 	queryVector := basisVector(0)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		id := "foreign-" + string(rune('a'+i))
 		insertVectorMessage(t, db, id, "foreign", int64(i), basisVector(0))
 	}
@@ -77,6 +78,54 @@ func TestNearestChunksExcludesLocalMessagesWithoutLosingK(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].MessageID != "candidate" {
 		t.Fatalf("local exclusion returned %+v", got)
+	}
+}
+
+// TestNearestChunksWidensPastExcludedShortlist is the regression guard for the
+// under-return a single fetch introduces under THREAD scope: the excluded
+// local-context messages are the most similar, so they can fill the entire
+// first k*annOverfetch shortlist, leaving a real candidate ranked just past it
+// unreachable. Here 10 top-scoring messages (all on the query) are all excluded
+// and one lower-scoring candidate sits below them; the first shortlist (k=1 ->
+// 8) is entirely excluded, so the widen loop must fetch further — within the
+// thread partition — to surface the candidate. A single fetch returns nothing.
+func TestNearestChunksWidensPastExcludedShortlist(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// 10 excluded messages exactly on the query (score 1.0) — more than the
+	// k*annOverfetch=8 first shortlist, so they fill it entirely.
+	excluded := make([]string, 0, 10)
+	for i := range 10 {
+		id := fmt.Sprintf("local-%d", i)
+		insertVectorMessage(t, db, id, "t1", int64(i), basisVector(0))
+		excluded = append(excluded, id)
+	}
+	// One real candidate in the same thread, ranked strictly below the excluded.
+	cand := make([]float32, 1024)
+	cand[0], cand[1] = 0.8, 0.2
+	insertVectorMessage(t, db, "candidate", "t1", 10, cand)
+
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Production predicate shape: thread scope + local-context exclusion.
+	predicate := rrc.PredAnd{Children: []rrc.Predicate{
+		rrc.PredScope{CurrentThread: "t1", Scope: rrc.ScopeThread},
+		rrc.PredExcludeMessageIDs{MessageIDs: excluded},
+	}}
+	got, err := oracle.NearestChunks(t.Context(), "query", 1, predicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].MessageID != "candidate" {
+		t.Fatalf("widen-past-excluded returned %+v, want [candidate] — a single fetch would return nothing", got)
 	}
 }
 

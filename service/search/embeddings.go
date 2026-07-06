@@ -68,21 +68,18 @@ type SearchResult struct {
 	Score     float64
 }
 
-// Search shortlist sizing: user-facing hits are final (not RRC candidates), so
-// over-fetch wider than the RRC path and widen until `limit` distinct messages
-// are covered — the index ranks chunks and one message owns several. Bounded by
-// searchWidenCap so the search stays sub-linear.
+// Search shortlist sizing: a message owns several chunks, so over-fetch wide
+// enough that the top k*searchOverfetch chunks cover `limit` distinct messages.
 const (
 	searchOverfetch    = 16
 	searchMinShortlist = 128
-	searchWidenCap     = 4096
 )
 
 // Search embeds the query, walks the shared global ANN graph, and returns the
 // best-scoring chunk per message, ranked. See the Searcher doc for the
 // approximate-but-corpus-invariant tradeoff vs the former brute-force scan.
 func (s *Searcher) Search(ctx context.Context, query string, limit int) ([]SearchResult, error) {
-	if s.index == nil {
+	if s.index == nil || limit <= 0 {
 		return nil, nil
 	}
 	vecs, err := s.embedder.Embed(ctx, core.RoleQuery, []string{query})
@@ -95,30 +92,28 @@ func (s *Searcher) Search(ctx context.Context, query string, limit int) ([]Searc
 	qVec := vecs[0]
 	qNorm := l2norm(qVec)
 
-	// Group by message keeping the best chunk, ranked by the RAW asymmetric
-	// score (not the [0,1]-clamped display score, which would collapse ties
-	// among strong matches). normalizedScore is applied only to the value the
-	// API surfaces.
+	// One bounded fetch over the global graph. The over-fetch covers both rerank
+	// recall and the chunk->message collapse (a message owns several chunks).
+	// Widening for message coverage here would be a global search that can only
+	// be bounded by a magic cap, so instead a few long messages dominating the
+	// top simply yields fewer than `limit` distinct messages — the correct
+	// answer, since no more distinct messages are near the top. Group by message
+	// keeping the best chunk, ranked by RAW score (normalizedScore only shapes
+	// the value the API surfaces).
 	type scored struct {
 		res SearchResult
 		raw float64
 	}
-	start := max(limit*searchOverfetch, searchMinShortlist)
-	best := make(map[string]scored)
-	for m := start; ; m *= 2 {
-		cands, _ := s.index.Search(qVec, m, "") // "" = global graph, all threads
-		best = make(map[string]scored, len(cands))
-		for _, c := range cands {
-			mid, cidx := chunkkey.Split(c.Key)
-			if ex, ok := best[mid]; !ok || c.Score > ex.raw {
-				best[mid] = scored{
-					res: SearchResult{MessageID: mid, ChunkIdx: cidx, Score: normalizedScore(c.Score, qNorm)},
-					raw: c.Score,
-				}
+	shortlist := max(limit*searchOverfetch, searchMinShortlist)
+	cands, _ := s.index.Search(qVec, shortlist, "") // "" = global graph, all threads
+	best := make(map[string]scored, len(cands))
+	for _, c := range cands {
+		mid, cidx := chunkkey.Split(c.Key)
+		if ex, ok := best[mid]; !ok || c.Score > ex.raw {
+			best[mid] = scored{
+				res: SearchResult{MessageID: mid, ChunkIdx: cidx, Score: normalizedScore(c.Score, qNorm)},
+				raw: c.Score,
 			}
-		}
-		if len(best) >= limit || len(cands) < m || m >= searchWidenCap {
-			break
 		}
 	}
 

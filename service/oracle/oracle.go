@@ -151,9 +151,9 @@ const annOverfetch = 8
 // in-RAM ANN index (service/annindex): a Hamming-navigated graph plus int8
 // asymmetric rerank, sub-linear and never reading a vector off disk. Routing
 // applies the scope structurally (THREAD -> the thread's partition, ALL -> the
-// global graph), so the only residual predicate is the bounded local-context
-// exclusion set; one k*annOverfetch shortlist absorbs it. Returns the top-k in
-// asymmetric order.
+// global graph); the residual predicate is the local-context exclusion set,
+// which a THREAD-scoped shortlist widens past — within its bounded partition —
+// if it eats into k. Returns the top-k in asymmetric order.
 func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int, predicate rrc.Predicate) ([]rrc.ChunkRef, error) {
 	if o == nil || o.db == nil || o.embedder == nil {
 		return nil, nil
@@ -180,26 +180,37 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 		searchThread = t
 	}
 
-	cands, _ := o.index.Search(qVec, k*annOverfetch, searchThread) // asymmetric-reranked, nearest first
-	if len(cands) == 0 {
-		return nil, nil
-	}
-	// Predicate filtering is pure RAM (thread from the in-memory map). Routing
-	// already applied the scope, so the only filter left is the bounded
-	// local-context exclusion set, which the shortlist dwarfs.
-	eligible := make([]annindex.Candidate, 0, len(cands))
-	o.threadMu.RLock()
-	for _, c := range cands {
-		mid := messageIDFromKey(c.Key)
-		if rrc.EvalPredicate(predicate, rrc.CandidateAttrs{
-			MessageID: mid,
-			ThreadID:  o.threadByMsg[mid],
-			Metadata:  map[string]string{"model_id": o.model},
-		}) {
-			eligible = append(eligible, c)
+	// Over-fetch a shortlist and apply the residual predicate (the local-context
+	// exclusion set) in pure RAM. The excluded messages are the most-similar
+	// ones, so they crowd the TOP of the shortlist — a large in-thread local
+	// context can push real prerequisites past it. So THREAD scope widens the
+	// shortlist until k survive or the thread partition is exhausted
+	// (len(cands) < m): bounded by the thread, no magic cap. ALL scope never
+	// widens — its exclusion set is a negligible fraction of the global graph,
+	// so one fetch fills k, and widening the global graph is what we must not do.
+	var eligible []annindex.Candidate
+	for m := k * annOverfetch; ; m *= 2 {
+		cands, _ := o.index.Search(qVec, m, searchThread) // asymmetric-reranked, nearest first
+		if len(cands) == 0 {
+			return nil, nil
+		}
+		eligible = make([]annindex.Candidate, 0, len(cands))
+		o.threadMu.RLock()
+		for _, c := range cands {
+			mid := messageIDFromKey(c.Key)
+			if rrc.EvalPredicate(predicate, rrc.CandidateAttrs{
+				MessageID: mid,
+				ThreadID:  o.threadByMsg[mid],
+				Metadata:  map[string]string{"model_id": o.model},
+			}) {
+				eligible = append(eligible, c)
+			}
+		}
+		o.threadMu.RUnlock()
+		if len(eligible) >= k || len(cands) < m || searchThread == "" {
+			break
 		}
 	}
-	o.threadMu.RUnlock()
 	if len(eligible) > k {
 		eligible = eligible[:k]
 	}
