@@ -84,7 +84,7 @@ func TestAssembleMissingExactCounterpartFails(t *testing.T) {
 
 	_, err := engine.Assemble(context.Background(), AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor), Anchor: anchor,
-		Corpus: []*threadv1.Message{call, anchor}, LocalContext: []*threadv1.Message{anchor},
+		Store: sliceStore([]*threadv1.Message{call, anchor}), LocalContext: []*threadv1.Message{anchor},
 		Scope: threadv1.SelectionScope_SELECTION_SCOPE_THREAD, ThreadID: "t1",
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires exact tool result") {
@@ -109,7 +109,7 @@ func TestAssembleShedsSelectedProtocolClosureAtomically(t *testing.T) {
 
 	assembled, err := engine.Assemble(context.Background(), AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor), Anchor: anchor,
-		Corpus: []*threadv1.Message{call, result, anchor}, LocalContext: []*threadv1.Message{anchor},
+		Store: sliceStore([]*threadv1.Message{call, result, anchor}), LocalContext: []*threadv1.Message{anchor},
 		Scope: threadv1.SelectionScope_SELECTION_SCOPE_THREAD, ThreadID: "t1",
 		Budget: localTokens + 1,
 	})

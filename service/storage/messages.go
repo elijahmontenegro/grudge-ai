@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"database/sql"
+	"strings"
 	"time"
 
 	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
@@ -8,6 +10,91 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// scanMessages reads full messages from rows in the canonical column order
+// (id, thread_id, role, content, position, created_at, turn_id).
+func scanMessages(rows *sql.Rows) ([]*threadv1.Message, error) {
+	var out []*threadv1.Message
+	for rows.Next() {
+		msg := &threadv1.Message{}
+		var roleInt int
+		var content []byte
+		var createdAt time.Time
+		if err := rows.Scan(&msg.Id, &msg.ThreadId, &roleInt, &content, &msg.Position, &createdAt, &msg.TurnId); err != nil {
+			return nil, err
+		}
+		msg.Role = threadv1.Role(roleInt)
+		msg.CreatedAt = timestamppb.New(createdAt)
+		var err error
+		if msg.Content, err = unmarshalContentBlocks(content); err != nil {
+			return nil, err
+		}
+		out = append(out, msg)
+	}
+	return out, rows.Err()
+}
+
+// Messages returns the given messages by id — the bounded content fetch
+// Assemble uses for its selected set, never the full corpus. Satisfies
+// rrc.CorpusStore.
+func (d *DB) Messages(ids []string) (map[string]*threadv1.Message, error) {
+	if len(ids) == 0 {
+		return map[string]*threadv1.Message{}, nil
+	}
+	ph := strings.Repeat("?,", len(ids))
+	ph = ph[:len(ph)-1]
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	rows, err := d.Query(`SELECT id, thread_id, role, content, position, created_at, turn_id
+	                      FROM messages WHERE id IN (`+ph+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	msgs, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]*threadv1.Message, len(msgs))
+	for _, m := range msgs {
+		out[m.Id] = m
+	}
+	return out, nil
+}
+
+// TurnPeers returns every message sharing a (thread_id, turn_id) with any input
+// message — the bounded set where tool-call/result counterparts live (a call
+// and its result share a turn), via the idx_messages_turn index. Empty turn ids
+// (legacy rows with no turn identity) are skipped. Satisfies rrc.CorpusStore.
+func (d *DB) TurnPeers(msgs []*threadv1.Message) ([]*threadv1.Message, error) {
+	seen := make(map[string]bool)
+	var clauses []string
+	var args []any
+	for _, m := range msgs {
+		if m.TurnId == "" {
+			continue
+		}
+		key := m.ThreadId + "\x00" + m.TurnId
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		clauses = append(clauses, "(thread_id = ? AND turn_id = ?)")
+		args = append(args, m.ThreadId, m.TurnId)
+	}
+	if len(clauses) == 0 {
+		return nil, nil
+	}
+	rows, err := d.Query(`SELECT id, thread_id, role, content, position, created_at, turn_id
+	                      FROM messages WHERE `+strings.Join(clauses, " OR "), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMessages(rows)
+}
 
 // MessageThreads returns every message's thread id — the boot-time source
 // for the ANN retrieval path's RAM-resident thread map, so thread-scope
@@ -102,6 +189,48 @@ func (d *DB) GetMessage(id string) (*threadv1.Message, error) {
 	msg.CreatedAt = timestamppb.New(createdAt)
 	msg.Content, err = unmarshalContentBlocks(content)
 	return msg, err
+}
+
+// RecentMessages returns a thread's most recent n messages in ascending
+// position order — a bounded recency window for Local Context construction,
+// via idx_messages_thread_pos. Invariant under corpus growth.
+func (d *DB) RecentMessages(threadID string, n int) ([]*threadv1.Message, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	rows, err := d.Query(`SELECT id, thread_id, role, content, position, created_at, turn_id
+	                      FROM messages WHERE thread_id = ? ORDER BY position DESC LIMIT ?`, threadID, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	msgs, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 { // DESC -> ascending
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
+	return msgs, nil
+}
+
+// TurnMessages returns a thread's messages for one turn via idx_messages_turn —
+// the in-flight turn's discourse, bounded by the turn's size (independent of
+// corpus size), so invariant under corpus growth. No ORDER BY: an
+// `ORDER BY position` biases the planner toward idx_messages_thread_pos (for
+// the ordering) and away from the turn index (for the filter), turning a
+// bounded lookup into an O(N) scan. Callers order the merged window themselves.
+func (d *DB) TurnMessages(threadID, turnID string) ([]*threadv1.Message, error) {
+	if turnID == "" {
+		return nil, nil
+	}
+	rows, err := d.Query(`SELECT id, thread_id, role, content, position, created_at, turn_id
+	                      FROM messages WHERE thread_id = ? AND turn_id = ?`, threadID, turnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMessages(rows)
 }
 
 // ListMessages returns messages for a thread, ordered by position.

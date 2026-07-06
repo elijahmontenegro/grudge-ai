@@ -142,6 +142,40 @@ func (o *mockChunkOracle) RepresentativeVectors(_ context.Context, _ []string) (
 
 // --- Helpers ---
 
+// sliceStore is a CorpusStore backed by an in-memory message slice — the test
+// analogue of the DB-backed store the bridge provides. TurnPeers groups by
+// (thread, turn); test messages share the empty turn, so it returns all
+// same-thread messages, a harmless superset for protocol closure.
+type sliceStore []*threadv1.Message
+
+func (s sliceStore) Messages(ids []string) (map[string]*threadv1.Message, error) {
+	byID := make(map[string]*threadv1.Message, len(s))
+	for _, m := range s {
+		byID[m.Id] = m
+	}
+	out := make(map[string]*threadv1.Message, len(ids))
+	for _, id := range ids {
+		if m, ok := byID[id]; ok {
+			out[id] = m
+		}
+	}
+	return out, nil
+}
+
+func (s sliceStore) TurnPeers(msgs []*threadv1.Message) ([]*threadv1.Message, error) {
+	want := make(map[string]bool, len(msgs))
+	for _, m := range msgs {
+		want[m.ThreadId+"\x00"+m.TurnId] = true
+	}
+	var out []*threadv1.Message
+	for _, m := range s {
+		if want[m.ThreadId+"\x00"+m.TurnId] {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
 func makeMsg(id string, position int64, threadID string, text string) *threadv1.Message {
 	return &threadv1.Message{
 		Id:        id,
@@ -220,7 +254,7 @@ func TestSelectPrereqs_EmptyCorpus(t *testing.T) {
 	e := testEngine(newMockScorer(), newMockChunkOracle())
 	msg := makeMsg("m1", 0, "t1", "hello")
 
-	edges, _, err := e.selectViaFixture(context.Background(), msg, nil)
+	edges, _, err := e.selectViaFixture(context.Background(), msg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,12 +274,12 @@ func TestSelectPrereqs_NilScorer(t *testing.T) {
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, nil, WithChunkOracle(o))
 	msg := addMsg(o, "m1", 1, "t1", "hello")
-	prior := addMsg(o, "m0", 0, "t1", "hi")
-	// The mock oracle's NearestChunks needs to surface prior with a
+	addMsg(o, "m0", 0, "t1", "hi")
+	// The mock oracle's NearestChunks needs to surface the prior "hi" with a
 	// RetrievalScore above the accept boundary for an edge to form.
 	o.SetRetrievalScore("hi", 0.8)
 
-	edges, _, err := e.selectViaFixture(context.Background(), msg, []*threadv1.Message{prior})
+	edges, _, err := e.selectViaFixture(context.Background(), msg)
 	if err != nil {
 		t.Fatalf("nil scorer should not error, got %v", err)
 	}
@@ -263,9 +297,8 @@ func TestSelectPrereqs_NilOracle(t *testing.T) {
 	// produce zero edges.
 	e := NewEngine(testConfig(), newMockScorer())
 	msg := makeMsg("m1", 1, "t1", "hello")
-	corpus := []*threadv1.Message{makeMsg("m0", 0, "t1", "hi")}
 
-	_, _, err := e.selectViaFixture(context.Background(), msg, corpus)
+	_, _, err := e.selectViaFixture(context.Background(), msg)
 	if !errors.Is(err, ErrScorerUnavailable) {
 		t.Fatalf("expected ErrScorerUnavailable, got %v", err)
 	}
@@ -279,10 +312,10 @@ func TestSelectPrereqs_BelowThreshold_SameThread(t *testing.T) {
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "t1", "hi")
+	addMsg(o, "m0", 0, "t1", "hi")
 	m1 := addMsg(o, "m1", 1, "t1", "hello")
 
-	edges, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0})
+	edges, _, err := e.selectViaFixture(context.Background(), m1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,10 +331,10 @@ func TestSelectPrereqs_BelowThreshold_CrossThread(t *testing.T) {
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "t-other", "hi")
+	addMsg(o, "m0", 0, "t-other", "hi")
 	m1 := addMsg(o, "m1", 1, "t1", "hello")
 
-	edges, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0})
+	edges, _, err := e.selectViaFixture(context.Background(), m1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,10 +350,10 @@ func TestSelectPrereqs_AboveThreshold(t *testing.T) {
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "t1", "what is a tomato cake")
+	addMsg(o, "m0", 0, "t1", "what is a tomato cake")
 	m1 := addMsg(o, "m1", 1, "t1", "tell me more about tomato cake")
 
-	edges, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0})
+	edges, _, err := e.selectViaFixture(context.Background(), m1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,14 +382,12 @@ func TestSelectPrereqs_MultipleCorpusMessages(t *testing.T) {
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
-	corpus := []*threadv1.Message{
-		addMsg(o, "m0", 0, "t1", "hello"),
-		addMsg(o, "m1", 1, "t1", "nice weather"),
-		addMsg(o, "m2", 2, "t1", "tell me a joke"),
-	}
+	addMsg(o, "m0", 0, "t1", "hello")
+	addMsg(o, "m1", 1, "t1", "nice weather")
+	addMsg(o, "m2", 2, "t1", "tell me a joke")
 	prompt := addMsg(o, "m3", 3, "t1", "how are you")
 
-	edges, _, err := e.selectViaFixture(context.Background(), prompt, corpus)
+	edges, _, err := e.selectViaFixture(context.Background(), prompt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,13 +432,13 @@ func TestSelect_LinearChain(t *testing.T) {
 		addMsg(o, "m3", 3, "t1", "d"),
 	}
 
-	if _, _, err := e.selectViaFixture(ctx, msgs[1], msgs[:1]); err != nil {
+	if _, _, err := e.selectViaFixture(ctx, msgs[1]); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.selectViaFixture(ctx, msgs[2], msgs[:2]); err != nil {
+	if _, _, err := e.selectViaFixture(ctx, msgs[2]); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := e.selectViaFixture(ctx, msgs[3], msgs[:3]); err != nil {
+	if _, _, err := e.selectViaFixture(ctx, msgs[3]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -496,9 +527,9 @@ func TestFork(t *testing.T) {
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "t1", "hello")
+	addMsg(o, "m0", 0, "t1", "hello")
 	m1 := addMsg(o, "m1", 1, "t1", "world")
-	if _, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0}); err != nil {
+	if _, _, err := e.selectViaFixture(context.Background(), m1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -656,10 +687,10 @@ func TestSelectPrereqs_ScoreCachePopulated(t *testing.T) {
 	o := newMockChunkOracle()
 	e := testEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "t1", "a")
+	addMsg(o, "m0", 0, "t1", "a")
 	m1 := addMsg(o, "m1", 1, "t1", "b")
 
-	if _, _, err := e.selectViaFixture(context.Background(), m1, []*threadv1.Message{m0}); err != nil {
+	if _, _, err := e.selectViaFixture(context.Background(), m1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -682,9 +713,9 @@ func TestSelectPrereqs_SkipsSelf(t *testing.T) {
 	e := testEngine(mc, o)
 
 	m0 := addMsg(o, "m0", 0, "t1", "hello")
-	// Corpus includes the message itself — should be filtered out and
-	// no scorer call should happen.
-	edges, _, err := e.selectViaFixture(context.Background(), m0, []*threadv1.Message{m0})
+	// The anchor is the only registered message — it must be filtered out as
+	// self, and no scorer call should happen.
+	edges, _, err := e.selectViaFixture(context.Background(), m0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -746,11 +777,11 @@ func TestSelectPrereqs_Gate1_AbsoluteThreshold(t *testing.T) {
 	o := newMockChunkOracle()
 	e := threeGateEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "tA", "low")
-	m1 := addMsg(o, "m1", 0, "tB", "high")
+	addMsg(o, "m0", 0, "tA", "low")
+	addMsg(o, "m1", 0, "tB", "high")
 	q := addMsg(o, "q", 0, "tQ", "query")
 
-	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1})
+	edges, _, err := e.selectViaFixture(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -786,11 +817,11 @@ func TestSelectPrereqs_CrossThreadGatesUniformly(t *testing.T) {
 	o.SetRetrievalScore("e", 0.5)
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	mCross := addMsg(o, "mCross", 0, "tOther", "cross")
-	mSame := addMsg(o, "mSame", 0, "tQ", "same")
+	addMsg(o, "mCross", 0, "tOther", "cross")
+	addMsg(o, "mSame", 0, "tQ", "same")
 	q := addMsg(o, "q", 1, "tQ", "q")
 
-	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{mCross, mSame})
+	edges, _, err := e.selectViaFixture(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -806,10 +837,7 @@ func TestSelectPrereqs_CrossThreadGatesUniformly(t *testing.T) {
 	addMsg(o2, "lowCross", 0, "tOther", "low-cross")
 	addMsg(o2, "lowSame", 0, "tQ", "low-same")
 	q2 := addMsg(o2, "q2", 1, "tQ", "q2")
-	rejected, _, err := e2.selectViaFixture(context.Background(), q2, []*threadv1.Message{
-		makeMsg("lowCross", 0, "tOther", "low-cross"),
-		makeMsg("lowSame", 0, "tQ", "low-same"),
-	})
+	rejected, _, err := e2.selectViaFixture(context.Background(), q2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -833,12 +861,12 @@ func TestSelectPrereqs_ZScoreGateRemoved_ClusterAllAccepted(t *testing.T) {
 	o := newMockChunkOracle()
 	e := threeGateEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "tQ", "a")
-	m1 := addMsg(o, "m1", 0, "tQ", "b")
-	m2 := addMsg(o, "m2", 0, "tQ", "c")
+	addMsg(o, "m0", 0, "tQ", "a")
+	addMsg(o, "m1", 0, "tQ", "b")
+	addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
-	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1, m2})
+	edges, _, err := e.selectViaFixture(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -858,12 +886,12 @@ func TestSelectPrereqs_Gate3_BatchIndiscriminate(t *testing.T) {
 	o := newMockChunkOracle()
 	e := threeGateEngine(mc, o)
 
-	m0 := addMsg(o, "m0", 0, "tQ", "a")
-	m1 := addMsg(o, "m1", 0, "tQ", "b")
-	m2 := addMsg(o, "m2", 0, "tQ", "c")
+	addMsg(o, "m0", 0, "tQ", "a")
+	addMsg(o, "m1", 0, "tQ", "b")
+	addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
-	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1, m2})
+	edges, _, err := e.selectViaFixture(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -890,12 +918,12 @@ func TestSelectPrereqs_Gate3_Disabled(t *testing.T) {
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	m0 := addMsg(o, "m0", 0, "tQ", "a")
-	m1 := addMsg(o, "m1", 0, "tQ", "b")
-	m2 := addMsg(o, "m2", 0, "tQ", "c")
+	addMsg(o, "m0", 0, "tQ", "a")
+	addMsg(o, "m1", 0, "tQ", "b")
+	addMsg(o, "m2", 0, "tQ", "c")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
-	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1, m2})
+	edges, _, err := e.selectViaFixture(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -915,10 +943,10 @@ func TestSelectPrereqs_SingleCandidateAccepted(t *testing.T) {
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	m0 := addMsg(o, "m0", 0, "tA", "a")
+	addMsg(o, "m0", 0, "tA", "a")
 	q := addMsg(o, "q", 0, "tQ", "q")
 
-	edges, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0})
+	edges, _, err := e.selectViaFixture(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -953,16 +981,14 @@ func TestSelectPrereqs_RescoredFilterInvariant(t *testing.T) {
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	priors := []*threadv1.Message{
-		addMsg(o, "m0", 0, "t1", "a"),
-		addMsg(o, "m1", 1, "t1", "b"),
-		addMsg(o, "m2", 2, "t1", "c"),
-		addMsg(o, "m3", 3, "t1", "d"),
-		addMsg(o, "m4", 4, "t1", "e"),
-	}
+	addMsg(o, "m0", 0, "t1", "a")
+	addMsg(o, "m1", 1, "t1", "b")
+	addMsg(o, "m2", 2, "t1", "c")
+	addMsg(o, "m3", 3, "t1", "d")
+	addMsg(o, "m4", 4, "t1", "e")
 	q := addMsg(o, "q", 5, "t1", "q")
 
-	edges, _, err := e.selectViaFixture(context.Background(), q, priors)
+	edges, _, err := e.selectViaFixture(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -988,15 +1014,15 @@ func TestSelectPrereqs_CachedScoresCountAsRescored(t *testing.T) {
 	o := newMockChunkOracle()
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	m0 := addMsg(o, "m0", 0, "t1", "a")
-	m1 := addMsg(o, "m1", 1, "t1", "b")
+	addMsg(o, "m0", 0, "t1", "a")
+	addMsg(o, "m1", 1, "t1", "b")
 	q := addMsg(o, "q", 2, "t1", "q")
 
 	// Pre-seed the score cache for the m0→q pair. The engine should
 	// see the cached value instead of calling Rerank on this pair.
 	e.scores.setLocalContext("fixture-q", 0, "m0", 0, 0.8)
 
-	_, _, err := e.selectViaFixture(context.Background(), q, []*threadv1.Message{m0, m1})
+	_, _, err := e.selectViaFixture(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}

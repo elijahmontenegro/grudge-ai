@@ -143,8 +143,8 @@ func TestInvariance_StageLatencyCurve(t *testing.T) {
 	sizes := []int{500, 1000, 2000, 4000, 8000}
 	ctx := t.Context()
 
-	t.Logf("%-7s %11s %13s %9s %12s %8s %7s",
-		"N", "load_ms", "protoIdx_ms", "knn_ms", "assemble_ms", "scored", "edges")
+	t.Logf("%-7s %10s %9s %12s %8s %7s",
+		"N", "lctx_ms", "knn_ms", "assemble_ms", "scored", "edges")
 	for _, n := range sizes {
 		db, err := storage.Open(t.TempDir())
 		if err != nil {
@@ -156,24 +156,26 @@ func TestInvariance_StageLatencyCurve(t *testing.T) {
 			t.Fatalf("N=%d: build corpus: %v", n, err)
 		}
 
-		// Leak 1: full-history load + per-message proto deserialize.
-		loadMs := timeIt(5, func() { _, _ = h.db.ThreadCorpus("bench") })
-		// Leak 2: protocol index construction over the whole corpus.
-		protoMs := timeIt(5, func() { _ = rrc.NewProtocolIndex(h.corpus) })
-		// Leak 4: one vec0 KNN query. If this grows ~linearly with N, the
-		// "sub-linear ANN" comment is false and the search is brute-force.
+		// The bridge's per-tick Local Context fetch, post corpus-passing removal:
+		// a bounded recency window + the in-flight turn, both indexed. This
+		// replaces the O(N) ThreadCorpus load + full-corpus protocol index,
+		// which are no longer on the per-step path at all.
+		lctxMs := timeIt(5, func() {
+			_, _ = h.db.RecentMessages("bench", localWindow)
+			_, _ = h.db.TurnMessages("bench", h.anchor.TurnId)
+		})
+		// One ANN KNN query (index-only, no vec0 scan).
 		knnMs := timeIt(5, func() {
 			_, _ = h.oracle.NearestChunks(ctx, benchText(n/2), 64, rrc.PredThread{ThreadID: "bench"})
 		})
-		// End-to-end (includes leak 3, the eligibility scan, plus detection,
-		// Select, MMR, shed). Cold cache each rep: a fresh anchor is not
-		// re-run, so this is a single cold Assemble timed once.
+		// End-to-end Assemble via the CorpusStore (bounded selected-content and
+		// protocol-counterpart fetches, not a corpus scan).
 		h.resetCounters()
 		var res rrc.AssembleResult
 		asmMs := timeIt(1, func() { res, _ = h.assembleOnce(ctx) })
 
-		t.Logf("%-7d %11.3f %13.3f %9.3f %12.3f %8d %7d",
-			n, loadMs, protoMs, knnMs, asmMs, loadInt64(h.scorerPairs), len(res.Edges))
+		t.Logf("%-7d %10.3f %9.3f %12.3f %8d %7d",
+			n, lctxMs, knnMs, asmMs, loadInt64(h.scorerPairs), len(res.Edges))
 		db.Close()
 	}
 }

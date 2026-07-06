@@ -341,7 +341,3 @@ func (e *Engine) Merge(fork *Engine) error {
 	}
 	return nil
 }
-
-func textFromMessage(message *threadv1.Message) string {
-	return SerializeMessageForScoring(message)
-}

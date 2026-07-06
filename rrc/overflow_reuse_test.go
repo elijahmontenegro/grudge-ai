@@ -33,7 +33,7 @@ func TestAssemble_PriorSelectionReusesNoReselect(t *testing.T) {
 	req := AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
-		Corpus:                 corpus,
+		Store:                  sliceStore(corpus),
 		LocalContext:           []*threadv1.Message{anchor},
 		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
@@ -94,7 +94,7 @@ func TestAssemble_PriorSelectionShedsWholeGroups(t *testing.T) {
 	req := AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
-		Corpus:                 corpus,
+		Store:                  sliceStore(corpus),
 		LocalContext:           []*threadv1.Message{anchor},
 		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",

@@ -90,7 +90,7 @@ func runAssemble(t *testing.T, cfg EngineConfig, mc *mockScorer, o *mockChunkOra
 	res, err := e.Assemble(context.Background(), AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
-		Corpus:                 corpus,
+		Store:                  sliceStore(corpus),
 		LocalContext:           []*threadv1.Message{anchor},
 		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",

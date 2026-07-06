@@ -13,6 +13,7 @@ import (
 	"iter"
 	"log"
 	"math"
+	"sort"
 
 	"github.com/elijahmontenegro/grudge/core"
 	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
@@ -40,12 +41,36 @@ type TokenScales interface {
 	Observe(predicted, observed, budget int) error
 }
 
-// CorpusStore is the two-method corpus access the bridge needs.
-// Consumer-defined interface; grudge's *storage.DB satisfies it
-// structurally with zero changes.
+// CorpusStore is the bounded message access Assemble needs — the selected
+// set's content and its protocol counterparts, never the full corpus.
+// Consumer-defined interface; grudge's *storage.DB satisfies it structurally,
+// and its shape matches rrc.CorpusStore so it flows straight into
+// AssembleRequest.Store.
 type CorpusStore interface {
-	ThreadCorpus(threadID string) ([]*threadv1.Message, error)
-	AllCorpus() ([]*threadv1.Message, error)
+	// Local Context construction (bounded, invariant under corpus growth).
+	RecentMessages(threadID string, n int) ([]*threadv1.Message, error)
+	TurnMessages(threadID, turnID string) ([]*threadv1.Message, error)
+	// Assemble's Store (also the rrc.CorpusStore shape).
+	Messages(ids []string) (map[string]*threadv1.Message, error)
+	TurnPeers(msgs []*threadv1.Message) ([]*threadv1.Message, error)
+}
+
+// mergeByPosition unions two message slices, dedups by id, and sorts ascending
+// by position — the ordered Local Context window BuildActiveDiscourse expects,
+// built from the bounded turn + recency fetches.
+func mergeByPosition(a, b []*threadv1.Message) []*threadv1.Message {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]*threadv1.Message, 0, len(a)+len(b))
+	for _, src := range [][]*threadv1.Message{a, b} {
+		for _, m := range src {
+			if !seen[m.Id] {
+				seen[m.Id] = true
+				out = append(out, m)
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Position < out[j].Position })
+	return out
 }
 
 // RRCLLM intercepts every outbound model call and assembles its RRC
@@ -98,32 +123,35 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 		systemMsg := systemMessage(req)
 		protoTools := toolDeclarations(req)
 
-		threadCorpus, err := r.db.ThreadCorpus(r.threadID)
+		cfg := r.engine.Config()
+		// Local Context from bounded, indexed fetches — never the full corpus:
+		// the in-flight turn (by turn_id) unioned with a recency window (last-N
+		// by position). Both are invariant under corpus growth. Candidate
+		// generation is the ANN index's job now, so no candidate corpus loads.
+		recent, err := r.db.RecentMessages(r.threadID, cfg.LocalContextSize)
 		if err != nil {
-			yield(nil, fmt.Errorf("load thread corpus: %w", err))
+			yield(nil, fmt.Errorf("load recent messages: %w", err))
 			return
 		}
-		if len(threadCorpus) == 0 {
+		if len(recent) == 0 {
 			r.forwardCurrentTurn(ctx, req, stream, systemMsg, protoTools, yield)
 			return
 		}
-
-		anchor := threadCorpus[len(threadCorpus)-1]
-		corpus := threadCorpus
-		if r.Scope == threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS {
-			corpus, err = r.db.AllCorpus()
-			if err != nil {
-				yield(nil, fmt.Errorf("load candidate corpus: %w", err))
-				return
-			}
+		turnMsgs, err := r.db.TurnMessages(r.threadID, r.CurrentTurnID)
+		if err != nil {
+			yield(nil, fmt.Errorf("load turn messages: %w", err))
+			return
 		}
+		window := mergeByPosition(recent, turnMsgs)
+		anchor := window[len(window)-1]
 
-		cfg := r.engine.Config()
 		// Active-discourse Local Context: the in-flight turn's messages
 		// (triggering event + model/tool events it spawned), not a fixed
-		// last-N recency window. Falls back to bounded recency when no
-		// turn identity is available (an autonomous tick's first call).
-		localContext := rrc.BuildActiveDiscourse(threadCorpus, r.CurrentTurnID, cfg.LocalContextSize)
+		// last-N recency window. Falls back to bounded recency when no turn
+		// identity is available (an autonomous tick's first call). The window
+		// above is a superset of both, so this selects the same set it did
+		// from the full corpus.
+		localContext := rrc.BuildActiveDiscourse(window, r.CurrentTurnID, cfg.LocalContextSize)
 		if len(localContext) == 0 {
 			yield(nil, fmt.Errorf("RRC: no Local Context for stored anchor %s", anchor.Id))
 			return
@@ -161,7 +189,7 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 		var priorSelection *rrcv1.SelectionResult
 		for {
 			result, err := r.engine.Assemble(ctx, rrc.AssembleRequest{
-				SerializedLocalContext: serializedLocal, Anchor: anchor, Corpus: corpus, LocalContext: localContext,
+				SerializedLocalContext: serializedLocal, Anchor: anchor, Store: r.db, LocalContext: localContext,
 				Scope: r.Scope, ThreadID: r.threadID, System: systemMsg,
 				Budget: budget, HeadroomPct: cfg.BudgetHeadroomPct,
 				PerMsgDelim:    cfg.PerMsgDelimiterTokens,

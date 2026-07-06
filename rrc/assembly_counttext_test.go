@@ -38,7 +38,7 @@ func TestAssemble_CountTextProjection(t *testing.T) {
 		e := NewEngine(cfg, newMockScorer())
 		res, err := e.Assemble(context.Background(), AssembleRequest{
 			Anchor:       anchor,
-			Corpus:       []*threadv1.Message{anchor},
+			Store:        sliceStore([]*threadv1.Message{anchor}),
 			LocalContext: []*threadv1.Message{anchor},
 			Scope:        threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 			ThreadID:     "t1",

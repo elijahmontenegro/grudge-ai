@@ -75,15 +75,15 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	scorer := newMockScorer()
 	scorer.SetScore("prior", "query", 0.9)
 	oracle := newMockChunkOracle()
-	prior := addMsg(oracle, "p", 0, "t1", "prior")
+	addMsg(oracle, "p", 0, "t1", "prior") // registered as a candidate via the oracle
 	anchor := addMsg(oracle, "q", 1, "t1", "query")
 	engine := testEngine(scorer, oracle)
 	serialized := testSerializedLocalContext(anchor)
 
-	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, []*threadv1.Message{prior, anchor}, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, []*threadv1.Message{prior, anchor}, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if scorer.callCount != 1 {
@@ -91,7 +91,7 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	}
 	changed := *serialized
 	changed.Fingerprint = serialized.Fingerprint + "-changed"
-	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, []*threadv1.Message{prior, anchor}, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if scorer.callCount != 2 {

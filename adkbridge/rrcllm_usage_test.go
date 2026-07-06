@@ -115,7 +115,7 @@ func usageHarness(t *testing.T, completer interface {
 	cfg.ContextBudgetTokens = 1000
 	cfg.BudgetHeadroomPct = 0.9
 	engine := rrc.NewEngine(cfg, &fixedScorer{}, rrc.WithChunkOracle(fixedOracle{
-		candidate: rrc.ChunkRef{MessageID: "m0", ChunkIndex: 0, Text: "prerequisite content"},
+		candidate: rrc.ChunkRef{MessageID: "m0", ChunkIndex: 0, ThreadID: "t", Text: "prerequisite content"},
 	}))
 	return NewRRCLLM(engine, completer, db, "t", "test-model")
 }

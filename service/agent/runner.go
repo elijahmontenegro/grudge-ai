@@ -382,14 +382,13 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope threadv1
 		r.persistTickTrace(tickStart, retErr)
 	}()
 
-	corpus, err := r.db.ThreadCorpus(r.threadID)
-	if err != nil {
-		return nil, fmt.Errorf("load corpus: %w", err)
-	}
-	r.tickCorpusSize = len(corpus)
+	// Bounded aggregate, not a full corpus load: the runner only needs the
+	// thread's message count for tick bookkeeping and the sequence counter.
+	count := r.db.MessageCount(r.threadID)
+	r.tickCorpusSize = count
 
 	// Sync message counter to corpus length (idempotent on repeated calls)
-	if cur := int64(len(corpus)); cur > r.msgSeq.Load() {
+	if cur := int64(count); cur > r.msgSeq.Load() {
 		r.msgSeq.Store(cur)
 	}
 
@@ -418,13 +417,12 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope threadv1
 			Id:       r.nextMsgID(),
 			Role:     threadv1.Role_ROLE_USER,
 			Content:  blocks,
-			Position: int64(len(corpus)),
+			Position: int64(count),
 			ThreadId: r.threadID,
 		}
 		if err := r.indexMessage(userMsg); err != nil {
 			return nil, err
 		}
-		corpus = append(corpus, userMsg)
 	}
 
 	// Set scope on RRCLLM before ADK runs — the scope toggle reaches the engine here

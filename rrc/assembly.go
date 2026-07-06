@@ -32,14 +32,19 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	if req.HeadroomPct > 0 && req.HeadroomPct <= 1 {
 		effectiveBudget = int(float64(req.Budget) * req.HeadroomPct)
 	}
-	protocol := NewProtocolIndex(req.Corpus)
+	// Bounded protocol index for Local Context closure: Local Context plus the
+	// messages sharing its turns, where any tool-call/result counterparts live.
+	protocolLocal, err := e.protocolScope(req.LocalContext, req.Store)
+	if err != nil {
+		return AssembleResult{}, fmt.Errorf("assemble: local protocol scope: %w", err)
+	}
 
 	local := append([]*threadv1.Message(nil), req.LocalContext...)
 	pinned := pinnedLocalIDs(local)
 	var localGroups []DeliveryGroup
 	var localWire []*llmv1.LLMMessage
 	for {
-		groups, err := closeRoots(protocol, local, nil)
+		groups, err := closeRoots(protocolLocal, local, nil)
 		if err != nil {
 			return AssembleResult{}, err
 		}
@@ -84,7 +89,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	case serializedLocal != nil:
 		e.mu.Lock()
 		var err error
-		edges, prerequisiteSelection, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Corpus, req.Scope, req.ThreadID)
+		edges, prerequisiteSelection, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Scope, req.ThreadID)
 		if err != nil {
 			e.mu.Unlock()
 			return AssembleResult{}, fmt.Errorf("assemble SelectPrerequisites: %w", err)
@@ -131,9 +136,24 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 			localIDs[m.Id] = true
 		}
 	}
-	corpusByID := make(map[string]*threadv1.Message, len(req.Corpus))
-	for _, m := range req.Corpus {
-		corpusByID[m.Id] = m
+	// Selected content and protocol scope, both bounded: fetch the selected
+	// messages' content by id, and build a protocol index over them plus their
+	// turn peers (where the counterparts CloseGroup needs live).
+	selectedIDs := make([]string, 0, len(selected.Selected))
+	for _, s := range selected.Selected {
+		selectedIDs = append(selectedIDs, s.MessageId)
+	}
+	corpusByID, err := req.Store.Messages(selectedIDs)
+	if err != nil {
+		return AssembleResult{}, fmt.Errorf("assemble: fetch selected content: %w", err)
+	}
+	selectedMsgs := make([]*threadv1.Message, 0, len(corpusByID))
+	for _, m := range corpusByID {
+		selectedMsgs = append(selectedMsgs, m)
+	}
+	protocolSel, err := e.protocolScope(selectedMsgs, req.Store)
+	if err != nil {
+		return AssembleResult{}, fmt.Errorf("assemble: selected protocol scope: %w", err)
 	}
 
 	shedStart := time.Now()
@@ -150,7 +170,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 			if root == nil {
 				return AssembleResult{}, fmt.Errorf("assemble: selected message %s missing from corpus", s.MessageId)
 			}
-			group, err := protocol.CloseGroup(root, float64(s.EffectiveScore))
+			group, err := protocolSel.CloseGroup(root, float64(s.EffectiveScore))
 			if err != nil {
 				return AssembleResult{}, err
 			}
@@ -217,10 +237,40 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	}, nil
 }
 
+// protocolScope builds a bounded ProtocolIndex over msgs plus every message
+// sharing a turn with them — the set where their tool-call/result counterparts
+// live — instead of indexing the whole corpus.
+func (e *Engine) protocolScope(msgs []*threadv1.Message, store CorpusStore) (*ProtocolIndex, error) {
+	if store == nil {
+		return NewProtocolIndex(msgs), nil
+	}
+	peers, err := store.TurnPeers(msgs)
+	if err != nil {
+		return nil, err
+	}
+	all := make([]*threadv1.Message, 0, len(msgs)+len(peers))
+	all = append(all, msgs...)
+	all = append(all, peers...)
+	return NewProtocolIndex(all), nil
+}
+
+// CorpusStore gives Assemble bounded, on-demand access to message content,
+// replacing the full-corpus slice so per-step cost stops scaling with history.
+// The only reads Assemble needs are the selected set's content and the
+// protocol counterparts of the assembly set — both bounded.
+type CorpusStore interface {
+	// Messages returns the given messages by id (the selected set's content).
+	Messages(ids []string) (map[string]*threadv1.Message, error)
+	// TurnPeers returns every message sharing a (thread, turn) with any input
+	// message — the bounded superset containing their tool-call/result
+	// counterparts, since a call and its result share a turn.
+	TurnPeers(msgs []*threadv1.Message) ([]*threadv1.Message, error)
+}
+
 type AssembleRequest struct {
 	SerializedLocalContext *SerializedLocalContext
 	Anchor                 *threadv1.Message
-	Corpus                 []*threadv1.Message
+	Store                  CorpusStore
 	LocalContext           []*threadv1.Message
 	Scope                  threadv1.SelectionScope
 	ThreadID               string

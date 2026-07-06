@@ -53,7 +53,7 @@ func TestAssemble_ConcurrentSameEngine(t *testing.T) {
 			results[i], errs[i] = e.Assemble(context.Background(), AssembleRequest{
 				SerializedLocalContext: testSerializedLocalContext(anchor),
 				Anchor:                 anchor,
-				Corpus:                 corpus,
+				Store:                  sliceStore(corpus),
 				LocalContext:           []*threadv1.Message{anchor},
 				Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 				ThreadID:               "t1",
@@ -103,7 +103,7 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 	resA1, err := engineA.Assemble(context.Background(), AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
-		Corpus:                 corpus,
+		Store:                  sliceStore(corpus),
 		LocalContext:           []*threadv1.Message{anchor},
 		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
@@ -134,7 +134,7 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 	resA2, err := engineA.Assemble(context.Background(), AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
-		Corpus:                 corpus,
+		Store:                  sliceStore(corpus),
 		LocalContext:           []*threadv1.Message{anchor},
 		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",
@@ -168,7 +168,7 @@ func TestFork_Concurrent(t *testing.T) {
 	if _, err := e.Assemble(context.Background(), AssembleRequest{
 		SerializedLocalContext: testSerializedLocalContext(anchor),
 		Anchor:                 anchor,
-		Corpus:                 []*threadv1.Message{prior, anchor},
+		Store:                  sliceStore([]*threadv1.Message{prior, anchor}),
 		LocalContext:           []*threadv1.Message{anchor},
 		Scope:                  threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:               "t1",

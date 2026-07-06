@@ -15,15 +15,16 @@ import (
 // stored messages and attaches prerequisite edges to the latest stored
 // event. Takes the engine mutex — safe for external callers alongside
 // Assemble / RecordProvenance / Fork / Merge.
-func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, corpus []*threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
+func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.selectPrerequisitesLocked(ctx, local, anchor, corpus, scope, threadID)
+	return e.selectPrerequisitesLocked(ctx, local, anchor, scope, threadID)
 }
 
 // selectPrerequisitesLocked is SelectPrerequisites' body. Caller holds e.mu.
-func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, corpus []*threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
-	if local == nil || len(local.Chunks) == 0 || len(corpus) == 0 {
+// Candidate generation is the ANN oracle's job now, so it needs no corpus.
+func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
+	if local == nil || len(local.Chunks) == 0 {
 		return nil, PrerequisiteSelectionTelemetry{}, nil
 	}
 	if anchor == nil {

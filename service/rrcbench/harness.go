@@ -286,7 +286,7 @@ func (h *corpusHandles) assembleOnce(ctx context.Context) (rrc.AssembleResult, e
 	return h.engine.Assemble(ctx, rrc.AssembleRequest{
 		Anchor:       h.anchor,
 		LocalContext: h.local,
-		Corpus:       h.corpus,
+		Store:        h.db,
 		Scope:        threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
 		ThreadID:     h.threadID,
 		Budget:       40000,

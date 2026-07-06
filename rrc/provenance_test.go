@@ -62,7 +62,7 @@ func TestRecordProvenance_DoesNotCorruptSelection(t *testing.T) {
 		addMsg(o, "unrelated", 2, "t1", "z"),
 	}
 	// Form the CE edge m0 <- m1.
-	if _, _, err := e.selectViaFixture(ctx, msgs[1], msgs[:1]); err != nil {
+	if _, _, err := e.selectViaFixture(ctx, msgs[1]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -105,8 +105,8 @@ func TestProvenanceReach_SurfacesAmputatedRoot(t *testing.T) {
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	ctx := context.Background()
 
-	root := addMsg(o, "root", 0, "t1", "root text")
-	noise := addMsg(o, "noise", 1, "t1", "noise text")
+	addMsg(o, "root", 0, "t1", "root text")   // registered as a candidate + provenance target
+	addMsg(o, "noise", 1, "t1", "noise text") // registered as a candidate
 	anchor := addMsg(o, "q", 2, "t1", "current context")
 	// Cosine ranking: noise (0.5) ranks above root (0.05); with k=1 only
 	// noise survives the cosine prefilter.
@@ -124,9 +124,8 @@ func TestProvenanceReach_SurfacesAmputatedRoot(t *testing.T) {
 		MessageIDs:  []string{"q"},
 		Chunks:      []SerializedLocalContextChunk{{Index: 0, Text: "current context"}},
 	}
-	corpus := []*threadv1.Message{root, noise, anchor}
 
-	edges, tel, err := e.SelectPrerequisites(ctx, local, anchor, corpus, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	edges, tel, err := e.SelectPrerequisites(ctx, local, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
