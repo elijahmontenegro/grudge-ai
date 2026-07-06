@@ -76,7 +76,7 @@ func TestANNRecallRealEmbeddings(t *testing.T) {
 		v := l2normalize(decodeVec(blob))
 		keys = append(keys, key)
 		vecs[key] = v
-		ix.Add(key, v)
+		ix.Add(key, "", v)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestANNRecallRealEmbeddings(t *testing.T) {
 			qv := vecs[qk]
 			// Search already reranks the Hamming shortlist by asymmetric score;
 			// take its top-k (excluding self) directly — no float rerank.
-			short := ix.Search(qv, k*of)
+			short, _ := ix.Search(qv, k*of, "")
 			truth := truthOf[qk]
 			seen := 0
 			for _, c := range short {

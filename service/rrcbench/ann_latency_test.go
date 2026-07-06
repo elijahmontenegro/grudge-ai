@@ -36,13 +36,13 @@ func TestANNLatencyFlat(t *testing.T) {
 		ix := annindex.New(annindex.Config{Seed: 1})
 		for i := range n {
 			key := fmt.Sprintf("v%d", i)
-			ix.Add(key, noisyUnit(centers[i%len(centers)], key, 0.75))
+			ix.Add(key, "", noisyUnit(centers[i%len(centers)], key, 0.75))
 		}
 
 		const reps = 300
 		start := time.Now()
 		for range reps {
-			_ = ix.Search(qv, 64)
+			_, _ = ix.Search(qv, 64, "")
 		}
 		us := float64(time.Since(start).Microseconds()) / float64(reps)
 

@@ -147,3 +147,38 @@ func EvalPredicate(p Predicate, a CandidateAttrs) bool {
 		return false
 	}
 }
+
+// ThreadScopeOf reports the single thread a predicate pins retrieval to, if it
+// implies ThreadID == T for every matching candidate. The ANN index uses this
+// to route a query to that thread's graph partition instead of the global
+// graph, so THREAD-scope retrieval is bounded by the thread rather than the
+// whole corpus. Routing is a pure optimisation: the predicate is still applied
+// in full as the residual filter, so routing to T can never change the result
+// set — a non-T candidate could not pass the predicate anyway.
+//
+// Returns ("", false) for anything that does NOT pin one thread (ScopeAll,
+// PredOr, PredNot, metadata, exclusions) so those correctly fall back to the
+// global graph. It keys on Scope == ScopeThread, NEVER on a non-empty
+// CurrentThread: PredScope{ScopeAll, CurrentThread: T} matches every thread, so
+// routing it to T would wrongly drop cross-thread results.
+func ThreadScopeOf(p Predicate) (string, bool) {
+	switch p := p.(type) {
+	case PredThread:
+		return p.ThreadID, true
+	case PredScope:
+		if p.Scope == ScopeThread {
+			return p.CurrentThread, true
+		}
+		return "", false
+	case PredAnd:
+		// AND is a subset of T if ANY child pins T; the others only narrow it.
+		for _, child := range p.Children {
+			if t, ok := ThreadScopeOf(child); ok {
+				return t, true
+			}
+		}
+		return "", false
+	default:
+		return "", false
+	}
+}

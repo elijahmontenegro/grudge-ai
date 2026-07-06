@@ -10,13 +10,12 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/elijahmontenegro/grudge/service/annindex"
+	"github.com/elijahmontenegro/grudge/service/chunkkey"
 	"github.com/elijahmontenegro/grudge/service/storage"
 )
 
@@ -55,18 +54,20 @@ func NewChunkOracle(db *storage.DB, embedder core.Embedder, model string) (*Chun
 		threadByMsg: make(map[string]string),
 	}
 	if db != nil {
-		embs, err := db.AllChunkEmbeddingsForModel(model)
-		if err != nil {
-			return nil, fmt.Errorf("NewChunkOracle: build ANN index: %w", err)
-		}
-		for _, e := range embs {
-			o.index.Add(chunkKeyStr(e.MessageID, e.ChunkIndex), e.Vector)
-		}
+		// Thread map first: the index build routes each vector into its thread
+		// partition, so the thread must be resolvable before Add.
 		threads, err := db.MessageThreads()
 		if err != nil {
 			return nil, fmt.Errorf("NewChunkOracle: load thread map: %w", err)
 		}
 		o.threadByMsg = threads // boot is single-threaded; the observer is wired after
+		embs, err := db.AllChunkEmbeddingsForModel(model)
+		if err != nil {
+			return nil, fmt.Errorf("NewChunkOracle: build ANN index: %w", err)
+		}
+		for _, e := range embs {
+			o.index.Add(chunkKeyStr(e.MessageID, e.ChunkIndex), threads[e.MessageID], e.Vector)
+		}
 	}
 	return o, nil
 }
@@ -79,22 +80,37 @@ func (o *ChunkOracle) IndexAdd(messageID string, chunkIndex int, threadID string
 	if o == nil {
 		return
 	}
-	if o.index != nil {
-		o.index.Add(chunkKeyStr(messageID, chunkIndex), vec)
-	}
+	// Map-first: a chunk searchable in its partition must already have its
+	// thread in the map, because the routed residual filter reads
+	// threadByMsg[mid]. Insert-first would let a freshly-embedded in-thread
+	// chunk be transiently dropped from its own thread's retrieval.
 	o.threadMu.Lock()
 	o.threadByMsg[messageID] = threadID
 	o.threadMu.Unlock()
+	if o.index != nil {
+		o.index.Add(chunkKeyStr(messageID, chunkIndex), threadID, vec)
+	}
 }
 
-// chunkKeyStr is the ANN index key for a chunk: message id and chunk index
-// NUL-joined (message ids never contain NUL, so it round-trips).
+// Index returns the shared in-RAM ANN index. The search consumer
+// (service/search) queries the same global graph through this accessor
+// instead of a separate brute-force vec0 scan, so both retrieval paths ride
+// one index kept current by the same embedding observer.
+func (o *ChunkOracle) Index() *annindex.Index {
+	if o == nil {
+		return nil
+	}
+	return o.index
+}
+
+// chunkKeyStr / messageIDFromKey / chunkIdxFromKey delegate to the shared
+// chunkkey encoding so the oracle (writer) and service/search (reader) agree.
 func chunkKeyStr(messageID string, chunkIndex int) string {
-	return messageID + "\x00" + strconv.Itoa(chunkIndex)
+	return chunkkey.Make(messageID, chunkIndex)
 }
 
 func messageIDFromKey(key string) string {
-	mid, _, _ := strings.Cut(key, "\x00")
+	mid, _ := chunkkey.Split(key)
 	return mid
 }
 
@@ -133,6 +149,14 @@ func (o *ChunkOracle) ChunksForMessages(_ context.Context, messageIDs []string) 
 // service/rrcbench); wider buys nothing.
 const annOverfetch = 8
 
+// annWidenCap bounds the widen loop's shortlist width. THREAD-scoped queries
+// route to a thread partition and stop widening once the partition is exhausted
+// (len(cands) < m), so the cap almost never binds in production. It is a
+// contract backstop: a caller passing a selective predicate ThreadScopeOf can't
+// route (e.g. a PredOr over threads) would otherwise widen the GLOBAL graph
+// toward O(N); the cap keeps every search sub-linear regardless of predicate.
+const annWidenCap = 4096
+
 // NearestChunks embeds queryText and retrieves the k nearest chunks entirely
 // from the in-RAM ANN index (service/annindex) — a Hamming-navigated graph plus
 // int8 asymmetric rerank, sub-linear and never reading a vector off disk. It
@@ -157,8 +181,18 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 	qVec := qVecs[0]
 	qNorm := l2norm(qVec)
 
+	// Route THREAD-scoped queries to that thread's index partition so the walk
+	// is bounded by the thread, not the whole corpus. ALL scope — and any
+	// predicate that doesn't pin one thread — searches the global graph. The
+	// predicate is still applied in full below, so routing never changes the
+	// result set, only which graph is walked.
+	searchThread := ""
+	if t, ok := rrc.ThreadScopeOf(predicate); ok && t != "" {
+		searchThread = t
+	}
+
 	for m := k * annOverfetch; ; m *= 2 {
-		cands := o.index.Search(qVec, m) // asymmetric-reranked, nearest first
+		cands, _ := o.index.Search(qVec, m, searchThread) // asymmetric-reranked, nearest first
 		if len(cands) == 0 {
 			return nil, nil
 		}
@@ -177,7 +211,10 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 			}
 		}
 		o.threadMu.RUnlock()
-		exhausted := m >= o.index.Len()
+		// Stop widening once the searched population returned everything
+		// (len(cands) < m — for a partition that is the thread size, which is
+		// the invariance fix) or the cap bounds the global-graph fallback.
+		exhausted := len(cands) < m || m >= annWidenCap
 		if len(eligible) < k && !exhausted {
 			continue // predicate too selective at this width; widen
 		}
@@ -240,12 +277,8 @@ func (o *ChunkOracle) chunkTextsForMessages(messageIDs []string) (map[chunkKey]s
 }
 
 func chunkIdxFromKey(key string) int {
-	_, idx, found := strings.Cut(key, "\x00")
-	if !found {
-		return 0
-	}
-	n, _ := strconv.Atoi(idx)
-	return n
+	_, idx := chunkkey.Split(key)
+	return idx
 }
 
 // normalizedScore maps a raw asymmetric score to a [0,1] cosine-like prior for

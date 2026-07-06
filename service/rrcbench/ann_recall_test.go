@@ -67,7 +67,7 @@ func TestANNRecallVsBruteForce(t *testing.T) {
 			v := noisyUnit(centers[c], key, alpha)
 			keys = append(keys, key)
 			vecs[key] = v
-			ix.Add(key, v)
+			ix.Add(key, "", v)
 		}
 	}
 
@@ -91,7 +91,7 @@ func TestANNRecallVsBruteForce(t *testing.T) {
 
 		// Search reranks the Hamming shortlist by asymmetric score; take its
 		// top-k directly.
-		short := ix.Search(qv, k*overfetch)
+		short, _ := ix.Search(qv, k*overfetch, "")
 		lim := min(k, len(short))
 		for i := range lim {
 			if truth[short[i].Key] {

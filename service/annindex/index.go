@@ -1,6 +1,7 @@
 package annindex
 
 import (
+	"hash/fnv"
 	"sort"
 	"sync"
 )
@@ -14,19 +15,33 @@ type Candidate struct {
 	Score float64
 }
 
-// Index is a concurrency-safe ANN index over binary-quantized vectors. It
-// binarizes float32 inputs at the boundary; the graph stores only packed
-// codes. Search is ~O(log N) and returns an over-fetched shortlist for the
-// caller to rerank. Reads (Search) and writes (Add) are guarded by an
-// RWMutex — Search is fast and reads dominate, so contention is low.
+// Index is a concurrency-safe ANN index over binary-quantized vectors,
+// partitioned by thread so BOTH production retrieval scopes stay sub-linear:
+//   - a global graph over every vector serves ALL_THREADS scope (O(log N)),
+//     the interactive-chat default.
+//   - one graph per thread serves THREAD scope (O(log |thread|)), invariant
+//     under growth of OTHER threads — the property a single global graph
+//     could not give (its selective post-filter degraded to O(N)).
+//
+// Each vector lives in the global graph AND its thread's partition, so graph
+// structure roughly doubles — but the dominant per-vector cost, the int8
+// rerank code, is stored ONCE in a shared store keyed by vid (the index into
+// keys/i8/scale). A graph's local node id maps back to its vid via hnsw.vids.
+// Reads (Search) and writes (Add) are guarded by one RWMutex; every Add
+// mutates the shared store, so per-partition locks would buy nothing.
 type Index struct {
-	mu    sync.RWMutex
-	graph *hnsw
-	keys  []string         // node id -> key (append-locked to graph.nodes)
-	i8    [][]int8         // node id -> int8 rerank code
-	scale []float64        // node id -> that code's dequant scale
-	byKey map[string]int32 // key -> node id (presence / dedup)
-	ef    int              // default base-layer search beam width
+	mu     sync.RWMutex
+	global *hnsw            // all vids — ALL scope
+	parts  map[string]*hnsw // threadID -> that thread's vids — THREAD scope
+	keys   []string         // vid -> key (shared store)
+	i8     [][]int8         // vid -> int8 rerank code (shared; the 1KB term)
+	scale  []float64        // vid -> that code's dequant scale
+	byKey  map[string]int32 // key -> vid (presence / dedup / Vector lookup)
+
+	m        int   // graph degree
+	efConstr int   // construction beam width
+	ef       int   // default query beam width
+	seed     int64 // base seed; partitions derive seed ^ fnv(threadID)
 }
 
 // Config tunes the index. Zero fields take documented defaults.
@@ -52,47 +67,74 @@ func New(cfg Config) *Index {
 		efS = 128
 	}
 	return &Index{
-		graph: newHNSW(m, efC, cfg.Seed),
-		byKey: make(map[string]int32),
-		ef:    efS,
+		global:   newHNSW(m, efC, cfg.Seed),
+		parts:    make(map[string]*hnsw),
+		byKey:    make(map[string]int32),
+		m:        m,
+		efConstr: efC,
+		ef:       efS,
+		seed:     cfg.Seed,
 	}
 }
 
-// Add indexes vec under key. A key already present is ignored (idempotent
-// re-adds keep keys and graph nodes in lockstep).
-func (ix *Index) Add(key string, vec []float32) {
+// Add indexes vec under key, into the global graph and — unless threadID is
+// "" — into that thread's partition. An empty threadID is the global-only
+// sentinel (thread ids are non-empty in this system), so pure-index tests do
+// not build a redundant parts[""]. A key already present is ignored
+// (idempotent; keys, codes, and graphs stay in lockstep via vid).
+func (ix *Index) Add(key, threadID string, vec []float32) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	if _, ok := ix.byKey[key]; ok {
 		return
 	}
-	id := ix.graph.insert(Binarize(vec)) // binary code: fast Hamming traversal
-	code, sc := QuantizeInt8(vec)        // int8 code: asymmetric rerank
-	ix.byKey[key] = id
-	ix.keys = append(ix.keys, key) // insert returns id == pre-append len
-	ix.i8 = append(ix.i8, code)
+	vid := int32(len(ix.keys))
+	code := Binarize(vec)        // binary code: fast Hamming traversal (shared, immutable)
+	i8c, sc := QuantizeInt8(vec) // int8 code: asymmetric rerank (stored once)
+	ix.keys = append(ix.keys, key)
+	ix.i8 = append(ix.i8, i8c)
 	ix.scale = append(ix.scale, sc)
+	ix.byKey[key] = vid
+
+	ix.global.insert(vid, code)
+	if threadID != "" {
+		p := ix.parts[threadID]
+		if p == nil {
+			p = newHNSW(ix.m, ix.efConstr, ix.seed^fnvHash(threadID))
+			ix.parts[threadID] = p
+		}
+		p.insert(vid, code) // same immutable code slice — no duplication
+	}
 }
 
 // Search returns up to n candidates for vec, sorted by asymmetric score
-// (nearest first). The graph navigates by Hamming to gather an n-sized
-// shortlist, which is then reranked by asymmetric distance — the float
-// query against each candidate's binary code — entirely in RAM. n is the
-// caller's over-fetch count; it takes the top-k it wants after applying its
-// own predicate to this ordering.
-func (ix *Index) Search(vec []float32, n int) []Candidate {
+// (nearest first), plus the number of distance evaluations the graph made
+// (a deterministic work signal for the invariance guard). threadID selects
+// the graph: "" searches the global graph (ALL scope); a non-empty thread
+// searches only that partition (THREAD scope) — an absent partition yields
+// nothing. n is the caller's over-fetch count; it takes the top-k it wants
+// after applying its own predicate to this ordering.
+func (ix *Index) Search(vec []float32, n int, threadID string) ([]Candidate, int) {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
-	res := ix.graph.search(Binarize(vec), n, ix.ef)
+	g := ix.global
+	if threadID != "" {
+		g = ix.parts[threadID]
+		if g == nil {
+			return nil, 0
+		}
+	}
+	res, visited := g.search(Binarize(vec), n, ix.ef)
 	out := make([]Candidate, len(res))
 	for i, r := range res {
+		vid := g.vids[r.id]
 		out[i] = Candidate{
-			Key:   ix.keys[r.id],
-			Score: AsymmetricInt8Score(vec, ix.i8[r.id], ix.scale[r.id]),
+			Key:   ix.keys[vid],
+			Score: AsymmetricInt8Score(vec, ix.i8[vid], ix.scale[vid]),
 		}
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].Score > out[b].Score })
-	return out
+	return out, visited
 }
 
 // Vector dequantizes the stored int8 code for key and returns it as a float
@@ -102,11 +144,11 @@ func (ix *Index) Search(vec []float32, n int) []Candidate {
 func (ix *Index) Vector(key string) ([]float32, bool) {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
-	id, ok := ix.byKey[key]
+	vid, ok := ix.byKey[key]
 	if !ok {
 		return nil, false
 	}
-	code, s := ix.i8[id], ix.scale[id]
+	code, s := ix.i8[vid], ix.scale[vid]
 	v := make([]float32, len(code))
 	for i, c := range code {
 		v[i] = float32(float64(c) * s)
@@ -123,9 +165,17 @@ func (ix *Index) Has(key string) bool {
 	return ok
 }
 
-// Len is the number of indexed vectors.
+// Len is the number of indexed vectors (global count).
 func (ix *Index) Len() int {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
 	return len(ix.keys)
+}
+
+// fnvHash derives a partition's layer-stream seed from its thread id, so
+// partitions get independent deterministic graphs.
+func fnvHash(s string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(s))
+	return int64(h.Sum64())
 }
