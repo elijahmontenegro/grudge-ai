@@ -66,7 +66,11 @@ func NewChunkOracle(db *storage.DB, embedder core.Embedder, model string) (*Chun
 			return nil, fmt.Errorf("NewChunkOracle: build ANN index: %w", err)
 		}
 		for _, e := range embs {
-			o.index.Add(chunkKeyStr(e.MessageID, e.ChunkIndex), threads[e.MessageID], e.Vector)
+			thread, ok := threads[e.MessageID]
+			if !ok {
+				continue // orphan embedding: its message row is gone, so it is unloadable — skip
+			}
+			o.index.Add(chunkKeyStr(e.MessageID, e.ChunkIndex), thread, e.Vector)
 		}
 	}
 	return o, nil
