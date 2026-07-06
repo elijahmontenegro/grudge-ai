@@ -54,11 +54,16 @@ func (m *mockScorer) Score(_ context.Context, query string, candidates []string)
 // (all pairs score the same, stable-sort preserves input order).
 type mockChunkOracle struct {
 	texts     map[string]string
+	threads   map[string]string  // id → thread, mirrors the real oracle's RAM map
 	retrieval map[string]float64 // text → RetrievalScore for nil-scorer path
 }
 
 func newMockChunkOracle() *mockChunkOracle {
-	return &mockChunkOracle{texts: make(map[string]string), retrieval: make(map[string]float64)}
+	return &mockChunkOracle{
+		texts:     make(map[string]string),
+		threads:   make(map[string]string),
+		retrieval: make(map[string]float64),
+	}
 }
 
 // Register records a message's text so subsequent ChunksForMessages
@@ -94,14 +99,23 @@ func (o *mockChunkOracle) EnsureVector(_ context.Context, _ ChunkRef) ([]float32
 	return []float32{1.0}, nil
 }
 
-func (o *mockChunkOracle) NearestChunks(_ context.Context, _ string, k int, _ Predicate) ([]ChunkRef, error) {
+func (o *mockChunkOracle) NearestChunks(_ context.Context, _ string, k int, predicate Predicate) ([]ChunkRef, error) {
 	out := make([]ChunkRef, 0, len(o.texts))
 	for id, t := range o.texts {
 		if t == "" {
 			continue
 		}
+		// Apply the predicate (scope + local-context exclusion) like the real
+		// oracle — the engine no longer post-filters against a corpus scan.
+		if predicate != nil && !EvalPredicate(predicate, CandidateAttrs{
+			MessageID: id,
+			ThreadID:  o.threads[id],
+			Metadata:  map[string]string{"model_id": "mock"},
+		}) {
+			continue
+		}
 		out = append(out, ChunkRef{
-			MessageID: id, ChunkIndex: 0, Text: t,
+			MessageID: id, ChunkIndex: 0, ThreadID: o.threads[id], Text: t,
 			RetrievalScore: o.retrieval[t],
 		})
 	}
@@ -145,6 +159,7 @@ func makeMsg(id string, position int64, threadID string, text string) *threadv1.
 func addMsg(o *mockChunkOracle, id string, position int64, threadID string, text string) *threadv1.Message {
 	m := makeMsg(id, position, threadID, text)
 	o.Register(id, text)
+	o.threads[id] = threadID
 	return m
 }
 

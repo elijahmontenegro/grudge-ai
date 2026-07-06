@@ -135,6 +135,7 @@ func TestProtocolClosureBypassesAcceptanceGate(t *testing.T) {
 		}}},
 	}
 	o.Register("mcall", "read x")
+	o.threads["mcall"] = "t1"
 	result := storedResult("mresult", "t1", "op", 1)
 	anchor := addMsg(o, "q", 2, "t1", "current context")
 	corpus := []*threadv1.Message{call, result, anchor}

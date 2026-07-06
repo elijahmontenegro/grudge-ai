@@ -76,7 +76,9 @@ func TestAssembleMissingExactCounterpartFails(t *testing.T) {
 	call := storedCall("call", "t1", "op", 0)
 	anchor := makeMsg("q", 1, "t1", "current")
 	oracle.Register(call.Id, pbtext.TextFromBlocks(call.Content))
+	oracle.threads[call.Id] = call.ThreadId
 	oracle.Register(anchor.Id, pbtext.TextFromBlocks(anchor.Content))
+	oracle.threads[anchor.Id] = anchor.ThreadId
 	scorer.SetScore(pbtext.TextFromBlocks(call.Content), strings.TrimSpace(pbtext.TextFromBlocks(anchor.Content)), 0.9)
 	engine := testEngine(scorer, oracle)
 
@@ -98,6 +100,7 @@ func TestAssembleShedsSelectedProtocolClosureAtomically(t *testing.T) {
 	anchor := makeMsg("q", 2, "t1", "current")
 	for _, message := range []*threadv1.Message{call, result, anchor} {
 		oracle.Register(message.Id, pbtext.TextFromBlocks(message.Content))
+		oracle.threads[message.Id] = message.ThreadId
 	}
 	scorer.SetScore(pbtext.TextFromBlocks(call.Content), strings.TrimSpace(pbtext.TextFromBlocks(anchor.Content)), 0.9)
 	scorer.SetScore(pbtext.TextFromBlocks(result.Content), strings.TrimSpace(pbtext.TextFromBlocks(anchor.Content)), 0.8)

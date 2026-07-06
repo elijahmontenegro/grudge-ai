@@ -193,15 +193,18 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 			return nil, fmt.Errorf("NearestChunks: fetch chunk texts: %w", err)
 		}
 		out := make([]rrc.ChunkRef, len(eligible))
+		o.threadMu.RLock()
 		for i, c := range eligible {
 			mid, cidx := messageIDFromKey(c.Key), chunkIdxFromKey(c.Key)
 			out[i] = rrc.ChunkRef{
 				MessageID:      mid,
 				ChunkIndex:     cidx,
+				ThreadID:       o.threadByMsg[mid],
 				Text:           texts[chunkKey{mid, cidx}],
 				RetrievalScore: normalizedScore(c.Score, qNorm),
 			}
 		}
+		o.threadMu.RUnlock()
 		return out, nil
 	}
 }

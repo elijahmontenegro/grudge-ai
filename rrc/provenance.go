@@ -127,7 +127,7 @@ func (e *Engine) AddEdges(edges []*rrcv1.Edge) []*rrcv1.Edge {
 // only caller), provenanceReach does NOT take e.mu — it runs under the lock
 // Assemble already holds around SelectPrerequisites. Taking e.mu here would
 // self-deadlock against that outer lock.
-func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, bool) {
+func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, map[string]string, bool) {
 	return provenanceMassWalk(e.dag, coneIDs, coneThreadID, scope)
 }
 
@@ -145,12 +145,15 @@ func ProvenanceMass(edges []*rrcv1.Edge, coneIDs []string, coneThreadID string, 
 			d.AddEdge(edge)
 		}
 	}
-	return provenanceMassWalk(d, coneIDs, coneThreadID, scope)
+	mass, _, truncated := provenanceMassWalk(d, coneIDs, coneThreadID, scope)
+	return mass, truncated
 }
 
 // provenanceMassWalk is the shared walk body. See provenanceReach for
-// the mass semantics and the cap contract.
-func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, bool) {
+// the mass semantics and the cap contract. It also returns each reached
+// message's thread (read off the provenance edges it walks), so the caller
+// can build edges for reached messages without a full-corpus lookup.
+func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, map[string]string, bool) {
 	cone := make(map[string]bool, len(coneIDs))
 	for _, id := range coneIDs {
 		cone[id] = true
@@ -161,6 +164,7 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 	// kept set under the cap is a function of the edge SET, not of edge
 	// insertion or slice order.
 	inReach := make(map[string]bool)
+	threadByID := make(map[string]string)
 	seen := make(map[string]bool, len(coneIDs))
 	for _, id := range coneIDs {
 		seen[id] = true
@@ -174,6 +178,7 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 			if !scopeAllows(edge, coneThreadID, scope) {
 				continue
 			}
+			threadByID[edge.FromMessageId] = edge.FromThreadId
 			out = append(out, edge.FromMessageId)
 		}
 		return out
@@ -291,5 +296,5 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 		}
 	}
 
-	return mass, truncated
+	return mass, threadByID, truncated
 }

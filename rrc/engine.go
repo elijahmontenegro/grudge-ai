@@ -31,6 +31,7 @@ type Engine struct {
 type ChunkRef struct {
 	MessageID      string
 	ChunkIndex     int
+	ThreadID       string
 	Text           string
 	Vector         []float32
 	RetrievalScore float64

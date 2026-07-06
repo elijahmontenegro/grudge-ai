@@ -34,24 +34,9 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	}
 
 	started := time.Now()
-	excluded := make(map[string]bool, len(local.MessageIDs))
-	for _, id := range local.MessageIDs {
-		excluded[id] = true
-	}
-	eligible := make(map[string]*threadv1.Message, len(corpus))
-	for _, message := range corpus {
-		if excluded[message.Id] || textFromMessage(message) == "" {
-			continue
-		}
-		if scope == threadv1.SelectionScope_SELECTION_SCOPE_THREAD && message.ThreadId != threadID {
-			continue
-		}
-		eligible[message.Id] = message
-	}
-	if len(eligible) == 0 {
-		return nil, PrerequisiteSelectionTelemetry{DurationMs: time.Since(started).Milliseconds()}, nil
-	}
-
+	// The oracle applies this predicate (thread scope + local-context
+	// exclusion), so candidates come back already filtered — no full-corpus
+	// eligibility scan, and no dependence on the corpus argument at all.
 	retrievalScope := ScopeAll
 	if scope == threadv1.SelectionScope_SELECTION_SCOPE_THREAD {
 		retrievalScope = ScopeThread
@@ -61,7 +46,11 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 		PredExcludeMessageIDs{MessageIDs: append([]string(nil), local.MessageIDs...)},
 	}}
 
-	bestScore := make(map[string]float64, len(eligible))
+	bestScore := make(map[string]float64)
+	// threadByID maps a candidate message id to its thread, for edge
+	// construction — filled from the candidates' own ThreadID (retrieval) and
+	// the provenance walk (reach), never a corpus scan.
+	threadByID := make(map[string]string)
 	var totalCached, totalReranked, totalRetrieved int
 	for _, localChunk := range local.Chunks {
 		k := e.cfg.RerankTopK
@@ -72,12 +61,12 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 		if err != nil {
 			return nil, PrerequisiteSelectionTelemetry{}, fmt.Errorf("nearest chunks: %w", err)
 		}
-		filtered := make([]ChunkRef, 0, len(retrieved))
+		// Candidates are already scope-filtered and local-excluded by the
+		// predicate; record each one's thread for its edge.
 		for _, candidate := range retrieved {
-			if _, ok := eligible[candidate.MessageID]; ok {
-				filtered = append(filtered, candidate)
-			}
+			threadByID[candidate.MessageID] = candidate.ThreadID
 		}
+		filtered := retrieved
 		totalRetrieved += len(filtered)
 
 		type scoredCandidate struct {
@@ -139,7 +128,7 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	// against the same Local Context so they compete on equal footing. This
 	// is the mandatory recall change — without it the /\ acceptance boundary
 	// has nothing to act on for roots (see structural-lift open-Q #3).
-	reachMass, reachTruncated := e.provenanceReach(local.MessageIDs, threadID, scope)
+	reachMass, reachThreads, reachTruncated := e.provenanceReach(local.MessageIDs, threadID, scope)
 	var provenanceReached int
 	if len(reachMass) > 0 {
 		missing := make([]string, 0, len(reachMass))
@@ -147,9 +136,8 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 			if _, alreadyScored := bestScore[id]; alreadyScored {
 				continue // top-K cosine already surfaced it
 			}
-			if _, ok := eligible[id]; !ok {
-				continue // excluded (local context / out of scope / empty)
-			}
+			// The walk already applied scope and excludes the cone (local
+			// context), so a reached id needs no further eligibility check.
 			missing = append(missing, id)
 		}
 		if len(missing) > 0 {
@@ -160,15 +148,20 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 			provenanceReached = provReached
 			totalReranked += provReached
 		}
+		for id, t := range reachThreads {
+			if _, ok := threadByID[id]; !ok {
+				threadByID[id] = t
+			}
+		}
 	}
 
 	type scoredMessage struct {
-		message *threadv1.Message
-		score   float64
+		id    string
+		score float64
 	}
 	candidates := make([]scoredMessage, 0, len(bestScore))
 	for id, score := range bestScore {
-		candidates = append(candidates, scoredMessage{message: eligible[id], score: score})
+		candidates = append(candidates, scoredMessage{id: id, score: score})
 	}
 
 	var mean, stddev float64
@@ -186,7 +179,7 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	if e.scorer != nil && e.cfg.MinBatchStdDev > 0 && len(candidates) > 0 && stddev < e.cfg.MinBatchStdDev {
 		return nil, PrerequisiteSelectionTelemetry{
 			DurationMs:       time.Since(started).Milliseconds(),
-			PriorsConsidered: len(eligible),
+			PriorsConsidered: len(candidates),
 			CandidatesScored: len(candidates),
 			Reranked:         totalReranked,
 		}, nil
@@ -204,19 +197,19 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	var edges []*rrcv1.Edge
 	for _, candidate := range candidates {
 		sim := candidate.score
-		mass := reachMass[candidate.message.Id]
+		mass := reachMass[candidate.id]
 		p := e.cfg.Calibrator.Predict(sim, mass)
 		if !accept(p, e.cfg.LossRatio, 0 /* μ at formation */, 0 /* tokens n/a at formation */) {
 			continue
 		}
 		edge := &rrcv1.Edge{
-			FromMessageId:     candidate.message.Id,
+			FromMessageId:     candidate.id,
 			ToMessageId:       anchor.Id,
 			Score:             float32(p),
 			Source:            rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER,
 			CrossEncoderScore: float32(sim),
 			DetectedAt:        timestamppb.Now(),
-			FromThreadId:      candidate.message.ThreadId,
+			FromThreadId:      threadByID[candidate.id],
 			ToThreadId:        anchor.ThreadId,
 		}
 		if !e.admitEdge(edge) {
@@ -228,12 +221,12 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	duration := time.Since(started)
 	e.logger.Info("RRC: SelectPrerequisites",
 		"fingerprint", local.Fingerprint, "anchor", anchor.Id, "thread", anchor.ThreadId,
-		"eligible", len(eligible), "localContextChunks", len(local.Chunks),
+		"candidates", len(candidates), "localContextChunks", len(local.Chunks),
 		"retrieved", totalRetrieved, "cached", totalCached, "reranked", totalReranked,
 		"edges", len(edges), "dur", duration)
 	return edges, PrerequisiteSelectionTelemetry{
 		DurationMs:          duration.Milliseconds(),
-		PriorsConsidered:    len(eligible),
+		PriorsConsidered:    len(candidates),
 		CandidatesScored:    len(candidates),
 		Reranked:            totalReranked,
 		EdgesFormed:         len(edges),
