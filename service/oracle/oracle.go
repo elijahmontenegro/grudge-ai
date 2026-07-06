@@ -152,8 +152,8 @@ const annOverfetch = 8
 // asymmetric rerank, sub-linear and never reading a vector off disk. Routing
 // applies the scope structurally (THREAD -> the thread's partition, ALL -> the
 // global graph); the residual predicate is the local-context exclusion set,
-// which a THREAD-scoped shortlist widens past — within its bounded partition —
-// if it eats into k. Returns the top-k in asymmetric order.
+// which the shortlist widens past if it eats into k. Returns the top-k in
+// asymmetric order.
 func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int, predicate rrc.Predicate) ([]rrc.ChunkRef, error) {
 	if o == nil || o.db == nil || o.embedder == nil {
 		return nil, nil
@@ -182,12 +182,12 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 
 	// Over-fetch a shortlist and apply the residual predicate (the local-context
 	// exclusion set) in pure RAM. The excluded messages are the most-similar
-	// ones, so they crowd the TOP of the shortlist — a large in-thread local
-	// context can push real prerequisites past it. So THREAD scope widens the
-	// shortlist until k survive or the thread partition is exhausted
-	// (len(cands) < m): bounded by the thread, no magic cap. ALL scope never
-	// widens — its exclusion set is a negligible fraction of the global graph,
-	// so one fetch fills k, and widening the global graph is what we must not do.
+	// ones, so they crowd the TOP of the shortlist — a large local context can
+	// fill it and push real candidates past it. Widen until k survive or the
+	// searched population is exhausted (len(cands) < m). The widen is bounded by
+	// the exclusion set, not the corpus: it stops as soon as the shortlist
+	// reaches past the (bounded) local context, so it terminates within a
+	// doubling or two for THREAD and ALL alike — no magic cap.
 	var eligible []annindex.Candidate
 	for m := k * annOverfetch; ; m *= 2 {
 		cands, _ := o.index.Search(qVec, m, searchThread) // asymmetric-reranked, nearest first
@@ -207,7 +207,7 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 			}
 		}
 		o.threadMu.RUnlock()
-		if len(eligible) >= k || len(cands) < m || searchThread == "" {
+		if len(eligible) >= k || len(cands) < m {
 			break
 		}
 	}

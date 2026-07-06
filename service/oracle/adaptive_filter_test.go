@@ -129,6 +129,46 @@ func TestNearestChunksWidensPastExcludedShortlist(t *testing.T) {
 	}
 }
 
+// TestNearestChunksWidensPastExcludedShortlist_AllScope is the same under-return
+// but under ALL_THREADS scope (the interactive-chat default): a large current
+// turn fills the first shortlist in the global graph too. If ALL scope refuses
+// to widen, it returns nothing.
+func TestNearestChunksWidensPastExcludedShortlist_AllScope(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	excluded := make([]string, 0, 10)
+	for i := range 10 {
+		id := fmt.Sprintf("local-%d", i)
+		insertVectorMessage(t, db, id, "t1", int64(i), basisVector(0))
+		excluded = append(excluded, id)
+	}
+	cand := make([]float32, 1024)
+	cand[0], cand[1] = 0.8, 0.2
+	insertVectorMessage(t, db, "candidate", "t1", 10, cand)
+
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	predicate := rrc.PredAnd{Children: []rrc.Predicate{
+		rrc.PredScope{CurrentThread: "t1", Scope: rrc.ScopeAll},
+		rrc.PredExcludeMessageIDs{MessageIDs: excluded},
+	}}
+	got, err := oracle.NearestChunks(t.Context(), "query", 1, predicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].MessageID != "candidate" {
+		t.Fatalf("all-scope widen-past-excluded returned %+v, want [candidate]", got)
+	}
+}
+
 func insertVectorMessage(t *testing.T, db *storage.DB, id, thread string, position int64, vector []float32) {
 	t.Helper()
 	message := &threadv1.Message{
