@@ -243,9 +243,8 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		// embed queue, the backfill) feeds the ANN index through this hook,
 		// so the index stays current without those writers importing it.
 		db.SetEmbeddingObserver(oc.IndexAdd)
-		// Search shares the oracle's in-RAM index (same embedder + model), so
-		// user-facing semantic search rides the same global graph instead of a
-		// whole-corpus brute-force cosine scan.
+		// Search shares the oracle's in-RAM index (same embedder + model) so it
+		// queries the same global graph.
 		s.Searcher = search.NewSearcher(s.Embedder, s.EmbedModelID, db, oc.Index())
 	}
 

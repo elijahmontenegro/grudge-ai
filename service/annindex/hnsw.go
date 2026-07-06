@@ -29,9 +29,7 @@ type hnsw struct {
 	mMax0    int     // max neighbours on the base layer (conventionally 2*m)
 	efConstr int     // beam width during construction
 	mL       float64 // level-generation normaliser, 1/ln(m)
-	// rngState is an 8-byte splitmix64 stream for deterministic layer draws.
-	// A rand.Rand would cost ~4.8KB of source state per graph — pathological
-	// when THREAD scope spawns a partition graph per (often tiny) thread.
+	// rngState drives deterministic per-graph layer draws (splitmix64).
 	rngState uint64
 }
 
@@ -54,10 +52,9 @@ func newHNSW(m, efConstr int, seed int64) *hnsw {
 	}
 }
 
-// nextRandom returns a deterministic uniform in [0,1) from the graph's own
-// splitmix64 state, so every partition graph carries an independent,
-// reproducible layer stream in 8 bytes. The invariance guard depends on a
-// partition's stream being unaffected by inserts into other partitions.
+// nextRandom returns a deterministic uniform in [0,1) from the graph's
+// splitmix64 state. Each graph's stream is independent, so a partition's layer
+// assignments do not shift when other partitions are inserted into.
 func (h *hnsw) nextRandom() float64 {
 	h.rngState += 0x9E3779B97F4A7C15
 	z := h.rngState

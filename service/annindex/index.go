@@ -16,19 +16,16 @@ type Candidate struct {
 }
 
 // Index is a concurrency-safe ANN index over binary-quantized vectors,
-// partitioned by thread so BOTH production retrieval scopes stay sub-linear:
-//   - a global graph over every vector serves ALL_THREADS scope (O(log N)),
-//     the interactive-chat default.
+// partitioned by thread so both retrieval scopes stay sub-linear:
+//   - a global graph over every vector serves ALL_THREADS scope (O(log N)).
 //   - one graph per thread serves THREAD scope (O(log |thread|)), invariant
-//     under growth of OTHER threads — the property a single global graph
-//     could not give (its selective post-filter degraded to O(N)).
+//     under growth of other threads.
 //
-// Each vector lives in the global graph AND its thread's partition, so graph
-// structure roughly doubles — but the dominant per-vector cost, the int8
-// rerank code, is stored ONCE in a shared store keyed by vid (the index into
-// keys/i8/scale). A graph's local node id maps back to its vid via hnsw.vids.
-// Reads (Search) and writes (Add) are guarded by one RWMutex; every Add
-// mutates the shared store, so per-partition locks would buy nothing.
+// Each vector lives in the global graph and its thread's partition, so graph
+// structure roughly doubles; the dominant per-vector cost, the int8 rerank
+// code, is stored once in a shared store keyed by vid (the index into
+// keys/i8/scale), with a graph's local node id mapped back via hnsw.vids. One
+// RWMutex guards reads (Search) and writes (Add).
 type Index struct {
 	mu     sync.RWMutex
 	global *hnsw            // all vids — ALL scope
@@ -77,10 +74,9 @@ func New(cfg Config) *Index {
 	}
 }
 
-// Add indexes vec under key, into the global graph and — unless threadID is
-// "" — into that thread's partition. An empty threadID is the global-only
-// sentinel (thread ids are non-empty in this system), so pure-index tests do
-// not build a redundant parts[""]. A key already present is ignored
+// Add indexes vec under key: into the global graph, and — unless threadID is
+// "" — into that thread's partition ("" is the global-only sentinel; thread
+// ids are non-empty in this system). A key already present is ignored
 // (idempotent; keys, codes, and graphs stay in lockstep via vid).
 func (ix *Index) Add(key, threadID string, vec []float32) {
 	ix.mu.Lock()

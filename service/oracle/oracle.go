@@ -80,10 +80,8 @@ func (o *ChunkOracle) IndexAdd(messageID string, chunkIndex int, threadID string
 	if o == nil {
 		return
 	}
-	// Map-first: a chunk searchable in its partition must already have its
-	// thread in the map, because the routed residual filter reads
-	// threadByMsg[mid]. Insert-first would let a freshly-embedded in-thread
-	// chunk be transiently dropped from its own thread's retrieval.
+	// Set the thread before the graph insert: the residual filter reads
+	// threadByMsg[mid], so a searchable chunk must already have its thread.
 	o.threadMu.Lock()
 	o.threadByMsg[messageID] = threadID
 	o.threadMu.Unlock()
@@ -149,20 +147,13 @@ func (o *ChunkOracle) ChunksForMessages(_ context.Context, messageIDs []string) 
 // service/rrcbench); wider buys nothing.
 const annOverfetch = 8
 
-// annWidenCap bounds the widen loop's shortlist width. THREAD-scoped queries
-// route to a thread partition and stop widening once the partition is exhausted
-// (len(cands) < m), so the cap almost never binds in production. It is a
-// contract backstop: a caller passing a selective predicate ThreadScopeOf can't
-// route (e.g. a PredOr over threads) would otherwise widen the GLOBAL graph
-// toward O(N); the cap keeps every search sub-linear regardless of predicate.
-const annWidenCap = 4096
-
-// NearestChunks embeds queryText and retrieves the k nearest chunks entirely
-// from the in-RAM ANN index (service/annindex) — a Hamming-navigated graph plus
-// int8 asymmetric rerank, sub-linear and never reading a vector off disk. It
-// over-fetches a shortlist, filters it by the predicate (thread scope /
-// exclusions) using a bounded indexed thread lookup, widens if too few survive,
-// and returns the top-k in asymmetric order.
+// NearestChunks embeds queryText and retrieves the k nearest chunks from the
+// in-RAM ANN index (service/annindex): a Hamming-navigated graph plus int8
+// asymmetric rerank, sub-linear and never reading a vector off disk. Routing
+// applies the scope structurally (THREAD -> the thread's partition, ALL -> the
+// global graph), so the only residual predicate is the bounded local-context
+// exclusion set; one k*annOverfetch shortlist absorbs it. Returns the top-k in
+// asymmetric order.
 func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int, predicate rrc.Predicate) ([]rrc.ChunkRef, error) {
 	if o == nil || o.db == nil || o.embedder == nil {
 		return nil, nil
@@ -181,69 +172,59 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 	qVec := qVecs[0]
 	qNorm := l2norm(qVec)
 
-	// Route THREAD-scoped queries to that thread's index partition so the walk
-	// is bounded by the thread, not the whole corpus. ALL scope — and any
-	// predicate that doesn't pin one thread — searches the global graph. The
-	// predicate is still applied in full below, so routing never changes the
-	// result set, only which graph is walked.
+	// Route to the thread's partition when the predicate pins one thread; else
+	// search the global graph. The predicate is still applied in full below, so
+	// routing only changes which graph is walked, never the result set.
 	searchThread := ""
 	if t, ok := rrc.ThreadScopeOf(predicate); ok && t != "" {
 		searchThread = t
 	}
 
-	for m := k * annOverfetch; ; m *= 2 {
-		cands, _ := o.index.Search(qVec, m, searchThread) // asymmetric-reranked, nearest first
-		if len(cands) == 0 {
-			return nil, nil
-		}
-		// Predicate filtering is pure RAM: thread comes from the in-memory map,
-		// never a per-search database query.
-		eligible := make([]annindex.Candidate, 0, len(cands))
-		o.threadMu.RLock()
-		for _, c := range cands {
-			mid := messageIDFromKey(c.Key)
-			if rrc.EvalPredicate(predicate, rrc.CandidateAttrs{
-				MessageID: mid,
-				ThreadID:  o.threadByMsg[mid],
-				Metadata:  map[string]string{"model_id": o.model},
-			}) {
-				eligible = append(eligible, c)
-			}
-		}
-		o.threadMu.RUnlock()
-		// Stop widening once the searched population returned everything
-		// (len(cands) < m — for a partition that is the thread size, which is
-		// the invariance fix) or the cap bounds the global-graph fallback.
-		exhausted := len(cands) < m || m >= annWidenCap
-		if len(eligible) < k && !exhausted {
-			continue // predicate too selective at this width; widen
-		}
-		if len(eligible) > k {
-			eligible = eligible[:k]
-		}
-		if len(eligible) == 0 {
-			return nil, nil
-		}
-
-		texts, err := o.chunkTextsForMessages(uniqueMessageIDs(eligible))
-		if err != nil {
-			return nil, fmt.Errorf("NearestChunks: fetch chunk texts: %w", err)
-		}
-		out := make([]rrc.ChunkRef, len(eligible))
-		o.threadMu.RLock()
-		for i, c := range eligible {
-			mid, cidx := messageIDFromKey(c.Key), chunkIdxFromKey(c.Key)
-			out[i] = rrc.ChunkRef{
-				MessageID:      mid,
-				ChunkIndex:     cidx,
-				ThreadID:       o.threadByMsg[mid],
-				Text:           texts[chunkKey{mid, cidx}],
-				RetrievalScore: normalizedScore(c.Score, qNorm),
-			}
-		}
-		o.threadMu.RUnlock()
-		return out, nil
+	cands, _ := o.index.Search(qVec, k*annOverfetch, searchThread) // asymmetric-reranked, nearest first
+	if len(cands) == 0 {
+		return nil, nil
 	}
+	// Predicate filtering is pure RAM (thread from the in-memory map). Routing
+	// already applied the scope, so the only filter left is the bounded
+	// local-context exclusion set, which the shortlist dwarfs.
+	eligible := make([]annindex.Candidate, 0, len(cands))
+	o.threadMu.RLock()
+	for _, c := range cands {
+		mid := messageIDFromKey(c.Key)
+		if rrc.EvalPredicate(predicate, rrc.CandidateAttrs{
+			MessageID: mid,
+			ThreadID:  o.threadByMsg[mid],
+			Metadata:  map[string]string{"model_id": o.model},
+		}) {
+			eligible = append(eligible, c)
+		}
+	}
+	o.threadMu.RUnlock()
+	if len(eligible) > k {
+		eligible = eligible[:k]
+	}
+	if len(eligible) == 0 {
+		return nil, nil
+	}
+
+	texts, err := o.chunkTextsForMessages(uniqueMessageIDs(eligible))
+	if err != nil {
+		return nil, fmt.Errorf("NearestChunks: fetch chunk texts: %w", err)
+	}
+	out := make([]rrc.ChunkRef, len(eligible))
+	o.threadMu.RLock()
+	for i, c := range eligible {
+		mid, cidx := messageIDFromKey(c.Key), chunkIdxFromKey(c.Key)
+		out[i] = rrc.ChunkRef{
+			MessageID:      mid,
+			ChunkIndex:     cidx,
+			ThreadID:       o.threadByMsg[mid],
+			Text:           texts[chunkKey{mid, cidx}],
+			RetrievalScore: normalizedScore(c.Score, qNorm),
+		}
+	}
+	o.threadMu.RUnlock()
+	return out, nil
 }
 
 // uniqueMessageIDs collapses shortlist chunk keys to their distinct message ids.

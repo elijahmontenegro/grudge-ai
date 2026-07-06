@@ -12,12 +12,10 @@ import (
 )
 
 // Searcher runs user-facing semantic search over chunk embeddings. It shares
-// the ChunkOracle's in-RAM ANN index (same embedder + model id), so a query
-// walks the global graph (~O(log N)) instead of the old whole-corpus
-// brute-force cosine scan. Results are grouped to message granularity, taking
-// the best-scoring chunk per message. Approximate (the index's int8 rerank) —
-// the deliberate cost of making search corpus-invariant; the wide over-fetch
-// below keeps recall high for these final user-facing results.
+// the ChunkOracle's in-RAM ANN index (same embedder + model id) and walks the
+// global graph (~O(log N)), grouping to message granularity by best-scoring
+// chunk. Results are approximate (the index's int8 rerank); the wide over-fetch
+// below keeps recall high for these final user-facing hits.
 type Searcher struct {
 	embedder core.Embedder
 	model    string
