@@ -417,7 +417,15 @@ export function ThreadView({
             )
           })}
           {streaming && (
-            <StreamingTurn stream={stream} subagents={subagents} liveTools={liveTools} />
+            <StreamingTurn
+              stream={stream}
+              subagents={subagents}
+              liveTools={liveTools}
+              pendingApprovals={pendingApprovals}
+              onApproveTool={onApproveTool}
+              onDenyTool={onDenyTool}
+              approvalsBusy={approvalsBusy}
+            />
           )}
         </div>
         {/* Composer vs. AnswerStage: when the agent is blocked on an
