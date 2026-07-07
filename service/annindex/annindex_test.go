@@ -6,8 +6,70 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"sync"
 	"testing"
 )
+
+// TestDimMismatchPanics: the index fixes its dimension on the first Add and
+// fails fast on any mismatch — vec0 enforced this at the DB layer; the in-RAM
+// index must too, since the distance kernels otherwise panic or (worse) return
+// silently wrong distances.
+func TestDimMismatchPanics(t *testing.T) {
+	ix := New(Config{Seed: 1})
+	ix.Add("a", "", seedVec(128, "a"))
+	assertPanics(t, "Add wrong dim", func() { ix.Add("b", "", seedVec(64, "b")) })
+	assertPanics(t, "Search shorter", func() { ix.Search(seedVec(64, "q"), 5, "") })
+	assertPanics(t, "Search longer", func() { ix.Search(seedVec(256, "q"), 5, "") })
+	if got, _ := ix.Search(seedVec(128, "q"), 5, ""); len(got) != 1 {
+		t.Fatalf("matching-dim search returned %d, want 1", len(got))
+	}
+}
+
+func assertPanics(t *testing.T, name string, f func()) {
+	t.Helper()
+	defer func() {
+		if recover() == nil {
+			t.Errorf("%s: expected panic, got none", name)
+		}
+	}()
+	f()
+}
+
+// TestConcurrentAddSearch exercises the real production interleaving — the
+// embedding observer Add-ing while Assemble Searches — under -race. The
+// single-threaded tests never touched this path.
+func TestConcurrentAddSearch(t *testing.T) {
+	ix := New(Config{Seed: 1})
+	for i := range 100 {
+		k := fmt.Sprintf("seed%d", i)
+		ix.Add(k, "t", seedVec(64, k))
+	}
+	var wg sync.WaitGroup
+	for w := range 4 {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := range 200 {
+				k := fmt.Sprintf("w%d-%d", w, i)
+				ix.Add(k, "t", seedVec(64, k))
+			}
+		}(w)
+	}
+	q := seedVec(64, "q")
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 500 {
+				ix.Search(q, 10, "t")
+				ix.Search(q, 10, "")
+				ix.Vector("seed0")
+				ix.Len()
+			}
+		}()
+	}
+	wg.Wait()
+}
 
 // seedVec deterministically maps a seed string to a dim-dimensional vector with
 // mixed signs (Gaussian components), so Binarize produces distinguishing codes.

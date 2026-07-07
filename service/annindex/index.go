@@ -1,6 +1,7 @@
 package annindex
 
 import (
+	"fmt"
 	"hash/fnv"
 	"sort"
 	"sync"
@@ -39,6 +40,7 @@ type Index struct {
 	efConstr int   // construction beam width
 	ef       int   // default query beam width
 	seed     int64 // base seed; partitions derive seed ^ fnv(threadID)
+	dim      int   // vector width, fixed by the first Add; 0 until then
 }
 
 // Config tunes the index. Zero fields take documented defaults.
@@ -84,6 +86,16 @@ func (ix *Index) Add(key, threadID string, vec []float32) {
 	if _, ok := ix.byKey[key]; ok {
 		return
 	}
+	// Fail fast on a dimension mismatch. The distance kernels (Hamming,
+	// AsymmetricInt8Score) index one code by the other's length, so a mismatch
+	// is a panic in one direction and silent wrong distances in the other —
+	// never tolerate it (vec0 enforced this at the DB layer; the in-RAM index
+	// must enforce it itself).
+	if ix.dim == 0 {
+		ix.dim = len(vec)
+	} else if len(vec) != ix.dim {
+		panic(fmt.Sprintf("annindex.Add: vector dim %d != index dim %d", len(vec), ix.dim))
+	}
 	vid := int32(len(ix.keys))
 	code := Binarize(vec)        // binary code: fast Hamming traversal (shared, immutable)
 	i8c, sc := QuantizeInt8(vec) // int8 code: asymmetric rerank (stored once)
@@ -113,6 +125,9 @@ func (ix *Index) Add(key, threadID string, vec []float32) {
 func (ix *Index) Search(vec []float32, n int, threadID string) ([]Candidate, int) {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
+	if ix.dim != 0 && len(vec) != ix.dim {
+		panic(fmt.Sprintf("annindex.Search: query dim %d != index dim %d", len(vec), ix.dim))
+	}
 	g := ix.global
 	if threadID != "" {
 		g = ix.parts[threadID]
