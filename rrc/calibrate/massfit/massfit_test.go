@@ -2,6 +2,7 @@ package massfit
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -156,10 +157,11 @@ func TestReplay_ErrorsWithoutReachableMass(t *testing.T) {
 	// from nothing.
 	stray := []*rrcv1.Edge{provEdge("x1", "x2", 1.0, time.Date(2026, 7, 1, 11, 0, 0, 0, time.UTC))}
 	_, _, err := Replay(context.Background(), corpus, stray, markerScorer{}, idJudge{prereqID: "m0"}, testChunkCfg())
-	if err == nil {
-		t.Fatal("replay with no reachable mass must error")
+	// It must surface as the typed cold-start deferral, not fit B from nothing
+	// and not a bare error the caller would log as a failure.
+	if !errors.Is(err, ErrCorpusTooYoung) {
+		t.Fatalf("replay with no reachable mass must return ErrCorpusTooYoung, got %v", err)
 	}
-	t.Logf("errored as expected: %v", err)
 }
 
 func TestCorpusProvider_ResolvesTurnAndCandidate(t *testing.T) {

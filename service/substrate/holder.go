@@ -432,6 +432,14 @@ func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scor
 	judge := regenjudge.New(completer, massfit.NewCorpusProvider(corpus))
 	replaySamples, stats, err := massfit.Replay(ctx, corpus, edges, scorer, judge, chunkCfg)
 	if err != nil {
+		// No reachable mass pairs is a cold-start deferral, not a failure:
+		// cross-thread edges exist but none connect an eligible candidate to a
+		// turn's cone yet. Distinct from a genuine judge/scorer fault below.
+		if errors.Is(err, massfit.ErrCorpusTooYoung) {
+			log.Printf("[Calibrate] mass refit deferred: no reachable mass pairs yet (%d edges) — rechecks on corpus growth", edgeCount)
+			recordAttempt()
+			return
+		}
 		// Abort whole; the attempt watermark defers the retry to the
 		// next corpus doubling instead of the next reload. No partial fit.
 		log.Printf("[Calibrate] mass replay failed (keeping current artifact): %v", err)

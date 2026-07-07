@@ -39,6 +39,7 @@ package massfit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -283,10 +284,23 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 	}
 
 	if stats.MassPairs == 0 {
-		return nil, stats, fmt.Errorf("massfit: no mass-bearing (turn, candidate) pairs reachable in %d turns — provenance edges exist but none connect an eligible candidate to a turn's cone", stats.TurnsConsidered)
+		// Not a failure: provenance edges exist but none reach an eligible
+		// candidate through any turn's cone, so B cannot be grounded yet. The
+		// caller treats ErrCorpusTooYoung as a deferral — keep the current
+		// calibrator and recheck as the corpus grows — distinct from a genuine
+		// scorer/judge fault, which aborts earlier.
+		return nil, stats, fmt.Errorf("massfit: no mass-bearing (turn, candidate) pairs reachable in %d turns: %w", stats.TurnsConsidered, ErrCorpusTooYoung)
 	}
 	return samples, stats, nil
 }
+
+// ErrCorpusTooYoung marks a replay that found no mass-bearing (turn, candidate)
+// pairs — provenance edges exist but none reach an eligible candidate through a
+// turn's cone yet, so B cannot be grounded. It is a cold-start deferral, not a
+// failure: the caller keeps the current artifact and rechecks as the corpus
+// grows. Note a single-thread corpus can still fit B when its provenance chains
+// reach far enough back — the signal here is reachability, not thread count.
+var ErrCorpusTooYoung = errors.New("massfit: no mass-bearing pairs reachable yet")
 
 // groupTurns splits the corpus into turns (messages sharing a non-empty
 // turn_id) in first-appearance order.
