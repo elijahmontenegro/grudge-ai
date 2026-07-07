@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
@@ -61,6 +62,14 @@ func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *st
 	if err != nil {
 		return nil, err
 	}
+	// A sandbox or working-dirs change must reach the live agent: the cached
+	// runner freezes thread.Sandboxed and WorkingDirs into its tool closures and
+	// system prompt at build time and never re-reads the row. Detect a real
+	// change (against the pre-update values) and tear the runner down, mirroring
+	// the plan-mode transition (schema.agent.resolvers.go) — the next SendMessage
+	// rebuilds tools + instruction from the fresh row.
+	runnerStale := (sandboxed != nil && *sandboxed != t.Sandboxed) ||
+		(workingDirs != nil && !slices.Equal(workingDirs, t.WorkingDirs))
 	if name != nil {
 		t.Name = *name
 	}
@@ -72,6 +81,9 @@ func (r *mutationResolver) UpdateThread(ctx context.Context, id string, name *st
 	}
 	if err := r.db.UpdateThread(t); err != nil {
 		return nil, err
+	}
+	if runnerStale {
+		r.stopRunner(id)
 	}
 	return t, nil
 }
