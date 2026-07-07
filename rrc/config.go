@@ -143,7 +143,7 @@ func DefaultConfig() EngineConfig {
 		MinBatchStdDev:   0.05,
 		RerankTopK:       64,
 		LocalContextSize: 10,
-		Chunk: chunk.DefaultConfig(),
+		Chunk:            chunk.DefaultConfig(),
 		// Boundary for the Network payload, in the configured
 		// counter's units (chunk.Config.Estimator; the app installs
 		// cl100k BPE). The counter is a lookalike, not the model's
