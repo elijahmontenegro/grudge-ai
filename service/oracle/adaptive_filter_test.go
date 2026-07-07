@@ -169,6 +169,62 @@ func TestNearestChunksWidensPastExcludedShortlist_AllScope(t *testing.T) {
 	}
 }
 
+// TestNearestChunksReturnsDistinctMessages pins the chunk->message fix: a
+// message with several top-ranked chunks must occupy ONE candidate slot, not
+// crowd out other messages. Without the dedupe, k=3 here returns three chunks of
+// "big" (one distinct message); with it, three distinct messages.
+func TestNearestChunksReturnsDistinctMessages(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// "big" — five chunks, all exactly on the query (highest score).
+	bigChunks := make([]storage.Chunk, 5)
+	for i := range bigChunks {
+		bigChunks[i] = storage.Chunk{MessageID: "big", ChunkIndex: i, Text: fmt.Sprintf("big-%d", i), ByteEnd: 5, TokenEst: 1}
+	}
+	if err := db.InsertMessage(&threadv1.Message{Id: "big", ThreadId: "t1", Role: threadv1.Role_ROLE_USER, CreatedAt: timestamppb.Now()}, bigChunks); err != nil {
+		t.Fatal(err)
+	}
+	for i := range bigChunks {
+		if err := db.InsertChunkEmbedding("big", i, "model", basisVector(0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Three single-chunk messages, slightly less similar.
+	for j, mid := range []string{"a", "b", "c"} {
+		v := make([]float32, 1024)
+		v[0], v[1] = 0.9, 0.1
+		insertVectorMessage(t, db, mid, "t1", int64(10+j), v)
+	}
+
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := oracle.NearestChunks(t.Context(), "q", 3, rrc.PredThread{ThreadID: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, r := range got {
+		if seen[r.MessageID] {
+			t.Fatalf("duplicate message %s in results — dedupe broken: %+v", r.MessageID, got)
+		}
+		seen[r.MessageID] = true
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d results, want 3 distinct messages", len(got))
+	}
+	if !seen["big"] {
+		t.Fatalf("expected the most-similar message 'big' among results: %+v", got)
+	}
+}
+
 // TestIndexAddIgnoresOtherModels: the index is per-model, and the embedding
 // observer fires for every model's inserts, so IndexAdd must drop any embedding
 // written under a different model (mixing models/widths would corrupt distances).

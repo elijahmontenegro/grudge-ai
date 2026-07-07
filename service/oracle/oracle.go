@@ -193,48 +193,56 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 	match := rrc.CompilePredicate(predicate)
 	meta := map[string]string{"model_id": o.model}
 
-	// Over-fetch a shortlist and apply the residual predicate (the local-context
-	// exclusion set) in pure RAM. The excluded messages are the most-similar
-	// ones, so they crowd the TOP of the shortlist — a large local context can
-	// fill it and push real candidates past it. Widen until k survive or the
-	// searched population is exhausted (len(cands) < m). The widen is bounded by
-	// the exclusion set, not the corpus: it stops as soon as the shortlist
-	// reaches past the (bounded) local context, so it terminates within a
-	// doubling or two for THREAD and ALL alike — no magic cap.
-	var eligible []annindex.Candidate
+	// Over-fetch a shortlist, filter by the residual predicate, and collapse it
+	// to one candidate per message — its highest-scoring chunk. k means k
+	// distinct candidate MESSAGES: the engine scores message-granular (bestScore
+	// keyed by message id), so returning raw chunks lets a multi-chunk message
+	// eat several slots and crowd out real candidates — measured at ~27 distinct
+	// messages from a top-64 chunk shortlist on real data, 58% of the budget
+	// lost. Widen until k distinct messages survive or the searched population is
+	// exhausted (len(cands) < m); a large local-context exclusion sits at the top
+	// of the shortlist, so the widen fetches past it. Bounded by the exclusion
+	// set and the crowding, not the corpus — a doubling or two, no magic cap.
+	var picked []annindex.Candidate
 	for m := k * annOverfetch; ; m *= 2 {
 		cands, _ := o.index.Search(qVec, m, searchThread) // asymmetric-reranked, nearest first
 		if len(cands) == 0 {
 			return nil, nil
 		}
 		o.examined.Add(int64(len(cands)))
-		eligible = make([]annindex.Candidate, 0, len(cands))
+		picked = picked[:0]
+		seen := make(map[string]bool, k)
 		o.threadMu.RLock()
 		for _, c := range cands {
 			mid := messageIDFromKey(c.Key)
-			if match(rrc.CandidateAttrs{MessageID: mid, ThreadID: o.threadByMsg[mid], Metadata: meta}) {
-				eligible = append(eligible, c)
+			if seen[mid] {
+				continue // already kept this message's best (higher-scoring) chunk
 			}
+			if !match(rrc.CandidateAttrs{MessageID: mid, ThreadID: o.threadByMsg[mid], Metadata: meta}) {
+				continue
+			}
+			seen[mid] = true
+			picked = append(picked, c)
 		}
 		o.threadMu.RUnlock()
-		if len(eligible) >= k || len(cands) < m {
+		if len(picked) >= k || len(cands) < m {
 			break
 		}
 	}
-	if len(eligible) > k {
-		eligible = eligible[:k]
+	if len(picked) > k {
+		picked = picked[:k]
 	}
-	if len(eligible) == 0 {
+	if len(picked) == 0 {
 		return nil, nil
 	}
 
-	texts, err := o.chunkTextsForMessages(uniqueMessageIDs(eligible))
+	texts, err := o.chunkTextsForMessages(uniqueMessageIDs(picked))
 	if err != nil {
 		return nil, fmt.Errorf("NearestChunks: fetch chunk texts: %w", err)
 	}
-	out := make([]rrc.ChunkRef, len(eligible))
+	out := make([]rrc.ChunkRef, len(picked))
 	o.threadMu.RLock()
-	for i, c := range eligible {
+	for i, c := range picked {
 		mid, cidx := messageIDFromKey(c.Key), chunkIdxFromKey(c.Key)
 		out[i] = rrc.ChunkRef{
 			MessageID:      mid,
