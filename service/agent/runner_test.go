@@ -245,6 +245,36 @@ func TestProcessEvents_UserStopPersistsNothingAndReturnsErrStopped(t *testing.T)
 	}
 }
 
+func TestProcessEvents_UserStopClosesProtocolForDanglingCall(t *testing.T) {
+	// The regression guard: a user stop cancels the turn AFTER a tool call was
+	// persisted but before its result. Protocol closure requires every persisted
+	// call to have a result, so the synthetic backfill must still run on cancel.
+	// An earlier version skipped it on cancel, leaving a dangling call that broke
+	// every later turn's assembly with "requires exact tool result".
+	r := newTestRunner(t, "t-stop-dangling")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := r.processEvents(ctx, eventSeq(fnCallEvent("call-1", "Bash", map[string]any{"cmd": "ls"})))
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("cancelled turn must return ErrStopped, got %v", err)
+	}
+	var haveCall, haveResult bool
+	for _, m := range corpusOf(t, r) {
+		for _, b := range m.Content {
+			if b.GetToolCall() != nil {
+				haveCall = true
+			}
+			if tr := b.GetToolResult(); tr != nil && tr.ToolCallId == "call-1" {
+				haveResult = true
+			}
+		}
+	}
+	if !haveCall || !haveResult {
+		t.Fatalf("a cancelled tool call must be protocol-closed (call=%v result=%v); a dangling call breaks later turns", haveCall, haveResult)
+	}
+}
+
 func TestProcessEvents_ThinkingFlushedBeforeToolCall(t *testing.T) {
 	// Ordering invariant: when thinking accumulates and then a tool
 	// call arrives, the thinking must be stored as its own message

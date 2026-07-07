@@ -725,11 +725,12 @@ func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Ev
 		if callID == "" || seenResultIDs[callID] {
 			continue
 		}
-		// A user stop is not a failed tool call — don't backfill a synthetic
-		// error result for a call the user cancelled.
-		if errors.Is(ctx.Err(), context.Canceled) {
-			continue
-		}
+		// This backfill MUST run on a user stop too: a cancelled turn ends the
+		// stream after the call was persisted but before its FunctionResponse
+		// (whose "approval: context canceled" text we skip above), so without a
+		// synthetic result the call dangles and every later turn's assembly
+		// fails protocol closure. The result is a clean IsError marker, not the
+		// cancellation string.
 		content := "Tool execution ended without a result."
 		if lastErr != nil {
 			content = "Tool execution failed: " + lastErr.Error()
