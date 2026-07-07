@@ -7,206 +7,167 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/elijahmontenegro/grudge/core"
 )
 
-// TestScoreExtractsBinaryLogitAndAppliesSigmoid verifies the corrected
-// scoring recipe: when both "Yes" and "No" tokens are present in
-// top_logprobs, the score is sigmoid((yes_logprob - no_logprob) / 5).
-// This recovers the binary log-odds (Yes vs No) from the post-softmax
-// logprobs the OpenAI API exposes — the faithful reconstruction of
-// zerank's model-card formula `sigmoid(yes_logit / 5)`, whose
-// "yes_logit" is the PRE-softmax score not directly accessible from
-// the API. Feeding the bare yes_logprob (ln(P_yes) ≤ 0) into the
-// model-card formula caps scores at 0.5 — incorrect.
-func TestScoreExtractsBinaryLogitAndAppliesSigmoid(t *testing.T) {
-	const yesLogprob = -1.2 // arbitrary
-	const noLogprob = -3.0
-	// binary_logit = ln(P_yes / P_no) = logprob_yes - logprob_no
-	binaryLogit := yesLogprob - noLogprob
-	expected := 1.0 / (1.0 + math.Exp(-binaryLogit/5.0))
+// classifyReply builds a /classify response body with one raw logit per input,
+// mirroring vLLM's single-class (classifier_from_token ["Yes"]) score head.
+func classifyReply(logits ...float64) classifyResponse {
+	var resp classifyResponse
+	resp.Data = make([]struct {
+		Probs []float64 `json:"probs"`
+	}, len(logits))
+	for i, l := range logits {
+		resp.Data[i].Probs = []float64{l}
+	}
+	return resp
+}
+
+// TestScoreAppliesSigmoidOverFive verifies the recipe: the raw "Yes" logit from
+// /classify is mapped with sigmoid(logit / 5).
+func TestScoreAppliesSigmoidOverFive(t *testing.T) {
+	const logit = 6.02 // an in-distribution "relevant" logit
+	want := 1.0 / (1.0 + math.Exp(-logit/scoreTemperature))
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
+		if r.URL.Path != "/classify" {
 			http.Error(w, "wrong path: "+r.URL.Path, http.StatusNotFound)
 			return
 		}
-		var req completionRequest
+		var req classifyRequest
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &req)
-		if !req.Logprobs || req.TopLogprobs <= 0 {
-			t.Errorf("request must request logprobs: logprobs=%v top=%d",
-				req.Logprobs, req.TopLogprobs)
+		if req.UseActivation {
+			t.Error("use_activation must be false so the raw logit is returned")
 		}
-		if req.MaxTokens != 6 {
-			// 6-token window so scoring can skip a leaked thinking
-			// prelude to the answer position (see scoreOne).
-			t.Errorf("max_tokens should be 6, got %d", req.MaxTokens)
+		if len(req.Input) != 1 {
+			t.Fatalf("want 1 input, got %d", len(req.Input))
 		}
-		if len(req.Messages) != 2 ||
-			req.Messages[0].Role != "system" ||
-			req.Messages[1].Role != "user" {
-			t.Errorf("messages should be system+user, got %+v", req.Messages)
+		// The input must be the chat-formatted prompt: query as system, document
+		// as user, ending at the assistant generation position.
+		in := req.Input[0]
+		for _, want := range []string{
+			"<|im_start|>system\nthe query<|im_end|>",
+			"<|im_start|>user\nthe doc<|im_end|>",
+			"<|im_start|>assistant\n",
+		} {
+			if !strings.Contains(in, want) {
+				t.Errorf("prompt missing %q; got %q", want, in)
+			}
 		}
-
-		resp := completionResponse{
-			Choices: []struct {
-				Logprobs tokenChoiceLogprobs `json:"logprobs"`
-			}{{
-				Logprobs: tokenChoiceLogprobs{
-					Content: []struct {
-						Token       string         `json:"token"`
-						Logprob     float64        `json:"logprob"`
-						TopLogprobs []tokenLogprob `json:"top_logprobs"`
-					}{{
-						Token:   "Yes",
-						Logprob: yesLogprob,
-						TopLogprobs: []tokenLogprob{
-							{Token: "Yes", Logprob: yesLogprob},
-							{Token: "No", Logprob: -3.0},
-						},
-					}},
-				},
-			}},
+		if !strings.HasSuffix(in, "<|im_start|>assistant\n") {
+			t.Errorf("prompt must end at the assistant generation position; got %q", in)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(classifyReply(logit))
 	}))
 	defer srv.Close()
 
-	p := New(Config{BaseURL: srv.URL, Model: "zeroentropy/zerank-1-small"}).(core.ScorerProvider)
-	cls, err := p.Scorer("zeroentropy/zerank-1-small")
+	cls, err := New(Config{BaseURL: srv.URL, Model: "zeroentropy/zerank-1-small"}).(core.ScorerProvider).Scorer("")
 	if err != nil {
 		t.Fatalf("Scorer: %v", err)
 	}
-
-	scores, err := cls.Score(context.Background(), "query", []string{"doc"})
+	scores, err := cls.Score(context.Background(), "the query", []string{"the doc"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
 	if len(scores) != 1 {
 		t.Fatalf("got %d scores, want 1", len(scores))
 	}
-	if math.Abs(scores[0]-expected) > 1e-6 {
-		t.Errorf("score mismatch: got %v, want %v", scores[0], expected)
+	if math.Abs(scores[0]-want) > 1e-9 {
+		t.Errorf("score = %v, want %v", scores[0], want)
 	}
 }
 
-// TestScoreMatchesYesTokenWithLeadingSpace verifies that the BPE
-// tokenizer's space-prefixed " Yes" still matches.
-func TestScoreMatchesYesTokenWithLeadingSpace(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(completionResponse{
-			Choices: []struct {
-				Logprobs tokenChoiceLogprobs `json:"logprobs"`
-			}{{
-				Logprobs: tokenChoiceLogprobs{
-					Content: []struct {
-						Token       string         `json:"token"`
-						Logprob     float64        `json:"logprob"`
-						TopLogprobs []tokenLogprob `json:"top_logprobs"`
-					}{{
-						Token: " Yes",
-						TopLogprobs: []tokenLogprob{
-							{Token: " Yes", Logprob: 0.0}, // sigmoid(0/5) = 0.5
-						},
-					}},
-				},
-			}},
-		})
-	}))
-	defer srv.Close()
-
-	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
-	scores, err := cls.Score(context.Background(), "q", []string{"d"})
-	if err != nil {
-		t.Fatalf("Score: %v", err)
-	}
-	if math.Abs(scores[0]-0.5) > 1e-6 {
-		t.Errorf("leading-space Yes should still score: got %v want 0.5", scores[0])
-	}
-}
-
-// TestScoreReturnsZeroWhenYesAbsent verifies that when "Yes" isn't in
-// top_logprobs, the score is 0 (model is confidently negative).
-func TestScoreReturnsZeroWhenYesAbsent(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(completionResponse{
-			Choices: []struct {
-				Logprobs tokenChoiceLogprobs `json:"logprobs"`
-			}{{
-				Logprobs: tokenChoiceLogprobs{
-					Content: []struct {
-						Token       string         `json:"token"`
-						Logprob     float64        `json:"logprob"`
-						TopLogprobs []tokenLogprob `json:"top_logprobs"`
-					}{{
-						Token: "No",
-						TopLogprobs: []tokenLogprob{
-							{Token: "No", Logprob: -0.1},
-							{Token: "no", Logprob: -2.0},
-						},
-					}},
-				},
-			}},
-		})
-	}))
-	defer srv.Close()
-
-	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
-	scores, err := cls.Score(context.Background(), "q", []string{"d"})
-	if err != nil {
-		t.Fatalf("Score: %v", err)
-	}
-	if scores[0] != 0 {
-		t.Errorf("absent Yes should score 0, got %v", scores[0])
-	}
-}
-
-func TestScoreScoresMultipleCandidates(t *testing.T) {
+// TestScoreBatchesAllCandidatesInOneCall verifies every candidate is scored in a
+// single /classify call and the per-candidate logits map through in order —
+// including a strongly-negative distractor logit crushing to near zero.
+func TestScoreBatchesAllCandidatesInOneCall(t *testing.T) {
 	var calls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	logits := []float64{6.02, -12.82, 1.80}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		_ = json.NewEncoder(w).Encode(completionResponse{
-			Choices: []struct {
-				Logprobs tokenChoiceLogprobs `json:"logprobs"`
-			}{{
-				Logprobs: tokenChoiceLogprobs{
-					Content: []struct {
-						Token       string         `json:"token"`
-						Logprob     float64        `json:"logprob"`
-						TopLogprobs []tokenLogprob `json:"top_logprobs"`
-					}{{
-						Token: "Yes",
-						TopLogprobs: []tokenLogprob{
-							{Token: "Yes", Logprob: 0.0},
-						},
-					}},
-				},
-			}},
-		})
+		var req classifyRequest
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &req)
+		if len(req.Input) != len(logits) {
+			t.Errorf("want %d inputs in one call, got %d", len(logits), len(req.Input))
+		}
+		_ = json.NewEncoder(w).Encode(classifyReply(logits...))
 	}))
 	defer srv.Close()
 
-	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
+	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("")
 	scores, err := cls.Score(context.Background(), "q", []string{"d1", "d2", "d3"})
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
+	if calls != 1 {
+		t.Errorf("want 1 batched vLLM call, got %d", calls)
+	}
 	if len(scores) != 3 {
 		t.Fatalf("got %d scores, want 3", len(scores))
 	}
-	if calls != 3 {
-		t.Errorf("expected 3 vLLM calls, got %d", calls)
+	for i, l := range logits {
+		want := 1.0 / (1.0 + math.Exp(-l/scoreTemperature))
+		if math.Abs(scores[i]-want) > 1e-9 {
+			t.Errorf("score[%d] = %v, want %v", i, scores[i], want)
+		}
+	}
+	if scores[1] > 0.1 {
+		t.Errorf("strongly-negative distractor should crush to ~0, got %v", scores[1])
 	}
 }
 
-// TestProviderImplementsScorerOnly verifies the adapter's role
-// surface: zerank provides only the ScorerProvider role.
-// Type-asserting against CompleterProvider or EmbedderProvider
-// fails — there are no stub methods for those.
+// TestScoreErrorsOnCountMismatch: a score-per-candidate contract violation must
+// fail loudly, not silently misalign scores to the wrong documents.
+func TestScoreErrorsOnCountMismatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(classifyReply(1.0)) // one logit for two candidates
+	}))
+	defer srv.Close()
+
+	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("")
+	if _, err := cls.Score(context.Background(), "q", []string{"d1", "d2"}); err == nil {
+		t.Fatal("count mismatch must error")
+	}
+}
+
+// TestScoreErrorsOnEmptyProbs: a 200 with no logit is a serving fault, not a
+// zero-relevance signal — returning 0 would poison anything fit against it.
+func TestScoreErrorsOnEmptyProbs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(classifyResponse{Data: []struct {
+			Probs []float64 `json:"probs"`
+		}{{Probs: nil}}})
+	}))
+	defer srv.Close()
+
+	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("")
+	if _, err := cls.Score(context.Background(), "q", []string{"d"}); err == nil {
+		t.Fatal("empty probs must error")
+	}
+}
+
+// TestScoreEmptyCandidates returns nil without calling the endpoint.
+func TestScoreEmptyCandidates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("must not call the endpoint for zero candidates")
+	}))
+	defer srv.Close()
+
+	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("")
+	scores, err := cls.Score(context.Background(), "q", nil)
+	if err != nil || scores != nil {
+		t.Fatalf("empty candidates: got scores=%v err=%v, want nil,nil", scores, err)
+	}
+}
+
+// TestProviderImplementsScorerOnly verifies the adapter's role surface: zerank
+// provides only the ScorerProvider role.
 func TestProviderImplementsScorerOnly(t *testing.T) {
 	p := New(Config{BaseURL: "http://localhost"})
 	if _, ok := p.(core.ScorerProvider); !ok {
@@ -218,131 +179,4 @@ func TestProviderImplementsScorerOnly(t *testing.T) {
 	if _, ok := p.(core.EmbedderProvider); ok {
 		t.Error("zerank should not be an EmbedderProvider")
 	}
-}
-
-// TestScoreErrorsWhenNeitherYesNorNo is the garbage-with-200 gate: when
-// the top-K logprobs contain neither Yes nor No, the model is not
-// answering the binary relevance question (chat-template drift leaking
-// a thinking prelude, or a non-zerank model at the endpoint). Returning
-// 0 would let every pair silently score 0.0 and poison anything fit
-// against those scores; the adapter must fail loudly instead.
-func TestScoreErrorsWhenNeitherYesNorNo(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(completionResponse{
-			Choices: []struct {
-				Logprobs tokenChoiceLogprobs `json:"logprobs"`
-			}{{
-				Logprobs: tokenChoiceLogprobs{
-					Content: []struct {
-						Token       string         `json:"token"`
-						Logprob     float64        `json:"logprob"`
-						TopLogprobs []tokenLogprob `json:"top_logprobs"`
-					}{{
-						Token: "Okay",
-						TopLogprobs: []tokenLogprob{
-							{Token: "Okay", Logprob: -0.1},
-							{Token: "The", Logprob: -2.3},
-							{Token: "Sure", Logprob: -3.1},
-						},
-					}},
-				},
-			}},
-		})
-	}))
-	defer srv.Close()
-
-	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
-	_, err := cls.Score(context.Background(), "q", []string{"d"})
-	if err == nil {
-		t.Fatal("neither-Yes-nor-No output must error, got a score")
-	}
-	t.Logf("refused as expected: %v", err)
-}
-
-// TestScoreSkipsThinkingPreludeToAnswer: a template that leaks its
-// thinking scaffold ("</think>" + whitespace) ahead of the answer must
-// still score correctly — the scan skips known scaffold to the first
-// real answer position and reads Yes/No there. This is the observed
-// live behavior (stray </think> under vLLM's V1 runner) made harmless
-// by construction instead of by luck.
-func TestScoreSkipsThinkingPreludeToAnswer(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(completionResponse{
-			Choices: []struct {
-				Logprobs tokenChoiceLogprobs `json:"logprobs"`
-			}{{
-				Logprobs: tokenChoiceLogprobs{
-					Content: []struct {
-						Token       string         `json:"token"`
-						Logprob     float64        `json:"logprob"`
-						TopLogprobs []tokenLogprob `json:"top_logprobs"`
-					}{
-						{
-							Token: "</think>",
-							TopLogprobs: []tokenLogprob{
-								{Token: "</think>", Logprob: -0.05},
-								{Token: "\n", Logprob: -3.2},
-							},
-						},
-						{
-							Token: "\n\n",
-							TopLogprobs: []tokenLogprob{
-								{Token: "\n\n", Logprob: -0.1},
-							},
-						},
-						{
-							Token: "Yes",
-							TopLogprobs: []tokenLogprob{
-								{Token: "Yes", Logprob: -0.2},
-								{Token: "No", Logprob: -1.7},
-							},
-						},
-					},
-				},
-			}},
-		})
-	}))
-	defer srv.Close()
-
-	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
-	scores, err := cls.Score(context.Background(), "q", []string{"d"})
-	if err != nil {
-		t.Fatalf("Score: %v", err)
-	}
-	// binary logit = -0.2 - (-1.7) = 1.5; sigmoid(1.5/5) ≈ 0.574
-	if scores[0] < 0.55 || scores[0] > 0.60 {
-		t.Errorf("prelude-then-Yes should score ≈0.574, got %v", scores[0])
-	}
-}
-
-// TestScoreErrorsWhenOnlyScaffold: a response that is nothing but
-// thinking scaffold never reaches an answer position — that is
-// template drift to diagnose, not a score.
-func TestScoreErrorsWhenOnlyScaffold(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(completionResponse{
-			Choices: []struct {
-				Logprobs tokenChoiceLogprobs `json:"logprobs"`
-			}{{
-				Logprobs: tokenChoiceLogprobs{
-					Content: []struct {
-						Token       string         `json:"token"`
-						Logprob     float64        `json:"logprob"`
-						TopLogprobs []tokenLogprob `json:"top_logprobs"`
-					}{
-						{Token: "<think>", TopLogprobs: []tokenLogprob{{Token: "<think>", Logprob: -0.1}}},
-						{Token: "\n", TopLogprobs: []tokenLogprob{{Token: "\n", Logprob: -0.1}}},
-					},
-				},
-			}},
-		})
-	}))
-	defer srv.Close()
-
-	cls, _ := New(Config{BaseURL: srv.URL}).(core.ScorerProvider).Scorer("zerank-1-small")
-	_, err := cls.Score(context.Background(), "q", []string{"d"})
-	if err == nil {
-		t.Fatal("all-scaffold output must error, got a score")
-	}
-	t.Logf("refused as expected: %v", err)
 }
