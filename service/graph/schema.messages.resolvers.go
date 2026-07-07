@@ -7,12 +7,14 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/elijahmontenegro/grudge/adoc"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/proto/pbtext"
+	"github.com/elijahmontenegro/grudge/service/agent"
 	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -207,6 +209,11 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 
 	resp, err := runner.SendMessage(ctx, content, pbScope, attachBlocks...)
 	if err != nil {
+		// A user stop (StopAgent) is a clean cancellation, not a request
+		// failure — don't surface it as a GraphQL error.
+		if errors.Is(err, agent.ErrStopped) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("send message: %w", err)
 	}
 	return resp, nil

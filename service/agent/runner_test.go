@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"iter"
 	"strings"
@@ -163,7 +164,7 @@ func TestProcessEvents_DuplicateFunctionCallDedup(t *testing.T) {
 	call := fnCallEvent("c1", "Bash", map[string]any{"cmd": "ls"})
 
 	events := eventSeq(call, call, call) // same event thrice
-	_, _ = r.processEvents(events)
+	_, _ = r.processEvents(context.Background(), events)
 
 	corpus := corpusOf(t, r)
 	count := 0
@@ -184,7 +185,7 @@ func TestProcessEvents_DuplicateFunctionResponseDedup(t *testing.T) {
 	resp := fnResponseEvent("c1", "Bash", map[string]any{"output": "out"})
 
 	events := eventSeq(resp, resp)
-	_, _ = r.processEvents(events)
+	_, _ = r.processEvents(context.Background(), events)
 
 	corpus := corpusOf(t, r)
 	count := 0
@@ -202,7 +203,7 @@ func TestProcessEvents_DuplicateFunctionResponseDedup(t *testing.T) {
 
 func TestProcessEvents_UnmatchedToolCallGetsExactErrorResult(t *testing.T) {
 	r := newTestRunner(t, "t-unmatched")
-	_, err := r.processEvents(eventSeqThenError(
+	_, err := r.processEvents(context.Background(), eventSeqThenError(
 		errors.New("cancelled"),
 		fnCallEvent("call-1", "Read", map[string]any{"path": "x"}),
 	))
@@ -223,6 +224,27 @@ func TestProcessEvents_UnmatchedToolCallGetsExactErrorResult(t *testing.T) {
 	}
 }
 
+func TestProcessEvents_UserStopPersistsNothingAndReturnsErrStopped(t *testing.T) {
+	// A user stop cancels turnCtx. Unlike a plain tool error (above), the
+	// cancellation "result" ADK reflects back (e.g. "approval: context
+	// canceled" from a pending Bash approval) must NOT be persisted into the
+	// corpus, and the turn must report the clean ErrStopped sentinel rather
+	// than a surfaced "agent error".
+	r := newTestRunner(t, "t-stop")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the stop happened before these events are drained
+
+	resp := fnResponseEvent("call-1", "Bash", map[string]any{"output": "approval: context canceled", "exit_code": 1})
+	_, err := r.processEvents(ctx, eventSeq(resp))
+
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("a cancelled turn must return ErrStopped, got %v", err)
+	}
+	if corpus := corpusOf(t, r); len(corpus) != 0 {
+		t.Fatalf("a user stop must persist no tool_result, got %d messages: %+v", len(corpus), corpus)
+	}
+}
+
 func TestProcessEvents_ThinkingFlushedBeforeToolCall(t *testing.T) {
 	// Ordering invariant: when thinking accumulates and then a tool
 	// call arrives, the thinking must be stored as its own message
@@ -238,7 +260,7 @@ func TestProcessEvents_ThinkingFlushedBeforeToolCall(t *testing.T) {
 		textEvent("done", false),
 	)
 
-	_, err := r.processEvents(events)
+	_, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("processEvents: %v", err)
 	}
@@ -277,7 +299,7 @@ func TestProcessEvents_TextAndThinkingAccumulateSeparately(t *testing.T) {
 		textEvent("42.", false),
 	)
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("processEvents: %v", err)
 	}
@@ -309,7 +331,7 @@ func TestProcessEvents_SignatureTriggersThinkingFlush(t *testing.T) {
 		textEvent("done", false),
 	)
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("processEvents: %v", err)
 	}
@@ -344,7 +366,7 @@ func TestProcessEvents_ToolCallSignatureStored(t *testing.T) {
 		textEvent("done", false),
 	)
 
-	_, err := r.processEvents(events)
+	_, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("processEvents: %v", err)
 	}
@@ -365,7 +387,7 @@ func TestProcessEvents_UnsignedThinkingAccumulatesAsBefore(t *testing.T) {
 		textEvent("more", true),
 	)
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("processEvents: %v", err)
 	}
@@ -383,7 +405,7 @@ func TestProcessEvents_ContentWinsOverLastErr(t *testing.T) {
 	boom := errors.New("stream broken after content")
 	events := eventSeqThenError(boom, textEvent("partial answer", false))
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("content should win over lastErr, got err: %v", err)
 	}
@@ -403,7 +425,7 @@ func TestProcessEvents_ErrorWithNoContent(t *testing.T) {
 	boom := errors.New("total failure")
 	events := eventSeqThenError(boom)
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if msg != nil {
 		t.Fatalf("expected nil message, got %+v", msg)
 	}
@@ -423,7 +445,7 @@ func TestProcessEvents_NoEventsReturnsError(t *testing.T) {
 	r := newTestRunner(t, "thread-1")
 	events := eventSeq()
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if msg != nil {
 		t.Fatalf("expected nil message, got %+v", msg)
 	}
@@ -442,7 +464,7 @@ func TestProcessEvents_NilContentSkipped(t *testing.T) {
 	nilContentEvent := &session.Event{LLMResponse: model.LLMResponse{Content: nil}}
 	events := eventSeq(nilContentEvent, textEvent("after empty", false))
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("nil-content event should be skipped silently: %v", err)
 	}
@@ -477,7 +499,7 @@ func TestProcessEvents_MultipleDistinctToolCalls(t *testing.T) {
 		fnResponseEvent("c2", "Grep", map[string]any{"output": "two"}),
 	)
 
-	_, _ = r.processEvents(events)
+	_, _ = r.processEvents(context.Background(), events)
 	corpus := corpusOf(t, r)
 	calls, results := 0, 0
 	for _, m := range corpus {
@@ -510,7 +532,7 @@ func TestProcessEvents_OnToolCallCallback(t *testing.T) {
 		fnResponseEvent("c1", "Bash", map[string]any{"output": "x"}),
 		fnResponseEvent("c1", "Bash", map[string]any{"output": "x"}), // dup
 	)
-	_, _ = r.processEvents(events)
+	_, _ = r.processEvents(context.Background(), events)
 
 	if callCount != 1 {
 		t.Fatalf("OnToolCall should fire once per unique ID, got %d", callCount)

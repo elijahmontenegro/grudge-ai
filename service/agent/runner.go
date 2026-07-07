@@ -444,7 +444,7 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope threadv1
 	events := r.adkRunner.Run(ctx, "user", r.threadID, genaiMsg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
 	})
-	return r.processEvents(events)
+	return r.processEvents(ctx, events)
 }
 
 // persistTickTrace builds a tick_traces row from the per-call scratch
@@ -551,7 +551,7 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 // the dedup of ADK re-emission, the thinking-flush ordering around
 // tool calls, and the error/content precedence at turn-end are all
 // observable here.
-func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*threadv1.Message, error) {
+func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Event, error]) (*threadv1.Message, error) {
 	var lastErr error
 	var thinkingBuf strings.Builder
 	// thinkingSig is the signature attached to the thinking text
@@ -594,6 +594,12 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 
 	for event, err := range events {
 		if err != nil {
+			// A user stop cancels turnCtx, which surfaces here as
+			// context.Canceled (e.g. the next model call's query-embed failing
+			// on the dead ctx). That is not a failure to latch or surface.
+			if errors.Is(err, context.Canceled) {
+				continue
+			}
 			log.Printf("[Runner] ADK event error: %v", err)
 			lastErr = err
 			continue
@@ -653,6 +659,13 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 
 			if part.FunctionResponse != nil {
 				fr := part.FunctionResponse
+				// On a user stop the "result" that surfaces is the cancellation
+				// itself (e.g. "approval: context canceled" from a pending Bash
+				// approval). That is not a real tool result — don't write it into
+				// the corpus for the model to read.
+				if errors.Is(ctx.Err(), context.Canceled) {
+					continue
+				}
 				if fr.ID != "" && seenResultIDs[fr.ID] {
 					continue
 				}
@@ -712,6 +725,11 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 		if callID == "" || seenResultIDs[callID] {
 			continue
 		}
+		// A user stop is not a failed tool call — don't backfill a synthetic
+		// error result for a call the user cancelled.
+		if errors.Is(ctx.Err(), context.Canceled) {
+			continue
+		}
 		content := "Tool execution ended without a result."
 		if lastErr != nil {
 			content = "Tool execution failed: " + lastErr.Error()
@@ -763,6 +781,11 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 		return lastAssistantMsg, nil
 	}
 
+	// A user stop cancels turnCtx. Report it as the clean ErrStopped sentinel
+	// (which the chat resolver swallows) rather than a surfaced "agent error".
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return nil, ErrStopped
+	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("agent error: %w", lastErr)
 	}
@@ -777,6 +800,12 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*thread
 // than pausing with an error banner. The sentinel lets the
 // autonomous loop distinguish this specifically from real errors.
 var ErrNoResponse = errors.New("no response from agent")
+
+// ErrStopped is returned when the turn's context was cancelled by a user stop
+// (StopAgent → CancelTurn). Like a cancelled autonomous tick it is not a
+// failure: no tool_result or synthetic error is persisted for the cancelled
+// calls, and the chat resolver swallows it so no GraphQL error surfaces.
+var ErrStopped = errors.New("agent turn stopped by user")
 
 // afterModelCallback extracts thinking blocks for carry-forward after every LLM call.
 func (r *Runner) afterModelCallback(
