@@ -169,6 +169,96 @@ func TestNearestChunksWidensPastExcludedShortlist_AllScope(t *testing.T) {
 	}
 }
 
+// TestIndexAddIgnoresOtherModels: the index is per-model, and the embedding
+// observer fires for every model's inserts, so IndexAdd must drop any embedding
+// written under a different model (mixing models/widths would corrupt distances).
+func TestIndexAddIgnoresOtherModels(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle.IndexAdd("mine", 0, "model", "t1", basisVector(0))
+	oracle.IndexAdd("theirs", 0, "other-model", "t1", basisVector(0))
+	if !oracle.index.Has(chunkKeyStr("mine", 0)) {
+		t.Fatal("same-model chunk was not indexed")
+	}
+	if oracle.index.Has(chunkKeyStr("theirs", 0)) {
+		t.Fatal("other-model chunk was indexed — the observer is not model-scoped")
+	}
+}
+
+func (o *ChunkOracle) resetExamined()      { o.examined.Store(0) }
+func (o *ChunkOracle) examinedCount() int64 { return o.examined.Load() }
+
+// TestNearestChunksWorkInvariant is the deterministic guard the partition-graph
+// guard could not provide: it drives the FULL NearestChunks path (routing +
+// widen + filter), not Search directly, and asserts the number of candidates it
+// examines for a fixed thread is byte-identical as OTHER threads accumulate. A
+// regression that routed THREAD scope to the global graph (or widened it) would
+// make this grow with filler — which is exactly the O(N) leak this whole effort
+// closed, and which no default guard previously covered.
+func TestNearestChunksWorkInvariant(t *testing.T) {
+	const target = "target"
+	const targetSize = 30
+	var want int64
+	for fi, filler := range []int{0, 500, 2000} {
+		db, err := storage.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.CreateThread(&threadv1.Thread{Id: target, CreatedAt: timestamppb.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		excluded := make([]string, 0, 5)
+		for i := range targetSize {
+			id := fmt.Sprintf("target-%d", i)
+			insertVectorMessage(t, db, id, target, int64(i), basisVector(0))
+			if i < 5 {
+				excluded = append(excluded, id)
+			}
+		}
+		if filler > 0 {
+			if err := db.CreateThread(&threadv1.Thread{Id: "filler", CreatedAt: timestamppb.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			for i := range filler {
+				insertVectorMessage(t, db, fmt.Sprintf("f-%d", i), "filler", int64(targetSize+i), basisVector(0))
+			}
+		}
+		oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+		if err != nil {
+			t.Fatal(err)
+		}
+		predicate := rrc.PredAnd{Children: []rrc.Predicate{
+			rrc.PredScope{CurrentThread: target, Scope: rrc.ScopeThread},
+			rrc.PredExcludeMessageIDs{MessageIDs: excluded},
+		}}
+		oracle.resetExamined()
+		if _, err := oracle.NearestChunks(t.Context(), "query", 8, predicate); err != nil {
+			t.Fatal(err)
+		}
+		got := oracle.examinedCount()
+		db.Close()
+		if fi == 0 {
+			want = got
+			continue
+		}
+		if got != want {
+			t.Fatalf("filler=%d: NearestChunks examined %d candidates, want %d — THREAD-scope work grew with other-thread filler (O(N) leak)",
+				filler, got, want)
+		}
+	}
+	if want == 0 {
+		t.Fatal("examined 0 candidates — misconfigured")
+	}
+	t.Logf("THREAD-scope NearestChunks examined %d candidates, invariant across filler [0 500 2000]", want)
+}
+
 func insertVectorMessage(t *testing.T, db *storage.DB, id, thread string, position int64, vector []float32) {
 	t.Helper()
 	message := &threadv1.Message{

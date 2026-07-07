@@ -81,7 +81,7 @@ func (d *DB) InsertChunkEmbedding(messageID string, chunkIndex int, modelID stri
 	// resolved above; passing it lets the index's owner keep predicate
 	// metadata in RAM instead of re-querying it per search.
 	if p := d.onEmbed.Load(); p != nil {
-		(*p)(messageID, chunkIndex, threadID, vec)
+		(*p)(messageID, chunkIndex, modelID, threadID, vec)
 	}
 	return nil
 }

@@ -148,6 +148,72 @@ func EvalPredicate(p Predicate, a CandidateAttrs) bool {
 	}
 }
 
+// CompilePredicate lowers a Predicate into a fast per-candidate evaluator,
+// precomputing O(1) lookups — notably the PredExcludeMessageIDs set — once, so a
+// hot filter loop does not rescan them for every candidate. The returned closure
+// has semantics identical to EvalPredicate(p, ·) (verified by test); a nil
+// predicate matches everything, an unknown type matches nothing.
+func CompilePredicate(p Predicate) func(CandidateAttrs) bool {
+	switch p := p.(type) {
+	case nil, PredAll:
+		return func(CandidateAttrs) bool { return true }
+	case PredThread:
+		want := p.ThreadID
+		return func(a CandidateAttrs) bool { return a.ThreadID == want }
+	case PredScope:
+		if p.Scope == ScopeAll {
+			return func(CandidateAttrs) bool { return true }
+		}
+		want := p.CurrentThread
+		return func(a CandidateAttrs) bool { return a.ThreadID == want }
+	case PredExcludeMessageIDs:
+		set := make(map[string]struct{}, len(p.MessageIDs))
+		for _, id := range p.MessageIDs {
+			set[id] = struct{}{}
+		}
+		return func(a CandidateAttrs) bool { _, excluded := set[a.MessageID]; return !excluded }
+	case PredAnd:
+		fs := make([]func(CandidateAttrs) bool, len(p.Children))
+		for i, c := range p.Children {
+			fs[i] = CompilePredicate(c)
+		}
+		return func(a CandidateAttrs) bool {
+			for _, f := range fs {
+				if !f(a) {
+					return false
+				}
+			}
+			return true
+		}
+	case PredOr:
+		fs := make([]func(CandidateAttrs) bool, len(p.Children))
+		for i, c := range p.Children {
+			fs[i] = CompilePredicate(c)
+		}
+		return func(a CandidateAttrs) bool {
+			for _, f := range fs {
+				if f(a) {
+					return true
+				}
+			}
+			return false
+		}
+	case PredNot:
+		inner := CompilePredicate(p.Inner)
+		return func(a CandidateAttrs) bool { return !inner(a) }
+	case PredHasMetadata:
+		key, val := p.Key, p.Value
+		return func(a CandidateAttrs) bool {
+			if key == "thread_id" {
+				return a.ThreadID == val
+			}
+			return a.Metadata[key] == val
+		}
+	default:
+		return func(CandidateAttrs) bool { return false }
+	}
+}
+
 // ThreadScopeOf reports the single thread a predicate pins retrieval to, if it
 // implies ThreadID == T for every matching candidate. The ANN index uses this
 // to route a query to that thread's graph partition instead of the global

@@ -11,6 +11,7 @@ import (
 	"log"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc"
@@ -36,6 +37,11 @@ type ChunkOracle struct {
 	// at boot, kept current by the embedding observer (IndexAdd).
 	threadMu    sync.RWMutex
 	threadByMsg map[string]string
+
+	// examined counts candidates the NearestChunks widen has filtered — a
+	// deterministic work signal the invariance guard reads to prove THREAD-scope
+	// retrieval work does not grow as other threads accumulate.
+	examined atomic.Int64
 }
 
 // NewChunkOracle ties the oracle to a specific embedder model and builds the
@@ -76,8 +82,10 @@ func NewChunkOracle(db *storage.DB, embedder core.Embedder, model string) (*Chun
 // its message's thread in the RAM predicate map. Wired as storage's embedding
 // observer at boot (SetEmbeddingObserver), so every insert path keeps both
 // current without the writers knowing they exist. Index add is idempotent.
-func (o *ChunkOracle) IndexAdd(messageID string, chunkIndex int, threadID string, vec []float32) {
-	if o == nil {
+// Embeddings written under a different model are ignored — the index is
+// per-model and mixing widths/models would corrupt distances.
+func (o *ChunkOracle) IndexAdd(messageID string, chunkIndex int, modelID, threadID string, vec []float32) {
+	if o == nil || modelID != o.model {
 		return
 	}
 	// Set the thread before the graph insert: the residual filter reads
@@ -179,6 +187,11 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 	if t, ok := rrc.ThreadScopeOf(predicate); ok && t != "" {
 		searchThread = t
 	}
+	// Compile the predicate once (builds the exclusion-id set for O(1) lookup)
+	// and reuse the constant metadata map, so the per-candidate filter — run for
+	// every candidate on every widen iteration — does no rescanning or allocation.
+	match := rrc.CompilePredicate(predicate)
+	meta := map[string]string{"model_id": o.model}
 
 	// Over-fetch a shortlist and apply the residual predicate (the local-context
 	// exclusion set) in pure RAM. The excluded messages are the most-similar
@@ -194,15 +207,12 @@ func (o *ChunkOracle) NearestChunks(ctx context.Context, queryText string, k int
 		if len(cands) == 0 {
 			return nil, nil
 		}
+		o.examined.Add(int64(len(cands)))
 		eligible = make([]annindex.Candidate, 0, len(cands))
 		o.threadMu.RLock()
 		for _, c := range cands {
 			mid := messageIDFromKey(c.Key)
-			if rrc.EvalPredicate(predicate, rrc.CandidateAttrs{
-				MessageID: mid,
-				ThreadID:  o.threadByMsg[mid],
-				Metadata:  map[string]string{"model_id": o.model},
-			}) {
+			if match(rrc.CandidateAttrs{MessageID: mid, ThreadID: o.threadByMsg[mid], Metadata: meta}) {
 				eligible = append(eligible, c)
 			}
 		}
@@ -312,7 +322,7 @@ type chunkKey struct {
 // It never reads a vector off disk: the same principle as retrieval. int8 is
 // fine here — MMR is an approximate diversity penalty, not exact scoring.
 func (o *ChunkOracle) RepresentativeVectors(_ context.Context, messageIDs []string) (map[string][]float32, error) {
-	if len(messageIDs) == 0 {
+	if o == nil || o.db == nil || len(messageIDs) == 0 {
 		return nil, nil
 	}
 	chunkMap, err := o.db.GetChunksForMessages(messageIDs)
@@ -369,6 +379,9 @@ func (o *ChunkOracle) EnsureVector(ctx context.Context, ref rrc.ChunkRef) ([]flo
 	vecs, err := o.embedder.Embed(ctx, core.RoleDocument, []string{ref.Text})
 	if err != nil {
 		return nil, err
+	}
+	if len(vecs) == 0 || len(vecs[0]) == 0 {
+		return nil, nil
 	}
 	vec := vecs[0]
 	// InsertChunkEmbedding fires the embedding observer (thread + vector), which
