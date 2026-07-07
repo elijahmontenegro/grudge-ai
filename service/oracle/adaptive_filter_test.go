@@ -253,14 +253,23 @@ func (o *ChunkOracle) examinedCount() int64 { return o.examined.Load() }
 
 // TestNearestChunksWorkInvariant is the deterministic guard the partition-graph
 // guard could not provide: it drives the FULL NearestChunks path (routing +
-// widen + filter), not Search directly, and asserts the number of candidates it
-// examines for a fixed thread is byte-identical as OTHER threads accumulate. A
-// regression that routed THREAD scope to the global graph (or widened it) would
-// make this grow with filler — which is exactly the O(N) leak this whole effort
-// closed, and which no default guard previously covered.
+// multi-iteration widen + filter), not Search directly, and asserts the candidate
+// count it examines for a fixed thread is byte-identical as OTHER threads
+// accumulate. A regression that routed THREAD scope to the global graph would make
+// this grow with filler — the O(N) leak this effort closed, uncovered elsewhere.
+//
+// The target thread forces the widen to iterate: excludedSize excluded messages
+// sit Hamming-nearest to the query, filling the whole first k*annOverfetch
+// shortlist so zero survive the filter; the keepers sit just beyond and only
+// surface once the shortlist doubles. So the loop runs twice — the exclusion-heavy
+// widen path that regressed three times, now under a guard.
 func TestNearestChunksWorkInvariant(t *testing.T) {
-	const target = "target"
-	const targetSize = 30
+	const (
+		target       = "target"
+		excludedSize = 120 // > k*annOverfetch, so the first shortlist is entirely excluded
+		keeperSize   = 20  // >= k keepers surface only after one widen
+		k            = 8
+	)
 	var want int64
 	for fi, filler := range []int{0, 500, 2000} {
 		db, err := storage.Open(t.TempDir())
@@ -270,20 +279,24 @@ func TestNearestChunksWorkInvariant(t *testing.T) {
 		if err := db.CreateThread(&threadv1.Thread{Id: target, CreatedAt: timestamppb.Now()}); err != nil {
 			t.Fatal(err)
 		}
-		excluded := make([]string, 0, 5)
-		for i := range targetSize {
-			id := fmt.Sprintf("target-%d", i)
-			insertVectorMessage(t, db, id, target, int64(i), basisVector(0))
-			if i < 5 {
-				excluded = append(excluded, id)
-			}
+		// Excluded at distinct distances 0..excludedSize-1 (all strictly nearer than
+		// any keeper), keepers just beyond. Graded (not identical) codes so the graph
+		// is well-connected and the beam returns the full requested shortlist.
+		excluded := make([]string, 0, excludedSize)
+		for i := range excludedSize {
+			id := fmt.Sprintf("excluded-%d", i)
+			insertVectorMessage(t, db, id, target, int64(i), gradedVec(i))
+			excluded = append(excluded, id)
+		}
+		for i := range keeperSize {
+			insertVectorMessage(t, db, fmt.Sprintf("keeper-%d", i), target, int64(excludedSize+i), gradedVec(excludedSize+i))
 		}
 		if filler > 0 {
 			if err := db.CreateThread(&threadv1.Thread{Id: "filler", CreatedAt: timestamppb.Now()}); err != nil {
 				t.Fatal(err)
 			}
 			for i := range filler {
-				insertVectorMessage(t, db, fmt.Sprintf("f-%d", i), "filler", int64(targetSize+i), basisVector(0))
+				insertVectorMessage(t, db, fmt.Sprintf("f-%d", i), "filler", int64(excludedSize+keeperSize+i), basisVector(0))
 			}
 		}
 		oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
@@ -295,24 +308,32 @@ func TestNearestChunksWorkInvariant(t *testing.T) {
 			rrc.PredExcludeMessageIDs{MessageIDs: excluded},
 		}}
 		oracle.resetExamined()
-		if _, err := oracle.NearestChunks(t.Context(), "query", 8, predicate); err != nil {
+		got, err := oracle.NearestChunks(t.Context(), "query", k, predicate)
+		if err != nil {
 			t.Fatal(err)
 		}
-		got := oracle.examinedCount()
+		examined := oracle.examinedCount()
 		db.Close()
+		// The widen surfaced k distinct keeper messages past the all-excluded first
+		// shortlist — proof the multi-iteration path ran and returned real results.
+		if len(got) != k {
+			t.Fatalf("filler=%d: NearestChunks returned %d results, want %d keepers past the excluded shortlist", filler, len(got), k)
+		}
 		if fi == 0 {
-			want = got
+			want = examined
 			continue
 		}
-		if got != want {
+		if examined != want {
 			t.Fatalf("filler=%d: NearestChunks examined %d candidates, want %d — THREAD-scope work grew with other-thread filler (O(N) leak)",
-				filler, got, want)
+				filler, examined, want)
 		}
 	}
-	if want == 0 {
-		t.Fatal("examined 0 candidates — misconfigured")
+	// Two iterations (k*annOverfetch then 2*k*annOverfetch) examine more than a
+	// single shortlist; a one-shot fetch would examine exactly k*annOverfetch.
+	if want <= int64(k*annOverfetch) {
+		t.Fatalf("examined %d candidates — the widen never iterated, so this no longer guards the multi-iteration path", want)
 	}
-	t.Logf("THREAD-scope NearestChunks examined %d candidates, invariant across filler [0 500 2000]", want)
+	t.Logf("THREAD-scope NearestChunks widened and examined %d candidates, invariant across filler [0 500 2000]", want)
 }
 
 func insertVectorMessage(t *testing.T, db *storage.DB, id, thread string, position int64, vector []float32) {
@@ -335,5 +356,19 @@ func insertVectorMessage(t *testing.T, db *storage.DB, id, thread string, positi
 func basisVector(index int) []float32 {
 	vector := make([]float32, 1024)
 	vector[index] = 1
+	return vector
+}
+
+// gradedVec returns a vector at Hamming distance dist from the query basisVector(0):
+// index 0 stays positive (so it scores 1.0 and shares bit 0), and bits 1..dist are
+// flipped negative. Distinct dist values give distinct codes on a smooth gradient,
+// so the HNSW graph stays well-connected (unlike identical codes, which strand the
+// beam) while nearer messages rank strictly ahead of farther ones.
+func gradedVec(dist int) []float32 {
+	vector := make([]float32, 1024)
+	vector[0] = 1
+	for i := 1; i <= dist; i++ {
+		vector[i] = -1
+	}
 	return vector
 }
