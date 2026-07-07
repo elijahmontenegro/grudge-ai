@@ -154,28 +154,32 @@ func (d *DB) GetChunkEmbeddingsForMessages(messageIDs []string, modelID string) 
 	return out, rows.Err()
 }
 
-// AllChunkEmbeddingsForModel loads every (message_id, chunk_index,
-// vector) under one embedder. Used by user-facing search features.
-func (d *DB) AllChunkEmbeddingsForModel(modelID string) ([]ChunkEmbedding, error) {
+// EachChunkEmbeddingForModel streams every (message_id, chunk_index, vector)
+// under one embedder to fn, one row at a time. The ANN index build consumes it
+// this way so boot never materialises the whole float corpus at once: peak RAM is
+// the growing index plus a single transient vector, not a full second copy
+// (~4 KB/chunk) of every embedding alongside it. A callback error aborts the scan.
+func (d *DB) EachChunkEmbeddingForModel(modelID string, fn func(ChunkEmbedding) error) error {
 	rows, err := d.Query(
 		`SELECT message_id, chunk_index, embedding FROM chunk_vectors WHERE model_id = ?`,
 		modelID,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer rows.Close()
-	var out []ChunkEmbedding
 	for rows.Next() {
 		var ce ChunkEmbedding
 		var blob []byte
 		if err := rows.Scan(&ce.MessageID, &ce.ChunkIndex, &blob); err != nil {
-			return nil, err
+			return err
 		}
 		ce.Vector = decodeVector(blob)
-		out = append(out, ce)
+		if err := fn(ce); err != nil {
+			return err
+		}
 	}
-	return out, rows.Err()
+	return rows.Err()
 }
 
 // NearestChunkVectors runs a k-nearest-neighbour query against vec0.

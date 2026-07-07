@@ -67,12 +67,14 @@ func NewChunkOracle(db *storage.DB, embedder core.Embedder, model string) (*Chun
 			return nil, fmt.Errorf("NewChunkOracle: load thread map: %w", err)
 		}
 		o.threadByMsg = threads // boot is single-threaded; the observer is wired after
-		embs, err := db.AllChunkEmbeddingsForModel(model)
-		if err != nil {
-			return nil, fmt.Errorf("NewChunkOracle: build ANN index: %w", err)
-		}
-		for _, e := range embs {
+		// Stream the stored vectors into the index one row at a time. Materialising
+		// them all first would hold a second full copy of the float corpus
+		// (~4 KB/chunk) next to the index it feeds — a needless boot memory peak.
+		if err := db.EachChunkEmbeddingForModel(model, func(e storage.ChunkEmbedding) error {
 			o.index.Add(chunkKeyStr(e.MessageID, e.ChunkIndex), threads[e.MessageID], e.Vector)
+			return nil
+		}); err != nil {
+			return nil, fmt.Errorf("NewChunkOracle: build ANN index: %w", err)
 		}
 	}
 	return o, nil
