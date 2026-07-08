@@ -68,6 +68,78 @@ func TestSerializedLocalContextIsSemanticOnlyAndKeepsFullMembership(t *testing.T
 	}
 }
 
+func TestSerializeLocalContext_PerMessageChunks(t *testing.T) {
+	// Q is a span of independent items: each semantic message is its own
+	// query unit and a chunk NEVER spans two messages — fusing a recall
+	// question with an unrelated neighbor is the measured dilution this
+	// guards against. Indices are global and monotonic (the score cache
+	// keys on (fingerprint, chunk index); a per-message restart would
+	// collide entries across messages).
+	local := []*threadv1.Message{
+		localMessage("u", threadv1.Role_ROLE_USER, 0, textBlock("alpha question about the archive passphrase")),
+		localMessage("a", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("beta answer about boiling water")),
+		storedCall("c", "t1", "op-1", 2), // tool-only: membership, no chunk
+	}
+	serialized := SerializeLocalContext(local, testChunkConfig())
+	if serialized == nil {
+		t.Fatal("serialization is nil")
+	}
+	if !sameIDs(serialized.MessageIDs, []string{"u", "a", "c"}) {
+		t.Fatalf("membership ids=%v", serialized.MessageIDs)
+	}
+	if len(serialized.Chunks) != 2 {
+		t.Fatalf("want one chunk per semantic message (2), got %d: %+v", len(serialized.Chunks), serialized.Chunks)
+	}
+	for i, c := range serialized.Chunks {
+		if c.Index != i {
+			t.Fatalf("chunk indices must be global and monotonic: chunk %d has Index %d", i, c.Index)
+		}
+		hasAlpha := contains(c.Text, "alpha")
+		hasBeta := contains(c.Text, "beta")
+		if hasAlpha && hasBeta {
+			t.Fatalf("chunk spans two messages (fusion — the dilution bug):\n%s", c.Text)
+		}
+		if !hasAlpha && !hasBeta {
+			t.Fatalf("chunk carries neither message's content:\n%s", c.Text)
+		}
+	}
+}
+
+func TestSerializeLocalContext_LongMessageSplitsWithGlobalIndices(t *testing.T) {
+	// A single oversized message still splits into multiple chunks — all
+	// from that message alone — and indices keep advancing globally across
+	// the following message.
+	long := ""
+	for range 40 {
+		long += "the archive passphrase discussion continues with more detail. "
+	}
+	cfg := testChunkConfig()
+	cfg.MaxChars = 400
+	local := []*threadv1.Message{
+		localMessage("big", threadv1.Role_ROLE_USER, 0, textBlock(long)),
+		localMessage("next", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("short reply")),
+	}
+	serialized := SerializeLocalContext(local, cfg)
+	if serialized == nil {
+		t.Fatal("serialization is nil")
+	}
+	if len(serialized.Chunks) < 3 {
+		t.Fatalf("oversized message should split (plus the short reply), got %d chunks", len(serialized.Chunks))
+	}
+	for i, c := range serialized.Chunks {
+		if c.Index != i {
+			t.Fatalf("global index broken at chunk %d: Index=%d", i, c.Index)
+		}
+	}
+	last := serialized.Chunks[len(serialized.Chunks)-1]
+	if !contains(last.Text, "short reply") {
+		t.Fatalf("final chunk should be the second message's own unit:\n%s", last.Text)
+	}
+	if contains(last.Text, "passphrase discussion") {
+		t.Fatalf("second message's chunk absorbed the first message's text:\n%s", last.Text)
+	}
+}
+
 func TestSerializedLocalContextFingerprintChangesWithOrderRoleAndContent(t *testing.T) {
 	a := localMessage("a", threadv1.Role_ROLE_USER, 0, textBlock("alpha"))
 	b := localMessage("b", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("beta"))

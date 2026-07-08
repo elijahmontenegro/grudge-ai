@@ -242,8 +242,10 @@ type PrerequisiteSelectionTelemetry struct {
 	CandidatesScored int
 	Reranked         int
 	EdgesFormed      int
-	// ProvenanceReached is how many candidates entered the pool via the
-	// provenance-traversal recall path (not top-K cosine) and were scored.
+	// ProvenanceReached is how many (local chunk, candidate chunk) pairs were
+	// scored via the provenance-traversal recall path — reached messages not
+	// already surfaced by top-K cosine, each scored against every Local
+	// Context chunk (the same max-merge footing as the cosine path).
 	// ProvenanceTruncated reports the walk hit provenanceReachCap — a
 	// visible signal so a bounded reach is never mistaken for full coverage.
 	ProvenanceReached   int

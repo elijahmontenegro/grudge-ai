@@ -128,32 +128,49 @@ func reachBackForAnchors(threadCorpus []*threadv1.Message, start int, window []*
 }
 
 // SerializeLocalContext serializes Local Context in discourse order with
-// explicit role and block labels, then chunks that serialization for the
-// scorer. Message IDs participate in the fingerprint but are not shown
-// to the scorer.
+// explicit role and block labels, chunking PER MESSAGE for the scorer: each
+// semantic message is its own query unit, and a chunk never spans two
+// messages. Q is a span of independent items — the selection aggregator
+// max-merges per candidate over these chunks, so the one message that
+// actually bears the query dominates a candidate's score instead of being
+// blended into a size-window with unrelated neighbors (the measured
+// dilution: a recall question fused with an off-topic prior answer scored
+// the true prerequisite 0.46 vs 0.84 solo, below the acceptance floor).
+//
+// Chunk indices are GLOBAL and monotonic across the whole serialization:
+// the score cache and persisted scores key on (fingerprint, chunk index),
+// and chunk.Split restarts its index per message — reusing it would
+// collide message-0-chunk-0 with message-1-chunk-0 and silently corrupt
+// scoring. A message with no semantic content (tool/image/attachment-only)
+// contributes its id to MessageIDs — membership: delivered, excluded from
+// re-retrieval, provenance-banked — but no query chunk. Message IDs
+// participate in the fingerprint but are not shown to the scorer.
 func SerializeLocalContext(local []*threadv1.Message, cfg chunk.Config) *SerializedLocalContext {
 	if len(local) == 0 {
 		return nil
 	}
-	var serialized strings.Builder
 	ids := make([]string, 0, len(local))
+	var serializedChunks []SerializedLocalContextChunk
+	next := 0
 	for _, m := range local {
 		ids = append(ids, m.Id)
-		serialized.WriteString(serializeSemanticMessage(m))
-	}
-	text := serialized.String()
-	if strings.TrimSpace(text) == "" {
-		return nil
-	}
-
-	rawChunks := chunk.Split(text, cfg)
-	serializedChunks := make([]SerializedLocalContextChunk, 0, len(rawChunks))
-	if len(rawChunks) == 0 {
-		serializedChunks = append(serializedChunks, SerializedLocalContextChunk{Index: 0, Text: text})
-	} else {
-		for _, c := range rawChunks {
-			serializedChunks = append(serializedChunks, SerializedLocalContextChunk{Index: c.Index, Text: c.Text})
+		text := serializeSemanticMessage(m)
+		if strings.TrimSpace(text) == "" {
+			continue
 		}
+		rawChunks := chunk.Split(text, cfg)
+		if len(rawChunks) == 0 {
+			serializedChunks = append(serializedChunks, SerializedLocalContextChunk{Index: next, Text: text})
+			next++
+			continue
+		}
+		for _, c := range rawChunks {
+			serializedChunks = append(serializedChunks, SerializedLocalContextChunk{Index: next, Text: c.Text})
+			next++
+		}
+	}
+	if len(serializedChunks) == 0 {
+		return nil
 	}
 
 	h := sha256.New()
