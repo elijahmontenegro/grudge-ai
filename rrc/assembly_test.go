@@ -67,6 +67,89 @@ func TestHasSemanticBlock_ThinkingOnly(t *testing.T) {
 	}
 }
 
+// TestAssemble_TurnDeliverySplit pins the three-role split: Local Context
+// is the semantic discourse (query + anchor, text and thinking only), the
+// TurnDelivery record carries the whole in-flight turn — tools included —
+// to the wire through real protocol closure, and the serialized MEMBERSHIP
+// covers the delivered union so a delivered tool message is never
+// re-retrievable as a candidate. The wire may legitimately end on a
+// tool_result while the anchor is the last SEMANTIC message: those are two
+// different roles' "last elements".
+func TestAssemble_TurnDeliverySplit(t *testing.T) {
+	mc := newMockScorer()
+	o := newMockChunkOracle()
+	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
+	cfg.DiversityLambda = 0
+	cfg.MinBatchStdDev = 0
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
+
+	trigger := addMsg(o, "trigger", 0, "t1", "what was the password?")
+	thinking := &threadv1.Message{
+		Id: "think", ThreadId: "t1", Position: 1, Role: threadv1.Role_ROLE_ASSISTANT,
+		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Thinking{
+			Thinking: &threadv1.ThinkingContent{Text: "the user wants the stored passphrase"},
+		}}},
+	}
+	call := storedCall("tcall", "t1", "op-9", 2)
+	result := storedResult("tresult", "t1", "op-9", 3)
+	// The delivered tool result is also indexed as a retrieval candidate —
+	// the union membership must exclude it.
+	o.Register("tresult", "tool result body")
+	o.threads["tresult"] = "t1"
+
+	turnRecord := []*threadv1.Message{trigger, thinking, call, result}
+	semantic := SemanticMessages(turnRecord)
+	if len(semantic) != 2 || semantic[0].Id != "trigger" || semantic[1].Id != "think" {
+		t.Fatalf("semantic projection = %v, want [trigger think]", messageIDs(semantic))
+	}
+
+	res, err := e.Assemble(context.Background(), AssembleRequest{
+		Anchor:       semantic[len(semantic)-1], // last SEMANTIC message: the thinking
+		Store:        sliceStore(turnRecord),
+		LocalContext: semantic,
+		TurnDelivery: turnRecord,
+		Scope:        threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
+		ThreadID:     "t1",
+	})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+
+	// The whole turn reached the wire in position order — closure held over
+	// the union — and the wire's last element is the tool result even
+	// though the anchor is the thinking.
+	if got := len(res.Wire); got != 4 {
+		t.Fatalf("wire len=%d, want 4 (trigger, thinking, call, result)", got)
+	}
+	last := res.Wire[len(res.Wire)-1]
+	if tr := last.Content[len(last.Content)-1].GetToolResult(); tr == nil || tr.ToolCallId != "op-9" {
+		t.Fatalf("wire must end on the turn's tool_result (delivery order), got %+v", last)
+	}
+
+	// Membership = the union (tools included): nothing delivered is
+	// re-retrievable. The query chunks stay semantic-only.
+	sl := res.SerializedLocalContext
+	if sl == nil {
+		t.Fatal("expected a serialized local context")
+	}
+	if !sameIDs(sl.MessageIDs, []string{"trigger", "think", "tcall", "tresult"}) {
+		t.Fatalf("membership must cover the delivered union, got %v", sl.MessageIDs)
+	}
+	for _, c := range sl.Chunks {
+		if contains(c.Text, "[tool_call") || contains(c.Text, "[tool_result") {
+			t.Fatalf("tool block leaked into the query chunks:\n%s", c.Text)
+		}
+	}
+	if res.Selection != nil {
+		for _, s := range res.Selection.Selected {
+			if s.MessageId == "tresult" || s.MessageId == "tcall" {
+				t.Fatalf("delivered tool message re-retrieved as a candidate: %v", s.MessageId)
+			}
+		}
+	}
+}
+
 func TestAssembleMissingExactCounterpartFails(t *testing.T) {
 	scorer := newMockScorer()
 	oracle := newMockChunkOracle()

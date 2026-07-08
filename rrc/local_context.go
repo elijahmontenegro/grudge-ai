@@ -29,14 +29,17 @@ type SerializedLocalContext struct {
 	Chunks      []SerializedLocalContextChunk
 }
 
-// BuildActiveDiscourse returns the active reasoning path for the current
-// turn: every message stored under currentTurnID (the triggering event
-// plus the model/tool events it has spawned so far), in corpus order. This
-// is the RRC-correct notion of Local Context — the in-flight discourse the
-// continuation is interpreted from, built FORWARD as the turn advances —
-// and unlike a fixed last-N window it does not truncate: a 40-step tool
-// loop keeps all 40 steps as local discourse, and the triggering event is
-// never pushed out.
+// BuildActiveDiscourse returns the in-flight TURN RECORD: every message
+// stored under currentTurnID (the triggering event plus the model/tool
+// events it has spawned so far), in corpus order, built FORWARD as the
+// turn advances — and unlike a fixed last-N window it does not truncate: a
+// 40-step tool loop keeps all 40 steps, and the triggering event is never
+// pushed out.
+//
+// The turn record is the DELIVERY set (TurnDelivery — the model must see
+// its own turn whole, tools included). Local Context proper — the semantic
+// discourse that queries and anchors — is its SemanticMessages projection;
+// tools are turn record, never discourse.
 //
 // The turn is the bounding unit. Nothing reaches backward out of it: prior
 // turns already spent their selections producing this one, and a
@@ -79,6 +82,22 @@ func BuildActiveDiscourse(threadCorpus []*threadv1.Message, currentTurnID string
 	}
 
 	return append([]*threadv1.Message(nil), threadCorpus[start:]...)
+}
+
+// SemanticMessages projects a message window to its semantic members —
+// those carrying user/assistant text or thinking (co-equal; see
+// hasSemanticBlock). This is the Local Context projection of a turn
+// record: the discourse that queries and anchors. Tool-only steps (and
+// image/attachment-only messages) are turn record — delivered, excluded
+// from re-retrieval, provenance-banked — but not discourse.
+func SemanticMessages(msgs []*threadv1.Message) []*threadv1.Message {
+	var out []*threadv1.Message
+	for _, m := range msgs {
+		if hasSemanticBlock(m.Content) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // BuildProvenanceSpine returns the message IDs of the immediately preceding

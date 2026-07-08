@@ -143,19 +143,25 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			return
 		}
 		window := mergeByPosition(recent, turnMsgs)
-		anchor := window[len(window)-1]
 
-		// Active-discourse Local Context: the in-flight turn's messages
-		// (triggering event + model/tool events it spawned), not a fixed
-		// last-N recency window. Falls back to bounded recency when no turn
-		// identity is available (an autonomous tick's first call). The window
-		// above is a superset of both, so this selects the same set it did
-		// from the full corpus.
-		localContext := rrc.BuildActiveDiscourse(window, r.CurrentTurnID, cfg.LocalContextSize)
+		// The turn RECORD (delivery: the model must see its own turn whole,
+		// tools included) vs Local Context (the semantic discourse: the
+		// query and the anchor). One slice used to play both roles; the
+		// split keeps tools out of Local Context without breaking the
+		// agentic loop. Falls back to bounded recency when no turn identity
+		// is available (an autonomous tick's first call).
+		turnRecord := rrc.BuildActiveDiscourse(window, r.CurrentTurnID, cfg.LocalContextSize)
+		localContext := rrc.SemanticMessages(turnRecord)
 		if len(localContext) == 0 {
-			yield(nil, fmt.Errorf("RRC: no Local Context for stored anchor %s", anchor.Id))
+			yield(nil, fmt.Errorf("RRC: no semantic Local Context in the active turn (%d record messages)", len(turnRecord)))
 			return
 		}
+		// The anchor is the last SEMANTIC message — the current discourse
+		// focus (the trigger at call 1, the latest thinking mid-turn) —
+		// never a trailing tool_result: edges, selections, and provenance
+		// target the reasoning, not mechanical blocks.
+		anchor := localContext[len(localContext)-1]
+
 		// Provenance spine: the immediately preceding turn, derived from the
 		// window already in hand (zero extra reads). Seeds the mass walk's
 		// entry into the recorded graph — a fresh turn's own messages carry
@@ -166,9 +172,13 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 		// ADK supplies no current content for an autonomous continuation
 		// without a newly stored event. Such a tick keeps native Local
 		// Context but does not invent a serialization or audit event.
+		// Serialized over the delivered union (turn record): the query
+		// Chunks come out semantic-only by construction, while MessageIDs —
+		// membership: exclusion, provenance cone, audit — cover everything
+		// delivered, tools included, so nothing delivered is re-retrieved.
 		var serializedLocal *rrc.SerializedLocalContext
 		if len(req.Contents) > 0 {
-			serializedLocal = rrc.SerializeLocalContext(localContext, cfg.Chunk)
+			serializedLocal = rrc.SerializeLocalContext(turnRecord, cfg.Chunk)
 		}
 
 		// Budget conversion: ContextBudgetTokens is model truth (the
@@ -196,7 +206,8 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 		for {
 			result, err := r.engine.Assemble(ctx, rrc.AssembleRequest{
 				SerializedLocalContext: serializedLocal, Anchor: anchor, Store: r.db, LocalContext: localContext,
-				Scope: r.Scope, ThreadID: r.threadID, System: systemMsg,
+				TurnDelivery: turnRecord,
+				Scope:        r.Scope, ThreadID: r.threadID, System: systemMsg,
 				Budget: budget, HeadroomPct: cfg.BudgetHeadroomPct,
 				PerMsgDelim:        cfg.PerMsgDelimiterTokens,
 				FixedTokens:        estimateToolSchemaTokens(protoTools, cfg.Chunk),
@@ -241,7 +252,10 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			}
 			if sendErr == nil {
 				r.observeUsage(t.TotalTokens, budget, usage)
-				r.recordProvenance(anchor, localContext, result.Selection)
+				// The whole delivered turn record (tools included) fed the
+				// generation — provenance is a fact about what reached the
+				// wire, not just the semantic discourse.
+				r.recordProvenance(anchor, turnRecord, result.Selection)
 				return
 			}
 			if !core.IsContextOverflow(sendErr) {
@@ -279,19 +293,20 @@ func (r *RRCLLM) observeUsage(predicted, budget int, usage *llmv1.Usage) {
 }
 
 // recordProvenance records, after a successful generation, that this turn
-// was generated from its Local Context (the active discourse, definitionally
-// load-bearing → weight 1.0) plus the selected prerequisites (weight = their
-// effective selection score). anchor is the turn's triggering event. Edges
-// are recorded into the DAG and persisted via OnEdge (same path as
-// cross-encoder edges; the (from,to,source) primary key lets them coexist).
-// A failed send records nothing — provenance is a fact about what actually
-// fed a completed turn.
-func (r *RRCLLM) recordProvenance(anchor *threadv1.Message, localContext []*threadv1.Message, selection *rrcv1.SelectionResult) {
+// was generated from its delivered turn record (the active turn as the
+// model saw it — semantic discourse and tool steps alike, definitionally
+// load-bearing → weight 1.0) plus the selected prerequisites (weight =
+// their effective selection score). anchor is the turn's current semantic
+// focus. Edges are recorded into the DAG and persisted via OnEdge (same
+// path as cross-encoder edges; the (from,to,source) primary key lets them
+// coexist). A failed send records nothing — provenance is a fact about
+// what actually fed a completed turn.
+func (r *RRCLLM) recordProvenance(anchor *threadv1.Message, turnRecord []*threadv1.Message, selection *rrcv1.SelectionResult) {
 	if anchor == nil {
 		return
 	}
 	var contributors []rrc.Contributor
-	for _, m := range localContext {
+	for _, m := range turnRecord {
 		contributors = append(contributors, rrc.Contributor{
 			MessageID: m.Id, ThreadID: m.ThreadId, Weight: 1.0,
 		})
