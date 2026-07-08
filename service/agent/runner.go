@@ -322,6 +322,32 @@ func (r *Runner) indexMessage(msg *threadv1.Message) error {
 	return err
 }
 
+// indexPair persists a tool_call and its tool_result in ONE transaction.
+// This is the write-side guarantee for protocol closure: a tool_call
+// reaches the corpus only together with a result, so no crash, cancel,
+// or insert-error window can leave a lone call that bricks every later
+// assembly. Both rows share the turn id (stamped here, mirroring
+// indexMessage) so TurnPeers still groups them.
+func (r *Runner) indexPair(call, result *threadv1.Message) error {
+	if call.TurnId == "" {
+		call.TurnId = r.currentTurnID
+	}
+	if result.TurnId == "" {
+		result.TurnId = r.currentTurnID
+	}
+	pStart := time.Now()
+	var err error
+	if r.inserter == nil {
+		// Test path: no inserter wired — insert both rows chunkless and
+		// skip the embed enqueue (mirrors indexMessage's nil-inserter path).
+		err = r.db.InsertToolCallPair(call, nil, result, nil)
+	} else {
+		err = r.inserter.InsertPair(call, result)
+	}
+	r.tickPersistMs += time.Since(pStart).Milliseconds()
+	return err
+}
+
 // nextMsgID returns a unique monotonic message ID for this runner's thread.
 //
 // Uses a nanosecond timestamp suffix rather than a sequential counter.
@@ -572,6 +598,15 @@ func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Ev
 	seenCallIDs := make(map[string]string)
 	seenResultIDs := make(map[string]bool)
 
+	// pendingCalls holds tool_call messages that have been emitted (and
+	// pushed to the live UI via OnToolCall) but not yet persisted. A call
+	// is written only inside the same transaction as its result, so a
+	// lone call can never reach the corpus — the write-side guarantee for
+	// protocol closure. pendingOrder preserves emission order for a
+	// deterministic turn-end flush.
+	pendingCalls := make(map[string]*threadv1.Message)
+	var pendingOrder []string
+
 	// storeThinking flushes accumulated thinking as its own message in
 	// the turn, carrying whatever signature (if any) is bound to it.
 	storeThinking := func() {
@@ -624,15 +659,21 @@ func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Ev
 		for _, part := range eventContent.Parts {
 			if part.FunctionCall != nil {
 				fc := part.FunctionCall
+				// An empty tool-call id is unpairable — CloseGroup would fatal
+				// on it (no key to find a result). No configured provider emits
+				// one; refuse the turn loudly rather than buffer an unpairable
+				// call (fail-fast, never a silently dropped call). Nothing
+				// buffered so far is persisted (pair writes happen at result
+				// time), so returning here leaves no orphan; paired calls stay
+				// closed.
+				if fc.ID == "" {
+					return nil, fmt.Errorf("agent: provider emitted a tool call with an empty id (tool %q); cannot guarantee protocol closure", fc.Name)
+				}
 				// Guard against ADK re-emitting the same call Part.
-				if fc.ID != "" {
-					if _, seen := seenCallIDs[fc.ID]; seen {
-						continue
-					}
+				if _, seen := seenCallIDs[fc.ID]; seen {
+					continue
 				}
-				if fc.ID != "" {
-					seenCallIDs[fc.ID] = fc.Name
-				}
+				seenCallIDs[fc.ID] = fc.Name
 				// Flush thinking BEFORE the tool call so ordering is correct
 				storeThinking()
 
@@ -649,9 +690,13 @@ func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Ev
 					Position: r.msgSeq.Load(),
 					ThreadId: r.threadID,
 				}
-				if err := r.indexMessage(toolCallMsg); err != nil {
-					log.Printf("[Runner] indexMessage(tool_call %s) thread=%s: %v", fc.Name, r.threadID, err)
-				}
+				// Buffer the call — it is persisted only inside the same
+				// transaction as its result (indexPair), or as an IsError pair
+				// at the turn-end flush. Its position is already locked
+				// (nextMsgID advanced msgSeq at build), so parallel calls stay
+				// grouped, byte-identical to the old immediate-insert shape.
+				pendingCalls[fc.ID] = toolCallMsg
+				pendingOrder = append(pendingOrder, fc.ID)
 				if r.OnToolCall != nil {
 					r.OnToolCall(fc.ID, fc.Name, argsJSON)
 				}
@@ -669,9 +714,6 @@ func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Ev
 				if fr.ID != "" && seenResultIDs[fr.ID] {
 					continue
 				}
-				if fr.ID != "" {
-					seenResultIDs[fr.ID] = true
-				}
 				resultText := ""
 				if fr.Response != nil {
 					if s, ok := fr.Response["output"].(string); ok {
@@ -687,9 +729,24 @@ func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Ev
 					Position: r.msgSeq.Load(),
 					ThreadId: r.threadID,
 				}
-				if err := r.indexMessage(toolResultMsg); err != nil {
-					log.Printf("[Runner] indexMessage(tool_result %s) thread=%s: %v", fr.Name, r.threadID, err)
+				call := pendingCalls[fr.ID]
+				if call == nil {
+					// A result with no buffered call is unpairable; persisting it
+					// would itself brick CloseGroup ("requires exact tool call").
+					// Drop it. (Should not occur — every response follows a call;
+					// a re-emit is caught by the seenResultIDs guard above.)
+					log.Printf("[Runner] orphan tool_result %s (no matching call) thread=%s — dropping", fr.ID, r.threadID)
+					continue
 				}
+				// Co-write the call and its result in one transaction. On error,
+				// leave the call buffered so the turn-end flush closes it; the
+				// pair write is atomic, so this never leaves a lone call.
+				if err := r.indexPair(call, toolResultMsg); err != nil {
+					log.Printf("[Runner] indexPair(tool %s) thread=%s: %v", fr.Name, r.threadID, err)
+					continue
+				}
+				delete(pendingCalls, fr.ID)
+				seenResultIDs[fr.ID] = true
 				if r.OnToolResult != nil {
 					r.OnToolResult(fr.ID, fr.Name, resultText, false)
 				}
@@ -717,25 +774,26 @@ func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Ev
 		}
 	}
 
-	// A cancelled or interrupted tool execution can end the event
-	// stream after its call was persisted but before ADK emits a
-	// FunctionResponse. Preserve the exact protocol relation by
-	// recording an explicit error result under the original call ID.
-	for callID, toolName := range seenCallIDs {
-		if callID == "" || seenResultIDs[callID] {
-			continue
+	// Turn-end flush: any buffered call that never received a result
+	// is closed by co-writing an IsError placeholder result in the
+	// SAME transaction as the call. A cancelled or interrupted turn
+	// (the stream ended, or ctx was cancelled and the real
+	// FunctionResponse skipped above) therefore records a CLOSED
+	// pair, never a lone call — protocol closure holds by
+	// construction. Each pair is atomic and independent: a failing
+	// flush writes neither row for that call (no orphan) and does
+	// not abort the rest.
+	var flushErr error
+	for _, callID := range pendingOrder {
+		call := pendingCalls[callID]
+		if call == nil {
+			continue // already paired at result time
 		}
-		// This backfill MUST run on a user stop too: a cancelled turn ends the
-		// stream after the call was persisted but before its FunctionResponse
-		// (whose "approval: context canceled" text we skip above), so without a
-		// synthetic result the call dangles and every later turn's assembly
-		// fails protocol closure. The result is a clean IsError marker, not the
-		// cancellation string.
 		content := "Tool execution ended without a result."
 		if lastErr != nil {
 			content = "Tool execution failed: " + lastErr.Error()
 		}
-		toolResultMsg := &threadv1.Message{
+		resultMsg := &threadv1.Message{
 			Id:   r.nextMsgID(),
 			Role: threadv1.Role_ROLE_ASSISTANT,
 			Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolResult{
@@ -748,12 +806,20 @@ func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Ev
 			Position: r.msgSeq.Load(),
 			ThreadId: r.threadID,
 		}
-		if err := r.indexMessage(toolResultMsg); err != nil {
-			return nil, err
+		if err := r.indexPair(call, resultMsg); err != nil {
+			log.Printf("[Runner] flush indexPair(tool_call %s) thread=%s: %v", callID, r.threadID, err)
+			if flushErr == nil {
+				flushErr = err
+			}
+			continue
 		}
+		delete(pendingCalls, callID)
 		if r.OnToolResult != nil {
-			r.OnToolResult(callID, toolName, content, true)
+			r.OnToolResult(callID, seenCallIDs[callID], content, true)
 		}
+	}
+	if flushErr != nil {
+		return nil, flushErr
 	}
 
 	// Store final thinking + text as the last message in the turn

@@ -181,10 +181,16 @@ func TestProcessEvents_DuplicateFunctionCallDedup(t *testing.T) {
 }
 
 func TestProcessEvents_DuplicateFunctionResponseDedup(t *testing.T) {
+	// ADK sometimes re-emits the same FunctionResponse. A call plus its
+	// duplicated response must yield exactly one stored result. (A
+	// response with no call is dropped, not stored — see
+	// OrphanFunctionResponseDropped.)
 	r := newTestRunner(t, "thread-1")
-	resp := fnResponseEvent("c1", "Bash", map[string]any{"output": "out"})
-
-	events := eventSeq(resp, resp)
+	events := eventSeq(
+		fnCallEvent("c1", "Bash", map[string]any{"cmd": "ls"}),
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "out"}),
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "out"}), // dup
+	)
 	_, _ = r.processEvents(context.Background(), events)
 
 	corpus := corpusOf(t, r)
@@ -569,5 +575,76 @@ func TestProcessEvents_OnToolCallCallback(t *testing.T) {
 	}
 	if resultCount != 1 {
 		t.Fatalf("OnToolResult should fire once per unique ID, got %d", resultCount)
+	}
+}
+
+func TestProcessEvents_OrphanFunctionResponseDropped(t *testing.T) {
+	// A FunctionResponse with no matching (buffered) tool_call is
+	// unpairable — persisting it would brick CloseGroup ("requires exact
+	// tool call"). It must be dropped, not stored. (Cannot occur in the
+	// real ADK loop; every response follows a call.)
+	r := newTestRunner(t, "thread-1")
+	_, _ = r.processEvents(context.Background(), eventSeq(
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "out"}),
+	))
+	if corpus := corpusOf(t, r); len(corpus) != 0 {
+		t.Fatalf("orphan tool_result must be dropped, got %d messages: %+v", len(corpus), corpus)
+	}
+}
+
+func TestProcessEvents_ParallelToolCallsGroupedAndClosed(t *testing.T) {
+	// Two parallel tool calls (both emitted before either result) persist
+	// as a GROUPED, fully-closed corpus — call1, call2, result1, result2
+	// in position order, byte-identical to the pre-change shape, because
+	// positions are stamped at emission, not at insert. Each call pairs
+	// with its result.
+	r := newTestRunner(t, "thread-1")
+	events := eventSeq(
+		fnCallEvent("c1", "Bash", map[string]any{"cmd": "ls"}),
+		fnCallEvent("c2", "Grep", map[string]any{"pattern": "foo"}),
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "one"}),
+		fnResponseEvent("c2", "Grep", map[string]any{"output": "two"}),
+		textEvent("done", false),
+	)
+	if _, err := r.processEvents(context.Background(), events); err != nil {
+		t.Fatalf("processEvents: %v", err)
+	}
+	var kinds []string
+	for _, m := range corpusOf(t, r) {
+		b := m.Content[0]
+		switch {
+		case b.GetToolCall() != nil:
+			kinds = append(kinds, "call:"+b.GetToolCall().Id)
+		case b.GetToolResult() != nil:
+			kinds = append(kinds, "result:"+b.GetToolResult().ToolCallId)
+		case b.GetText() != nil:
+			kinds = append(kinds, "text")
+		default:
+			kinds = append(kinds, "other")
+		}
+	}
+	want := []string{"call:c1", "call:c2", "result:c1", "result:c2", "text"}
+	if len(kinds) != len(want) {
+		t.Fatalf("corpus shape = %v, want %v", kinds, want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("corpus[%d] = %s, want %s (full: %v)", i, kinds[i], want[i], kinds)
+		}
+	}
+}
+
+func TestProcessEvents_EmptyToolCallIDFailsFast(t *testing.T) {
+	// An empty tool-call id is unpairable — the turn must fail loudly
+	// rather than silently drop the call or persist an unpairable one.
+	r := newTestRunner(t, "thread-1")
+	_, err := r.processEvents(context.Background(), eventSeq(
+		fnCallEvent("", "Bash", map[string]any{"cmd": "ls"}),
+	))
+	if err == nil {
+		t.Fatal("empty tool-call id must fail the turn")
+	}
+	if corpus := corpusOf(t, r); len(corpus) != 0 {
+		t.Fatalf("empty-id call must persist nothing, got %d: %+v", len(corpus), corpus)
 	}
 }

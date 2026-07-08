@@ -99,7 +99,16 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 		return nil, err
 	}
 
-	branchPos := int64(messagePosition)
+	// Snap the branch point to a whole-turn boundary. A branch prefix is
+	// "parent messages with position < branchPos"; a raw position landing
+	// inside a tool turn would include a tool_call while excluding its
+	// tool_result, orphaning the call so the branch bricks on its first
+	// assembly. Snapping keeps whole turns intact by construction. For the
+	// common case (editing a turn-starting user message) this is a no-op.
+	branchPos, err := r.db.TurnStartPosition(threadID, int64(messagePosition))
+	if err != nil {
+		return nil, err
+	}
 	newThread := &threadv1.Thread{
 		Id:                  fmt.Sprintf("thread-%d", time.Now().UnixNano()),
 		Name:                parentThread.Name + " (branch)",
@@ -123,7 +132,7 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 		Id:       fmt.Sprintf("msg-%s-0", newThread.Id),
 		Role:     threadv1.Role_ROLE_USER,
 		Content:  pbtext.BlocksFromText(newContent),
-		Position: int64(messagePosition),
+		Position: branchPos,
 		ThreadId: newThread.Id,
 	}
 	if err := r.storeMessage(msg, newContent); err != nil {

@@ -54,6 +54,29 @@ func (i *Inserter) Insert(msg *threadv1.Message) error {
 	return nil
 }
 
+// InsertPair persists a tool_call and its tool_result atomically (one
+// transaction) and enqueues an embed for whichever produced chunks. The
+// runner uses this so a tool_call never reaches the corpus without its
+// result — a lone call bricks RRC's protocol closure. Chunk derivation
+// and the embed enqueue stay centralized here, exactly like Insert.
+func (i *Inserter) InsertPair(call, result *threadv1.Message) error {
+	cfg := i.chunkConfig()
+	callChunks := chunksFor(call, cfg)
+	resultChunks := chunksFor(result, cfg)
+	if err := i.db.InsertToolCallPair(call, callChunks, result, resultChunks); err != nil {
+		return err
+	}
+	if i.embedEnq != nil {
+		if len(callChunks) > 0 {
+			i.embedEnq(call.Id)
+		}
+		if len(resultChunks) > 0 {
+			i.embedEnq(result.Id)
+		}
+	}
+	return nil
+}
+
 // chunksFor splits the message's scoring serialization into
 // storage-shaped chunk rows. Raw message content is stored unchanged.
 func chunksFor(msg *threadv1.Message, cfg chunk.Config) []storage.Chunk {

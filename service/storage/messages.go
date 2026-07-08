@@ -133,9 +133,7 @@ func (d *DB) MessageThreads() (map[string]string, error) {
 // runner's five message-construction sites all stored epoch-zero
 // rows because they didn't set the field.
 func (d *DB) InsertMessage(msg *threadv1.Message, chunks []Chunk) error {
-	if msg.CreatedAt == nil || (msg.CreatedAt.Seconds == 0 && msg.CreatedAt.Nanos == 0) {
-		msg.CreatedAt = timestamppb.Now()
-	}
+	fillCreatedAt(msg)
 	content, err := marshalContentBlocks(msg.Content)
 	if err != nil {
 		return err
@@ -147,28 +145,84 @@ func (d *DB) InsertMessage(msg *threadv1.Message, chunks []Chunk) error {
 	}
 	defer tx.Rollback()
 
+	if err := insertMessageTx(tx, msg, content, chunks); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// InsertToolCallPair stores a tool_call message and its tool_result
+// message — each with its chunks — in ONE transaction. This is the
+// write-side guarantee behind rrc/protocol.go CloseGroup: a tool_call
+// must never reach the corpus without its result. The per-message
+// InsertMessage path commits each row in its own transaction, leaving a
+// crash/cancel/insert-error window where a lone call would durably brick
+// the thread (CloseGroup fatals on it on every later assembly). Here
+// both rows commit or neither does — the invariant is held by the
+// transaction boundary, not by an after-the-fact backfill convention.
+func (d *DB) InsertToolCallPair(call *threadv1.Message, callChunks []Chunk, result *threadv1.Message, resultChunks []Chunk) error {
+	fillCreatedAt(call)
+	fillCreatedAt(result)
+	callContent, err := marshalContentBlocks(call.Content)
+	if err != nil {
+		return err
+	}
+	resultContent, err := marshalContentBlocks(result.Content)
+	if err != nil {
+		return err
+	}
+
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := insertMessageTx(tx, call, callContent, callChunks); err != nil {
+		return err
+	}
+	if err := insertMessageTx(tx, result, resultContent, resultChunks); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// insertMessageTx writes one message row and its chunk rows inside tx.
+// Shared by InsertMessage (single row) and InsertToolCallPair (atomic
+// call+result); the caller owns the transaction, CreatedAt filling, and
+// content marshaling.
+func insertMessageTx(tx *sql.Tx, msg *threadv1.Message, content []byte, chunks []Chunk) error {
 	if _, err := tx.Exec(
 		`INSERT INTO messages (id, thread_id, role, content, position, created_at, turn_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		msg.Id, msg.ThreadId, int(msg.Role), content, msg.Position, msg.CreatedAt.AsTime(), msg.TurnId,
 	); err != nil {
 		return err
 	}
-
-	if len(chunks) > 0 {
-		stmt, err := tx.Prepare(`INSERT INTO chunks (message_id, chunk_index, text, byte_start, byte_end, token_est) VALUES (?, ?, ?, ?, ?, ?)`)
-		if err != nil {
+	if len(chunks) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`INSERT INTO chunks (message_id, chunk_index, text, byte_start, byte_end, token_est) VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, c := range chunks {
+		if _, err := stmt.Exec(msg.Id, c.ChunkIndex, c.Text, c.ByteStart, c.ByteEnd, c.TokenEst); err != nil {
 			return err
 		}
-		for _, c := range chunks {
-			if _, err := stmt.Exec(msg.Id, c.ChunkIndex, c.Text, c.ByteStart, c.ByteEnd, c.TokenEst); err != nil {
-				stmt.Close()
-				return err
-			}
-		}
-		stmt.Close()
 	}
+	return nil
+}
 
-	return tx.Commit()
+// fillCreatedAt applies the storage-boundary CreatedAt policy: if the
+// caller left it nil or zero, stamp now(). Callers with a deliberate
+// timestamp (branch construction, future imports) keep their value.
+// Centralizing this keeps every insert path — runner, resolvers, the
+// atomic pair write — from re-stamping epoch-zero rows.
+func fillCreatedAt(msg *threadv1.Message) {
+	if msg.CreatedAt == nil || (msg.CreatedAt.Seconds == 0 && msg.CreatedAt.Nanos == 0) {
+		msg.CreatedAt = timestamppb.Now()
+	}
 }
 
 // GetMessage retrieves a single message by ID.
@@ -303,6 +357,38 @@ func (d *DB) ThreadCorpus(threadID string) ([]*threadv1.Message, error) {
 	}
 	corpus = append(corpus, ownMsgs...)
 	return corpus, nil
+}
+
+// TurnStartPosition returns the position of the FIRST message of the turn
+// that contains the message at (threadID, position). A branch prefix is
+// "messages with position < branchPos"; snapping branchPos to a turn
+// boundary keeps whole turns intact, so a branch can never include a
+// tool_call while excluding its tool_result (which would brick the
+// branch's protocol closure). If the target message has no turn id
+// (legacy rows) or is not found, position is returned unchanged.
+func (d *DB) TurnStartPosition(threadID string, position int64) (int64, error) {
+	var turnID string
+	err := d.QueryRow(
+		`SELECT turn_id FROM messages WHERE thread_id = ? AND position = ?`,
+		threadID, position,
+	).Scan(&turnID)
+	if err == sql.ErrNoRows {
+		return position, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if turnID == "" {
+		return position, nil
+	}
+	var minPos int64
+	if err := d.QueryRow(
+		`SELECT MIN(position) FROM messages WHERE thread_id = ? AND turn_id = ?`,
+		threadID, turnID,
+	).Scan(&minPos); err != nil {
+		return 0, err
+	}
+	return minPos, nil
 }
 
 // AllCorpus returns every stored message across every thread — the
