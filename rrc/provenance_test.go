@@ -125,7 +125,7 @@ func TestProvenanceReach_SurfacesAmputatedRoot(t *testing.T) {
 		Chunks:      []SerializedLocalContextChunk{{Index: 0, Text: "current context"}},
 	}
 
-	edges, tel, err := e.SelectPrerequisites(ctx, local, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	edges, tel, err := e.SelectPrerequisites(ctx, local, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +196,56 @@ func selectionContains(sel []*rrcv1.SelectedMessage, id string) bool {
 		}
 	}
 	return false
+}
+
+// TestProvenanceSpineBridgesFreshTurn pins the walk's entry mechanics: a
+// fresh turn's trigger has NO incoming provenance edges (they are recorded
+// contributor → anchor at generation time, i.e. after), so a trigger-only
+// anchor set finds nothing — and the provenance SPINE (the immediately
+// preceding turn) is what bridges the walk into the recorded graph. This is
+// the invariant whose silent violation killed both live mass recall at
+// every trigger call and the entire mass calibration (replay reconstructs
+// trigger-call cones). Spine members are seeds: they must never surface in
+// the walk's own output.
+func TestProvenanceSpineBridgesFreshTurn(t *testing.T) {
+	mk := func(from, to string, w float32) *rrcv1.Edge {
+		return &rrcv1.Edge{
+			FromMessageId: from, ToMessageId: to, Score: w,
+			Source:       rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE,
+			FromThreadId: "t1", ToThreadId: "t1",
+		}
+	}
+	// History: root fed the prior turn's anchor (recorded at that turn's
+	// generation). The fresh trigger has no incoming edges — by construction.
+	edges := []*rrcv1.Edge{
+		mk("root", "prior-anchor", 0.8),
+		mk("prior-trigger", "prior-anchor", 1.0),
+	}
+
+	// Cone-only (the fresh trigger): the walk finds nothing.
+	mass, _ := ProvenanceMass(edges, []string{"trigger"}, "t1",
+		threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS)
+	if len(mass) != 0 {
+		t.Fatalf("trigger-only walk must find nothing (no incoming edges exist), got %v", mass)
+	}
+
+	// Cone ∪ spine: the walk enters through the prior turn and finds the
+	// root's banked mass.
+	anchors := []string{"trigger", "prior-trigger", "prior-anchor"}
+	mass, truncated := ProvenanceMass(edges, anchors, "t1",
+		threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS)
+	if truncated {
+		t.Fatal("tiny graph must not truncate")
+	}
+	if got := mass["root"]; got < 0.799 || got > 0.801 {
+		t.Fatalf("mass[root] = %v, want 0.8 (banked contribution through the spine)", got)
+	}
+	// Seeds never surface from their own seeding.
+	for _, id := range anchors {
+		if _, ok := mass[id]; ok {
+			t.Fatalf("anchor %q surfaced in the walk's own output: %v", id, mass)
+		}
+	}
 }
 
 // TestProvenanceMass_DiamondAccumulatesBeforePropagating pins the

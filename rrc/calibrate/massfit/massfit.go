@@ -17,9 +17,10 @@
 // rather than per turn from the raw corpus.
 //
 // Replay reconstructs, for each historical turn: the active discourse
-// as selection saw it (the trigger plus BuildActiveDiscourse's
-// reach-back anchors — not the turn's finished message group), the
-// corpus and provenance edges as they existed when the turn ran
+// as selection saw it (the turn through its trigger — not the turn's
+// finished message group) plus the provenance spine (the immediately
+// preceding turn) seeding the mass walk exactly as live selection seeds
+// it, the corpus and provenance edges as they existed when the turn ran
 // (as-of filtering by timestamp), the
 // chain-ruled provenance mass of every reachable candidate (via
 // rrc.ProvenanceMass — the engine's exact walk, not a
@@ -122,13 +123,13 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 	var stats Stats
 
 	// The replay cone must be the active discourse AS SELECTION SAW IT:
-	// the turn's trigger plus BuildActiveDiscourse's reach-back anchors
-	// from prior turns — NOT the turn's full post-hoc message group. The
-	// turn's generated messages did not exist at selection time, and
-	// provenance mass flows into the cone through prior-turn anchors
-	// (contributor → anchor edges recorded at those turns' generation),
-	// which only reach-back puts in the cone. Using the finished turn
-	// group would both leak the future and starve the walk.
+	// the turn through its trigger — NOT the turn's full post-hoc message
+	// group (the generated messages did not exist at selection time; using
+	// them would leak the future). The mass walk is seeded with the cone
+	// PLUS the provenance spine (the immediately preceding turn), exactly
+	// as live selection seeds it: a trigger has no incoming provenance
+	// edges — they are recorded at generation, i.e. after — so a cone-only
+	// walk would find nothing at any trigger call and B could never fit.
 	fallbackN := rrc.DefaultConfig().LocalContextSize
 
 	byThread := make(map[string][]*threadv1.Message)
@@ -180,6 +181,12 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 			cone[m.Id] = true
 			coneIDs = append(coneIDs, m.Id)
 		}
+		// The walk's anchor set = cone ∪ spine, mirroring live selection.
+		// Spine members stay eligible CANDIDATES below (they are excluded
+		// only from the walk's own output, exactly as live) — the candidate
+		// filter keys on the cone alone.
+		spineIDs := rrc.BuildProvenanceSpine(threadThroughTrigger, turn.id)
+		walkAnchors := append(append([]string(nil), coneIDs...), spineIDs...)
 
 		// The world as this turn saw it.
 		var edgesAsOf []*rrcv1.Edge
@@ -205,7 +212,7 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 		// KNOWN FIDELITY LIMIT: live THREAD-scoped selections prune
 		// cross-thread chains this replay keeps, so replay mass is an
 		// upper bound on live mass for those turns.
-		mass, trunc := rrc.ProvenanceMass(edgesAsOf, coneIDs, threadID, threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS)
+		mass, trunc := rrc.ProvenanceMass(edgesAsOf, walkAnchors, threadID, threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS)
 		if trunc {
 			stats.Truncated = true
 		}

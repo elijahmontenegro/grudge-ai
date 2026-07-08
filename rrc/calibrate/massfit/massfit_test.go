@@ -74,9 +74,11 @@ func provEdge(from, to string, weight float32, at time.Time) *rrcv1.Edge {
 
 // fixture mirrors the live-run shape: an early turn plants the root,
 // a middle turn banks provenance from it (selected-prerequisite
-// contributor), a later trigger-only turn is replayed. The replay cone
-// for turn-c must reach back to turn-b's anchor, through which the
-// walk finds m0's banked mass — while m0 itself stays a candidate.
+// contributor), a later trigger-only turn is replayed. turn-c's trigger
+// has no incoming provenance edges (they are recorded at generation),
+// so the mass walk enters the graph through the provenance SPINE —
+// turn-b, the immediately preceding turn — through which it finds m0's
+// banked mass, while m0 itself stays a candidate.
 func fixture() ([]*threadv1.Message, []*rrcv1.Edge) {
 	t0 := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	corpus := []*threadv1.Message{

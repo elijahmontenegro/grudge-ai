@@ -89,7 +89,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	case serializedLocal != nil:
 		e.mu.Lock()
 		var err error
-		edges, prerequisiteSelection, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Scope, req.ThreadID)
+		edges, prerequisiteSelection, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Scope, req.ThreadID, req.ProvenanceSpineIDs)
 		if err != nil {
 			e.mu.Unlock()
 			return AssembleResult{}, fmt.Errorf("assemble SelectPrerequisites: %w", err)
@@ -280,6 +280,15 @@ type AssembleRequest struct {
 	PerMsgDelim            int
 	FixedTokens            int
 	ExcludeIDs             []string
+
+	// ProvenanceSpineIDs seeds the provenance mass walk with the immediately
+	// preceding turn's message ids — the recorded graph's entry point for a
+	// fresh turn, whose own messages have no incoming provenance edges until
+	// it generates. Graph-walk seed ONLY: never query material, never
+	// delivered, never excluded from retrieval. See BuildProvenanceSpine.
+	// Nil is valid (no prior turn, or the recency-fallback path, where the
+	// window already spans prior turns).
+	ProvenanceSpineIDs []string
 
 	// CountText overrides how a wire message's text is extracted for
 	// budget counting. Providers' codecs send different subsets of a

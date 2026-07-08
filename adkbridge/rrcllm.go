@@ -156,6 +156,12 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			yield(nil, fmt.Errorf("RRC: no Local Context for stored anchor %s", anchor.Id))
 			return
 		}
+		// Provenance spine: the immediately preceding turn, derived from the
+		// window already in hand (zero extra reads). Seeds the mass walk's
+		// entry into the recorded graph — a fresh turn's own messages carry
+		// no incoming provenance edges yet. Walk seed only; never query
+		// material, never delivered, never excluded from retrieval.
+		spineIDs := rrc.BuildProvenanceSpine(window, r.CurrentTurnID)
 
 		// ADK supplies no current content for an autonomous continuation
 		// without a newly stored event. Such a tick keeps native Local
@@ -192,11 +198,12 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 				SerializedLocalContext: serializedLocal, Anchor: anchor, Store: r.db, LocalContext: localContext,
 				Scope: r.Scope, ThreadID: r.threadID, System: systemMsg,
 				Budget: budget, HeadroomPct: cfg.BudgetHeadroomPct,
-				PerMsgDelim:    cfg.PerMsgDelimiterTokens,
-				FixedTokens:    estimateToolSchemaTokens(protoTools, cfg.Chunk),
-				ExcludeIDs:     excludeIDs,
-				PriorSelection: priorSelection,
-				CountText:      r.CountText,
+				PerMsgDelim:        cfg.PerMsgDelimiterTokens,
+				FixedTokens:        estimateToolSchemaTokens(protoTools, cfg.Chunk),
+				ExcludeIDs:         excludeIDs,
+				ProvenanceSpineIDs: spineIDs,
+				PriorSelection:     priorSelection,
+				CountText:          r.CountText,
 			})
 			if err != nil {
 				yield(nil, err)

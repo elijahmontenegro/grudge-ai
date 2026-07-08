@@ -99,11 +99,13 @@ func (e *Engine) AddEdges(edges []*rrcv1.Edge) []*rrcv1.Edge {
 	return admitted
 }
 
-// provenanceReach walks provenance edges backward from the active-discourse
-// cone (the Local Context message IDs) and returns candidate message IDs
-// ranked by accumulated descendant *mass* — the recall path that surfaces
-// required-but-low-similarity messages the top-K cosine prefilter amputates
-// before they can ever be scored.
+// provenanceReach walks provenance edges backward from the anchor set — the
+// Local Context membership PLUS the provenance spine (the immediately
+// preceding turn, the graph's entry point for a fresh turn whose own
+// messages have no incoming edges yet; see BuildProvenanceSpine) — and
+// returns candidate message IDs ranked by accumulated descendant *mass*:
+// the recall path that surfaces required-but-low-similarity messages the
+// top-K cosine prefilter amputates before they can ever be scored.
 //
 // Mass, not count: each provenance edge carries a contribution weight (its
 // Score), and a node's mass is the sum over the cone of (weight along the
@@ -113,9 +115,11 @@ func (e *Engine) AddEdges(edges []*rrcv1.Edge) []*rrcv1.Edge {
 // the path) — the same shape A4 will calibrate; here it is the raw banked
 // weight, uncalibrated.
 //
-// Excluded from the result: the cone itself (already Local Context) and
-// anything failing scope. Bounded by provenanceReachCap; the boolean return
-// reports whether the cap truncated the walk (for telemetry — no silent cap).
+// Excluded from the result: the anchor set itself (Local Context is already
+// present; spine members stay cosine-retrievable candidates but never
+// surface from their own seeding) and anything failing scope. Bounded by
+// provenanceReachCap; the boolean return reports whether the cap truncated
+// the walk (for telemetry — no silent cap).
 //
 // NOTE (μ-availability seam, per plan): the ideal stop is "walk until path
 // value < μ (the budget shadow price)", but μ is not available at recall
@@ -127,46 +131,50 @@ func (e *Engine) AddEdges(edges []*rrcv1.Edge) []*rrcv1.Edge {
 // only caller), provenanceReach does NOT take e.mu — it runs under the lock
 // Assemble already holds around SelectPrerequisites. Taking e.mu here would
 // self-deadlock against that outer lock.
-func (e *Engine) provenanceReach(coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, map[string]string, bool) {
-	return provenanceMassWalk(e.dag, coneIDs, coneThreadID, scope)
+func (e *Engine) provenanceReach(anchorIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, map[string]string, bool) {
+	return provenanceMassWalk(e.dag, anchorIDs, coneThreadID, scope)
 }
 
 // ProvenanceMass computes the chain-ruled provenance mass of every
-// message reachable from the cone through the given edge set — the
-// same walk the engine's recall path runs, exposed over an arbitrary
-// edge set so offline replay (mass calibration over corpus history,
-// filtered to edges as-of a turn) computes mass with the engine's
-// exact semantics instead of a drifting reimplementation. Non-
-// provenance edges are ignored by the walk itself.
-func ProvenanceMass(edges []*rrcv1.Edge, coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, bool) {
+// message reachable from the anchor set (Local Context membership plus
+// the provenance spine) through the given edge set — the same walk the
+// engine's recall path runs, exposed over an arbitrary edge set so
+// offline replay (mass calibration over corpus history, filtered to
+// edges as-of a turn) computes mass with the engine's exact semantics
+// instead of a drifting reimplementation. Non-provenance edges are
+// ignored by the walk itself.
+func ProvenanceMass(edges []*rrcv1.Edge, anchorIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, bool) {
 	d := newDAG()
 	for _, edge := range edges {
 		if edge != nil {
 			d.AddEdge(edge)
 		}
 	}
-	mass, _, truncated := provenanceMassWalk(d, coneIDs, coneThreadID, scope)
+	mass, _, truncated := provenanceMassWalk(d, anchorIDs, coneThreadID, scope)
 	return mass, truncated
 }
 
 // provenanceMassWalk is the shared walk body. See provenanceReach for
-// the mass semantics and the cap contract. It also returns each reached
-// message's thread (read off the provenance edges it walks), so the caller
-// can build edges for reached messages without a full-corpus lookup.
-func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, map[string]string, bool) {
-	cone := make(map[string]bool, len(coneIDs))
-	for _, id := range coneIDs {
-		cone[id] = true
+// the mass semantics and the cap contract. Anchor members (cone and spine
+// alike) seed reachability, receive mass at contribution 1.0, and are
+// excluded from the output — a seed never surfaces as a candidate off its
+// own seeding. It also returns each reached message's thread (read off the
+// provenance edges it walks), so the caller can build edges for reached
+// messages without a full-corpus lookup.
+func provenanceMassWalk(d *dag, anchorIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, map[string]string, bool) {
+	anchors := make(map[string]bool, len(anchorIDs))
+	for _, id := range anchorIDs {
+		anchors[id] = true
 	}
 
 	// Phase 1 — capped, deterministic reachability. BFS backward from the
-	// cone over provenance edges, expanding in sorted-id layers so the
-	// kept set under the cap is a function of the edge SET, not of edge
-	// insertion or slice order.
+	// anchor set over provenance edges, expanding in sorted-id layers so
+	// the kept set under the cap is a function of the edge SET, not of
+	// edge insertion or slice order.
 	inReach := make(map[string]bool)
 	threadByID := make(map[string]string)
-	seen := make(map[string]bool, len(coneIDs))
-	for _, id := range coneIDs {
+	seen := make(map[string]bool, len(anchorIDs))
+	for _, id := range anchorIDs {
 		seen[id] = true
 	}
 	contributorsOf := func(id string) []string {
@@ -184,7 +192,7 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 		return out
 	}
 	truncated := false
-	frontier := append([]string(nil), coneIDs...)
+	frontier := append([]string(nil), anchorIDs...)
 	for len(frontier) > 0 && !truncated {
 		var next []string
 		for _, id := range frontier {
@@ -208,10 +216,10 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 	}
 
 	// Phase 2 — exact path-sum mass over the capped subgraph. A node's
-	// mass is the sum, over its provenance edges into reach ∪ cone, of
-	// edge weight × the dependent's contribution (1.0 for cone members,
+	// mass is the sum, over its provenance edges into reach ∪ anchors, of
+	// edge weight × the dependent's contribution (1.0 for anchor members,
 	// the dependent's own FINAL mass otherwise) — the chain rule summed
-	// over every path into the cone. A node finalizes only after every
+	// over every path into the anchor set. A node finalizes only after every
 	// in-reach dependent has finalized, so multi-path (diamond) mass
 	// accumulates fully before it propagates and the result is
 	// independent of edge order. Provenance is generation-ordered
@@ -228,7 +236,7 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 		members = append(members, id)
 	}
 	sort.Strings(members)
-	targets := append(append([]string(nil), coneIDs...), members...)
+	targets := append(append([]string(nil), anchorIDs...), members...)
 	sort.Strings(targets)
 	for _, u := range targets {
 		for _, edge := range d.Prerequisites(u) {
@@ -239,11 +247,11 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 				continue
 			}
 			from := edge.FromMessageId
-			if cone[from] || !inReach[from] {
+			if anchors[from] || !inReach[from] {
 				continue
 			}
 			outgoing[from] = append(outgoing[from], out{to: u, weight: float64(edge.Score)})
-			if !cone[u] && inReach[u] {
+			if !anchors[u] && inReach[u] {
 				pending[from]++
 			}
 		}
@@ -255,7 +263,7 @@ func provenanceMassWalk(d *dag, coneIDs []string, coneThreadID string, scope thr
 		var m float64
 		for _, e := range outgoing[v] {
 			switch {
-			case cone[e.to]:
+			case anchors[e.to]:
 				m += e.weight
 			case inReach[e.to]:
 				m += e.weight * mass[e.to]

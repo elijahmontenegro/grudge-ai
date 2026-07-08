@@ -16,7 +16,11 @@ func textBlock(text string) *threadv1.ContentBlock {
 	return &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: text}}}
 }
 
-func TestBuildLocalContextBoundsAndReachesBackForAnchors(t *testing.T) {
+func TestBuildLocalContextIsBoundedRecencyOnly(t *testing.T) {
+	// The fallback window is the last N messages, nothing more — no
+	// backward reach for "anchors". The deleted reachBackForAnchors used to
+	// import prior user/assistant messages here; that positional grab is a
+	// rejected anti-pattern (it blended off-topic neighbors into the query).
 	corpus := []*threadv1.Message{
 		localMessage("user", threadv1.Role_ROLE_USER, 0, textBlock("original ask")),
 		localMessage("assistant", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("working on it")),
@@ -25,9 +29,9 @@ func TestBuildLocalContextBoundsAndReachesBackForAnchors(t *testing.T) {
 	}
 	local := BuildLocalContext(corpus, 2)
 	got := messageIDs(local)
-	want := []string{"user", "assistant", "call", "result"}
+	want := []string{"call", "result"}
 	if !sameIDs(got, want) {
-		t.Fatalf("Local Context ids=%v, want %v", got, want)
+		t.Fatalf("Local Context ids=%v, want %v (last-N only, nothing imported)", got, want)
 	}
 }
 
@@ -165,10 +169,10 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	engine := testEngine(scorer, oracle)
 	serialized := testSerializedLocalContext(anchor)
 
-	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1", nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1", nil); err != nil {
 		t.Fatal(err)
 	}
 	if scorer.callCount != 1 {
@@ -176,7 +180,7 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	}
 	changed := *serialized
 	changed.Fingerprint = serialized.Fingerprint + "-changed"
-	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1", nil); err != nil {
 		t.Fatal(err)
 	}
 	if scorer.callCount != 2 {
@@ -212,32 +216,33 @@ func TestBuildActiveDiscourse_TurnScopedWindow(t *testing.T) {
 	local := BuildActiveDiscourse(corpus, "turn-B", 2)
 	got := messageIDs(local)
 
-	// The current turn has a user-text anchor (u1) but no assistant-text
-	// anchor of its own (tool loop only), so reach-back pulls the prior
-	// assistant anchor a0. Window = u1 + 40 tool msgs (41); +a0 = 42.
-	// A fixed last-N=2 would have kept only the final result pair.
-	if len(got) != 42 {
-		t.Fatalf("active discourse len=%d, want 42 (a0 anchor + u1 + 20 call/result pairs)", len(got))
+	// The turn is the bounding unit: u1 + 40 tool msgs = 41, and NOTHING
+	// from turn-A is imported. A fixed last-N=2 would have kept only the
+	// final result pair.
+	if len(got) != 41 {
+		t.Fatalf("active discourse len=%d, want 41 (u1 + 20 call/result pairs, nothing imported)", len(got))
 	}
 	for _, id := range []string{"u1", "c0", "r0", "c19", "r19"} {
 		if !containsID(got, id) {
 			t.Fatalf("active discourse missing %q (turn truncated?): %v", id, got)
 		}
 	}
-	// u0 (prior turn's user, already satisfied by u1) must NOT be pulled.
-	if containsID(got, "u0") {
-		t.Fatalf("prior turn's redundant user anchor leaked into active discourse: %v", got)
-	}
-	// a0 IS present — reached back as the missing assistant-text anchor.
-	if !containsID(got, "a0") {
-		t.Fatalf("assistant anchor a0 should be reached back: %v", got)
+	// Nothing reaches backward out of the turn — prior turns already spent
+	// their selections producing this one.
+	for _, id := range []string{"u0", "a0"} {
+		if containsID(got, id) {
+			t.Fatalf("prior turn's %q leaked into active discourse (backward reach): %v", id, got)
+		}
 	}
 }
 
-// TestBuildActiveDiscourse_ReachesBackForAnchors: when the current turn
-// lacks an assistant-text anchor, the builder reaches back for it (shared
-// reach-back with BuildLocalContext) so the span disambiguates.
-func TestBuildActiveDiscourse_ReachesBackForAnchors(t *testing.T) {
+// TestBuildActiveDiscourse_NoBackwardReach: the turn IS the Local Context.
+// A turn with no user/assistant text of its own imports nothing — the
+// deleted reachBackForAnchors used to grab the nearest prior assistant
+// message here, which is exactly the positional grab that blended an
+// off-topic neighbor into the measured passphrase-recall query and
+// suppressed the true prerequisite below the acceptance floor.
+func TestBuildActiveDiscourse_NoBackwardReach(t *testing.T) {
 	corpus := []*threadv1.Message{
 		withTurn(localMessage("u0", threadv1.Role_ROLE_USER, 0, textBlock("original ask")), "turn-A"),
 		withTurn(localMessage("a0", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("prior assistant text")), "turn-A"),
@@ -247,14 +252,25 @@ func TestBuildActiveDiscourse_ReachesBackForAnchors(t *testing.T) {
 	}
 	local := BuildActiveDiscourse(corpus, "turn-B", 2)
 	got := messageIDs(local)
-	// Reach-back pulls the missing assistant anchor (a0) — and its
-	// preceding user anchor is already satisfied by... none in-window, so
-	// u0 is also reached. Window itself is c,r.
-	if !containsID(got, "a0") {
-		t.Fatalf("reach-back did not pull assistant anchor: %v", got)
+	want := []string{"c", "r"}
+	if !sameIDs(got, want) {
+		t.Fatalf("active discourse ids=%v, want %v (the turn alone)", got, want)
 	}
-	if !containsID(got, "c") || !containsID(got, "r") {
-		t.Fatalf("active turn window missing: %v", got)
+}
+
+// TestBuildActiveDiscourse_FragmentTurnStandsAlone: a lone user question is
+// a complete, valid Local Context — its disambiguation is the system's job
+// (retrieval + provenance mass + next-call thinking), never a neighbor grab.
+func TestBuildActiveDiscourse_FragmentTurnStandsAlone(t *testing.T) {
+	corpus := []*threadv1.Message{
+		withTurn(localMessage("u0", threadv1.Role_ROLE_USER, 0, textBlock("tell me about boiling points")), "turn-A"),
+		withTurn(localMessage("a0", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("100C at sea level")), "turn-A"),
+		withTurn(localMessage("u1", threadv1.Role_ROLE_USER, 2, textBlock("what was the password?")), "turn-B"),
+	}
+	local := BuildActiveDiscourse(corpus, "turn-B", 2)
+	got := messageIDs(local)
+	if !sameIDs(got, []string{"u1"}) {
+		t.Fatalf("fragment turn must stand alone as the query, got %v", got)
 	}
 }
 
@@ -287,6 +303,42 @@ func TestBuildActiveDiscourse_UnknownTurnIDFallsBack(t *testing.T) {
 	got := messageIDs(BuildActiveDiscourse(corpus, "turn-not-yet-stored", 2))
 	if len(got) == 0 {
 		t.Fatal("unknown turn id must fall back to recency, not return empty")
+	}
+}
+
+// TestBuildProvenanceSpine: the spine is the immediately preceding TURN —
+// turn-shaped (the discourse unit), never a message count — and exists only
+// when turn identity does.
+func TestBuildProvenanceSpine(t *testing.T) {
+	window := []*threadv1.Message{
+		withTurn(localMessage("z0", threadv1.Role_ROLE_USER, 0, textBlock("older ask")), "turn-Z"),
+		withTurn(localMessage("a0", threadv1.Role_ROLE_USER, 1, textBlock("prior ask")), "turn-A"),
+		withTurn(localMessage("a1", threadv1.Role_ROLE_ASSISTANT, 2, textBlock("prior answer")), "turn-A"),
+		withTurn(localMessage("b0", threadv1.Role_ROLE_USER, 3, textBlock("current ask")), "turn-B"),
+	}
+	// The latest complete turn before the current one — all of it, and only it.
+	if got := BuildProvenanceSpine(window, "turn-B"); !sameIDs(got, []string{"a0", "a1"}) {
+		t.Fatalf("spine=%v, want [a0 a1] (the immediately preceding turn)", got)
+	}
+	// No current turn identity (recency-fallback path): no spine — the
+	// window already spans prior turns.
+	if got := BuildProvenanceSpine(window, ""); got != nil {
+		t.Fatalf("no-turn-id path must have no spine, got %v", got)
+	}
+	// No preceding turn at all (thread's first turn).
+	first := []*threadv1.Message{
+		withTurn(localMessage("b0", threadv1.Role_ROLE_USER, 0, textBlock("first ask")), "turn-B"),
+	}
+	if got := BuildProvenanceSpine(first, "turn-B"); got != nil {
+		t.Fatalf("first turn has no spine, got %v", got)
+	}
+	// Legacy rows without turn identity form no spine.
+	legacy := []*threadv1.Message{
+		localMessage("l0", threadv1.Role_ROLE_USER, 0, textBlock("legacy")),
+		withTurn(localMessage("b0", threadv1.Role_ROLE_USER, 1, textBlock("current ask")), "turn-B"),
+	}
+	if got := BuildProvenanceSpine(legacy, "turn-B"); got != nil {
+		t.Fatalf("legacy empty-turn rows must form no spine, got %v", got)
 	}
 }
 
