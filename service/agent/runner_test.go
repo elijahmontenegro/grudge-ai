@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/elijahmontenegro/grudge/service/storage"
 
 	"google.golang.org/adk/model"
@@ -646,5 +647,48 @@ func TestProcessEvents_EmptyToolCallIDFailsFast(t *testing.T) {
 	}
 	if corpus := corpusOf(t, r); len(corpus) != 0 {
 		t.Fatalf("empty-id call must persist nothing, got %d: %+v", len(corpus), corpus)
+	}
+}
+
+func TestProcessEvents_CorpusPassesRealProtocolClosure(t *testing.T) {
+	// The crux of the whole change: a corpus produced by the deferred-pair
+	// write path must pass rrc's REAL protocol closure — every tool_call
+	// has its result and vice versa — for EVERY proto-bearing root. This is
+	// exactly what GenerateContent runs (via Assemble) over the turn's
+	// messages at each model call; a dangling pair here is the brick this
+	// change removes. Exercises a mixed turn: thinking, parallel calls with
+	// results, plus an interrupted call closed by the turn-end flush.
+	r := newTestRunner(t, "thread-1")
+	events := eventSeqThenError(
+		errors.New("stream broke"),
+		textEvent("planning", true),
+		fnCallEvent("c1", "Bash", map[string]any{"cmd": "ls"}),
+		fnCallEvent("c2", "Grep", map[string]any{"pattern": "x"}), // parallel
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "one"}),
+		fnResponseEvent("c2", "Grep", map[string]any{"output": "two"}),
+		fnCallEvent("c3", "Read", map[string]any{"path": "p"}), // no result -> flush closes it
+	)
+	_, _ = r.processEvents(context.Background(), events)
+
+	corpus := corpusOf(t, r)
+	idx := rrc.NewProtocolIndex(corpus)
+	roots := 0
+	for _, m := range corpus {
+		hasProto := false
+		for _, b := range m.Content {
+			if b.GetToolCall() != nil || b.GetToolResult() != nil {
+				hasProto = true
+			}
+		}
+		if !hasProto {
+			continue
+		}
+		roots++
+		if _, err := idx.CloseGroup(m, 0); err != nil {
+			t.Fatalf("corpus fails protocol closure at %s: %v", m.Id, err)
+		}
+	}
+	if roots == 0 {
+		t.Fatal("expected tool_call/result roots in the corpus")
 	}
 }
