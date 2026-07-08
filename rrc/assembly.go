@@ -400,7 +400,7 @@ func pinnedLocalIDs(local []*threadv1.Message) map[string]bool {
 	haveUser, haveAssistant := false, false
 	for i := len(local) - 1; i >= 0 && (!haveUser || !haveAssistant); i-- {
 		m := local[i]
-		if !hasTextBlock(m.Content) {
+		if !hasSemanticBlock(m.Content) {
 			continue
 		}
 		if m.Role == threadv1.Role_ROLE_USER && !haveUser {

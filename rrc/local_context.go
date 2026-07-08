@@ -98,7 +98,7 @@ func BuildLocalContext(threadCorpus []*threadv1.Message, n int) []*threadv1.Mess
 func reachBackForAnchors(threadCorpus []*threadv1.Message, start int, window []*threadv1.Message) []*threadv1.Message {
 	haveUser, haveAssistant := false, false
 	for _, m := range window {
-		if !hasTextBlock(m.Content) {
+		if !hasSemanticBlock(m.Content) {
 			continue
 		}
 		haveUser = haveUser || m.Role == threadv1.Role_ROLE_USER
@@ -108,7 +108,7 @@ func reachBackForAnchors(threadCorpus []*threadv1.Message, start int, window []*
 	var prefix []*threadv1.Message
 	for i := start - 1; i >= 0 && (!haveUser || !haveAssistant); i-- {
 		m := threadCorpus[i]
-		if !hasTextBlock(m.Content) {
+		if !hasSemanticBlock(m.Content) {
 			continue
 		}
 		switch m.Role {
@@ -139,7 +139,7 @@ func SerializeLocalContext(local []*threadv1.Message, cfg chunk.Config) *Seriali
 	ids := make([]string, 0, len(local))
 	for _, m := range local {
 		ids = append(ids, m.Id)
-		serialized.WriteString(SerializeMessageForScoring(m))
+		serialized.WriteString(serializeSemanticMessage(m))
 	}
 	text := serialized.String()
 	if strings.TrimSpace(text) == "" {
@@ -174,8 +174,36 @@ func SerializeLocalContext(local []*threadv1.Message, cfg chunk.Config) *Seriali
 	}
 }
 
+// serializeSemanticMessage is the semantic-only projection of a message for
+// the Local Context QUERY: user/assistant text and thinking, through one
+// uniform path — nothing else. Text and thinking are co-equal by design;
+// thinking is the model's own reasoning, the richest disambiguation signal
+// in the system, and no path may privilege one semantic block type over
+// another. Tool calls/results, images, and attachments are turn record
+// (delivered to the model, excluded from re-retrieval, provenance-banked)
+// but never query material: whatever mattered about them re-enters the
+// discourse through the model's thinking and response, which ARE serialized
+// here. Returns "" for a message with no semantic content. Candidate
+// indexing keeps the full-fidelity SerializeMessageForScoring below — only
+// the query is discourse-shaped.
+func serializeSemanticMessage(m *threadv1.Message) string {
+	var body strings.Builder
+	for _, b := range m.Content {
+		switch {
+		case b.GetText() != nil && b.GetText().Text != "":
+			fmt.Fprintf(&body, "[text]\n%s\n", b.GetText().Text)
+		case b.GetThinking() != nil && b.GetThinking().Text != "":
+			fmt.Fprintf(&body, "[thinking]\n%s\n", b.GetThinking().Text)
+		}
+	}
+	if body.Len() == 0 {
+		return ""
+	}
+	return fmt.Sprintf("[message role=%s]\n%s[/message]\n", roleLabel(m.Role), body.String())
+}
+
 // SerializeMessageForScoring is the role-aware, block-aware serialization
-// used for both Local Context and candidate indexing.
+// used for candidate indexing (every stored message, all block types).
 // The stored message remains the lossless source of truth.
 func SerializeMessageForScoring(m *threadv1.Message) string {
 	var sb strings.Builder
@@ -218,9 +246,19 @@ func roleLabel(role threadv1.Role) string {
 	}
 }
 
-func hasTextBlock(blocks []*threadv1.ContentBlock) bool {
+// hasSemanticBlock reports whether blocks carry any semantic content —
+// non-empty user/assistant text or non-empty thinking. Semantic content is
+// what anchors and queries Local Context; tool blocks, images, and
+// attachments are turn record, not discourse. Text and thinking are
+// deliberately co-equal: a thinking-only assistant step is a full semantic
+// anchor (thinking is the primary disambiguation signal), and no path may
+// privilege one semantic block type over another.
+func hasSemanticBlock(blocks []*threadv1.ContentBlock) bool {
 	for _, b := range blocks {
 		if t := b.GetText(); t != nil && t.Text != "" {
+			return true
+		}
+		if th := b.GetThinking(); th != nil && th.Text != "" {
 			return true
 		}
 	}

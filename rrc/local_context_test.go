@@ -31,26 +31,39 @@ func TestBuildLocalContextBoundsAndReachesBackForAnchors(t *testing.T) {
 	}
 }
 
-func TestSerializedLocalContextUsesSameOrderedMessagesAndLabelsBlocks(t *testing.T) {
+func TestSerializedLocalContextIsSemanticOnlyAndKeepsFullMembership(t *testing.T) {
+	// The QUERY (Chunks) is semantic-only — user/assistant text and thinking,
+	// co-equal; tool blocks never enter it (they are turn record, not
+	// discourse). MEMBERSHIP (MessageIDs) still carries every message,
+	// tools included, so nothing delivered is ever re-retrieved.
+	thinking := &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Thinking{
+		Thinking: &threadv1.ThinkingContent{Text: "the user wants the file inspected"},
+	}}
 	local := []*threadv1.Message{
 		localMessage("u", threadv1.Role_ROLE_USER, 0, textBlock("inspect the file")),
-		storedCall("c", "t1", "op-1", 1),
-		storedResult("r", "t1", "op-1", 2),
+		localMessage("th", threadv1.Role_ROLE_ASSISTANT, 1, thinking),
+		storedCall("c", "t1", "op-1", 2),
+		storedResult("r", "t1", "op-1", 3),
 	}
 	serialized := SerializeLocalContext(local, testChunkConfig())
 	if serialized == nil {
 		t.Fatal("serialization is nil")
 	}
-	if !sameIDs(serialized.MessageIDs, []string{"u", "c", "r"}) {
-		t.Fatalf("Local Context ids=%v", serialized.MessageIDs)
+	if !sameIDs(serialized.MessageIDs, []string{"u", "th", "c", "r"}) {
+		t.Fatalf("membership must include every message (tools too), got %v", serialized.MessageIDs)
 	}
 	joined := ""
 	for _, part := range serialized.Chunks {
 		joined += part.Text
 	}
-	for _, label := range []string{"role=user", "[tool_call id=op-1", "[tool_result tool_call_id=op-1"} {
+	for _, label := range []string{"role=user", "inspect the file", "[thinking]", "the user wants the file inspected"} {
 		if !contains(joined, label) {
-			t.Fatalf("Local Context serialization missing %q:\n%s", label, joined)
+			t.Fatalf("semantic serialization missing %q:\n%s", label, joined)
+		}
+	}
+	for _, label := range []string{"[tool_call", "[tool_result"} {
+		if contains(joined, label) {
+			t.Fatalf("tool block leaked into the query serialization (%q):\n%s", label, joined)
 		}
 	}
 }

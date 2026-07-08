@@ -9,64 +9,61 @@ import (
 	"github.com/elijahmontenegro/grudge/proto/pbtext"
 )
 
-// hasTextBlock guards Local Context anchor reachback. The
-// invariant: only externalized user / assistant text counts as a
-// conversational anchor. Tool plumbing and internal thinking do not.
-// A break here lets a deep tool loop hide the most-recent real reply.
+// hasSemanticBlock decides what counts as semantic Local Context content.
+// The invariant: user/assistant text and thinking are co-equal semantic
+// anchors — thinking is the model's own reasoning, the primary
+// disambiguation signal, and no path may privilege one semantic block type
+// over another. Tool plumbing, images, and attachments are turn record,
+// never discourse.
 
-func TestHasTextBlock_TextOnly(t *testing.T) {
+func TestHasSemanticBlock_TextOnly(t *testing.T) {
 	blocks := []*threadv1.ContentBlock{
 		{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "hello"}}},
 	}
-	if !hasTextBlock(blocks) {
-		t.Error("expected hasTextBlock=true for plain text content")
+	if !hasSemanticBlock(blocks) {
+		t.Error("expected hasSemanticBlock=true for plain text content")
 	}
 }
 
-func TestHasTextBlock_EmptyText(t *testing.T) {
+func TestHasSemanticBlock_EmptyBlocks(t *testing.T) {
 	blocks := []*threadv1.ContentBlock{
 		{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: ""}}},
+		{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: ""}}},
 	}
-	if hasTextBlock(blocks) {
-		t.Error("empty text block should not qualify as semantic content")
+	if hasSemanticBlock(blocks) {
+		t.Error("empty text/thinking blocks should not qualify as semantic content")
 	}
 }
 
-func TestHasTextBlock_ToolOnlyMessage(t *testing.T) {
+func TestHasSemanticBlock_ToolOnlyMessage(t *testing.T) {
 	toolCall := []*threadv1.ContentBlock{
 		{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{
 			Id: "t1", Name: "Read", Arguments: `{"path":"x"}`,
 		}}},
 	}
-	if hasTextBlock(toolCall) {
-		t.Error("tool_call-only content must not qualify as an anchor")
+	if hasSemanticBlock(toolCall) {
+		t.Error("tool_call-only content must not qualify as semantic")
 	}
 	toolResult := []*threadv1.ContentBlock{
 		{Block: &threadv1.ContentBlock_ToolResult{ToolResult: &threadv1.ToolResultContent{
 			ToolCallId: "t1", Content: "file contents here",
 		}}},
 	}
-	if hasTextBlock(toolResult) {
-		t.Error("tool_result-only content must not qualify as an anchor")
+	if hasSemanticBlock(toolResult) {
+		t.Error("tool_result-only content must not qualify as semantic")
 	}
 }
 
-func TestHasTextBlock_ThinkingOnly(t *testing.T) {
+func TestHasSemanticBlock_ThinkingOnly(t *testing.T) {
+	// A thinking-only assistant step IS a full semantic anchor — the
+	// architect's ruling: thinking is the biggest source of disambiguation
+	// and is never ignored. (This inverts the pre-remediation behavior,
+	// which was blind to thinking and privileged text.)
 	blocks := []*threadv1.ContentBlock{
 		{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: "deliberating..."}}},
 	}
-	if hasTextBlock(blocks) {
-		t.Error("thinking-only content must not qualify as a conversational anchor")
-	}
-}
-
-func TestHasTextBlock_MixedPrefersText(t *testing.T) {
-	blocks := []*threadv1.ContentBlock{
-		{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: "deliberating..."}}},
-		{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: "here's my reply"}}},
-	}
-	if !hasTextBlock(blocks) {
-		t.Error("thinking+text content should qualify via the text block")
+	if !hasSemanticBlock(blocks) {
+		t.Error("thinking-only content must qualify as a semantic anchor")
 	}
 }
 
