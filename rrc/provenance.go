@@ -99,25 +99,26 @@ func (e *Engine) AddEdges(edges []*rrcv1.Edge) []*rrcv1.Edge {
 	return admitted
 }
 
-// provenanceReach walks provenance edges backward from the anchor set — the
-// Local Context membership PLUS the provenance spine (the immediately
-// preceding turn, the graph's entry point for a fresh turn whose own
-// messages have no incoming edges yet; see BuildProvenanceSpine) — and
-// returns candidate message IDs ranked by accumulated descendant *mass*:
-// the recall path that surfaces required-but-low-similarity messages the
-// top-K cosine prefilter amputates before they can ever be scored.
+// provenanceReach walks provenance edges backward from the anchor set —
+// the Local Context MEMBERSHIP, i.e. the delivered window (the
+// immediately preceding turn ∪ the current turn). The window-tail is the
+// graph's entry point for a fresh turn, whose own messages have no
+// incoming edges yet. Returns candidate message IDs ranked by
+// accumulated descendant *mass*: the recall path that surfaces
+// required-but-low-similarity messages the top-K cosine prefilter
+// amputates before they can ever be scored.
 //
 // Mass, not count: each provenance edge carries a contribution weight (its
-// Score), and a node's mass is the sum over the cone of (weight along the
-// path). A single thin spine to an abandoned root scores far below the broad
-// fan-in to a live root, so the ever-present recent-tail spine does not flood
-// recall. Multi-hop reach uses the chain rule (product of edge weights along
-// the path) — the same shape A4 will calibrate; here it is the raw banked
-// weight, uncalibrated.
+// Score), and a node's mass is the sum over the anchor set of (weight along
+// the path). A single thin chain to an abandoned root scores far below the
+// broad fan-in to a live root, so the ever-present window-tail does not
+// flood recall. Multi-hop reach uses the chain rule (product of edge
+// weights along the path) — the same shape A4 will calibrate; here it is
+// the raw banked weight, uncalibrated.
 //
-// Excluded from the result: the anchor set itself (Local Context is already
-// present; spine members stay cosine-retrievable candidates but never
-// surface from their own seeding) and anything failing scope. Bounded by
+// Excluded from the result: the anchor set itself (it is DELIVERED —
+// nothing on the wire is ever re-retrieved; what surfaces is its
+// undelivered ancestry) and anything failing scope. Bounded by
 // provenanceReachCap; the boolean return reports whether the cap truncated
 // the walk (for telemetry — no silent cap).
 //
@@ -136,8 +137,8 @@ func (e *Engine) provenanceReach(anchorIDs []string, coneThreadID string, scope 
 }
 
 // ProvenanceMass computes the chain-ruled provenance mass of every
-// message reachable from the anchor set (Local Context membership plus
-// the provenance spine) through the given edge set — the same walk the
+// message reachable from the anchor set (the delivered Local Context
+// window's membership) through the given edge set — the same walk the
 // engine's recall path runs, exposed over an arbitrary edge set so
 // offline replay (mass calibration over corpus history, filtered to
 // edges as-of a turn) computes mass with the engine's exact semantics
@@ -155,12 +156,13 @@ func ProvenanceMass(edges []*rrcv1.Edge, anchorIDs []string, coneThreadID string
 }
 
 // provenanceMassWalk is the shared walk body. See provenanceReach for
-// the mass semantics and the cap contract. Anchor members (cone and spine
-// alike) seed reachability, receive mass at contribution 1.0, and are
-// excluded from the output — a seed never surfaces as a candidate off its
-// own seeding. It also returns each reached message's thread (read off the
-// provenance edges it walks), so the caller can build edges for reached
-// messages without a full-corpus lookup.
+// the mass semantics and the cap contract. Anchor members — the delivered
+// window — seed reachability and receive mass at contribution 1.0, and
+// are excluded from the output: delivered never surfaces; the walk's
+// yield is the window's undelivered ancestry. It also returns each
+// reached message's thread (read off the provenance edges it walks), so
+// the caller can build edges for reached messages without a full-corpus
+// lookup.
 func provenanceMassWalk(d *dag, anchorIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, map[string]string, bool) {
 	anchors := make(map[string]bool, len(anchorIDs))
 	for _, id := range anchorIDs {

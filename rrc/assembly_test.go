@@ -67,15 +67,15 @@ func TestHasSemanticBlock_ThinkingOnly(t *testing.T) {
 	}
 }
 
-// TestAssemble_TurnDeliverySplit pins the three-role split: Local Context
-// is the semantic discourse (query + anchor, text and thinking only), the
-// TurnDelivery record carries the whole in-flight turn — tools included —
-// to the wire through real protocol closure, and the serialized MEMBERSHIP
-// covers the delivered union so a delivered tool message is never
-// re-retrievable as a candidate. The wire may legitimately end on a
-// tool_result while the anchor is the last SEMANTIC message: those are two
-// different roles' "last elements".
-func TestAssemble_TurnDeliverySplit(t *testing.T) {
+// TestAssemble_WindowDelivery pins A2-W1..W4: Local Context is the WINDOW
+// — the immediately preceding turn ∪ the current turn — delivered whole
+// through real protocol closure (the model is never blind to the exchange
+// it is continuing, tools included), with membership covering every
+// window id (nothing delivered is re-retrievable) while the query chunks
+// stay the CURRENT turn's semantic projection. The anchor is the last
+// SEMANTIC message of the current turn; the wire's shape is delivery
+// order, not focus.
+func TestAssemble_WindowDelivery(t *testing.T) {
 	mc := newMockScorer()
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
@@ -84,67 +84,75 @@ func TestAssemble_TurnDeliverySplit(t *testing.T) {
 	cfg.MinBatchStdDev = 0
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
-	trigger := addMsg(o, "trigger", 0, "t1", "what was the password?")
-	thinking := &threadv1.Message{
-		Id: "think", ThreadId: "t1", Position: 1, Role: threadv1.Role_ROLE_ASSISTANT,
-		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Thinking{
-			Thinking: &threadv1.ThinkingContent{Text: "the user wants the stored passphrase"},
-		}}},
-	}
-	call := storedCall("tcall", "t1", "op-9", 2)
-	result := storedResult("tresult", "t1", "op-9", 3)
-	// The delivered tool result is also indexed as a retrieval candidate —
-	// the union membership must exclude it.
-	o.Register("tresult", "tool result body")
-	o.threads["tresult"] = "t1"
+	// Preceding turn (turn-A): trigger, tool pair, answer — the measured
+	// blind-seam shape ("what was the output of that command you just
+	// ran?" confabulated because none of this reached the wire).
+	prevU := withTurn(addMsg(o, "prevU", 0, "t1", "run the probe command"), "turn-A")
+	prevC := withTurn(storedCall("prevC", "t1", "op-9", 1), "turn-A")
+	prevR := withTurn(storedResult("prevR", "t1", "op-9", 2), "turn-A")
+	prevA := withTurn(addMsg(o, "prevA", 3, "t1", "the probe printed 77"), "turn-A")
+	// The tail's tool result is also indexed as a retrieval candidate —
+	// delivered membership must keep it un-retrievable.
+	o.Register("prevR", "tool result body")
+	o.threads["prevR"] = "t1"
 
-	turnRecord := []*threadv1.Message{trigger, thinking, call, result}
-	semantic := SemanticMessages(turnRecord)
-	if len(semantic) != 2 || semantic[0].Id != "trigger" || semantic[1].Id != "think" {
-		t.Fatalf("semantic projection = %v, want [trigger think]", messageIDs(semantic))
-	}
+	// Current turn (turn-B): trigger + thinking.
+	curU := withTurn(addMsg(o, "curU", 4, "t1", "what was the output of that command?"), "turn-B")
+	thinking := withTurn(&threadv1.Message{
+		Id: "curT", ThreadId: "t1", Position: 5, Role: threadv1.Role_ROLE_ASSISTANT,
+		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Thinking{
+			Thinking: &threadv1.ThinkingContent{Text: "the user asks about the probe output"},
+		}}},
+	}, "turn-B")
+
+	window := []*threadv1.Message{prevU, prevC, prevR, prevA, curU, thinking}
 
 	res, err := e.Assemble(context.Background(), AssembleRequest{
-		Anchor:       semantic[len(semantic)-1], // last SEMANTIC message: the thinking
-		Store:        sliceStore(turnRecord),
-		LocalContext: semantic,
-		TurnDelivery: turnRecord,
-		Scope:        threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
-		ThreadID:     "t1",
+		Anchor:        thinking, // last SEMANTIC message of the CURRENT turn
+		Store:         sliceStore(window),
+		LocalContext:  window,
+		CurrentTurnID: "turn-B",
+		Scope:         threadv1.SelectionScope_SELECTION_SCOPE_THREAD,
+		ThreadID:      "t1",
 	})
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
 
-	// The whole turn reached the wire in position order — closure held over
-	// the union — and the wire's last element is the tool result even
-	// though the anchor is the thinking.
-	if got := len(res.Wire); got != 4 {
-		t.Fatalf("wire len=%d, want 4 (trigger, thinking, call, result)", got)
+	// The whole window reached the wire in position order through real
+	// closure — including the PRECEDING turn's tool pair.
+	if got := len(res.Wire); got != 6 {
+		t.Fatalf("wire len=%d, want 6 (the whole window)", got)
 	}
-	last := res.Wire[len(res.Wire)-1]
-	if tr := last.Content[len(last.Content)-1].GetToolResult(); tr == nil || tr.ToolCallId != "op-9" {
-		t.Fatalf("wire must end on the turn's tool_result (delivery order), got %+v", last)
+	if tc := res.Wire[1].Content[len(res.Wire[1].Content)-1].GetToolCall(); tc == nil || tc.Id != "op-9" {
+		t.Fatalf("preceding turn's tool_call missing from the wire: %+v", res.Wire[1])
+	}
+	if tr := res.Wire[2].Content[len(res.Wire[2].Content)-1].GetToolResult(); tr == nil || tr.ToolCallId != "op-9" {
+		t.Fatalf("preceding turn's tool_result missing from the wire: %+v", res.Wire[2])
 	}
 
-	// Membership = the union (tools included): nothing delivered is
-	// re-retrievable. The query chunks stay semantic-only.
+	// Membership = the whole window; query = the current turn only.
 	sl := res.SerializedLocalContext
 	if sl == nil {
 		t.Fatal("expected a serialized local context")
 	}
-	if !sameIDs(sl.MessageIDs, []string{"trigger", "think", "tcall", "tresult"}) {
-		t.Fatalf("membership must cover the delivered union, got %v", sl.MessageIDs)
+	if !sameIDs(sl.MessageIDs, []string{"prevU", "prevC", "prevR", "prevA", "curU", "curT"}) {
+		t.Fatalf("membership must cover the whole window, got %v", sl.MessageIDs)
+	}
+	if len(sl.Chunks) != 2 {
+		t.Fatalf("query = the current turn's 2 semantic messages, got %d chunks: %+v", len(sl.Chunks), sl.Chunks)
 	}
 	for _, c := range sl.Chunks {
-		if contains(c.Text, "[tool_call") || contains(c.Text, "[tool_result") {
-			t.Fatalf("tool block leaked into the query chunks:\n%s", c.Text)
+		if contains(c.Text, "probe printed") || contains(c.Text, "run the probe") {
+			t.Fatalf("window-tail text leaked into the query chunks:\n%s", c.Text)
 		}
 	}
 	if res.Selection != nil {
 		for _, s := range res.Selection.Selected {
-			if s.MessageId == "tresult" || s.MessageId == "tcall" {
-				t.Fatalf("delivered tool message re-retrieved as a candidate: %v", s.MessageId)
+			for _, id := range sl.MessageIDs {
+				if s.MessageId == id {
+					t.Fatalf("delivered window member re-retrieved as a candidate: %v", id)
+				}
 			}
 		}
 	}

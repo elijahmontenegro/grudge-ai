@@ -13,20 +13,21 @@ import (
 
 // SelectPrerequisites scores serialized Local Context against eligible
 // stored messages and attaches prerequisite edges to the latest stored
-// event. spineIDs is the provenance spine — the immediately preceding
-// turn's message ids, seeding the mass walk's entry into the recorded
-// graph (see BuildProvenanceSpine); nil is valid (no prior turn, or the
-// recency-fallback path). Takes the engine mutex — safe for external
-// callers alongside Assemble / RecordProvenance / Fork / Merge.
-func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, scope threadv1.SelectionScope, threadID string, spineIDs []string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
+// event. The mass walk seeds from the serialized MEMBERSHIP — the
+// delivered window (preceding turn ∪ current turn), whose tail is the
+// recorded graph's entry point for a fresh turn (its own messages carry
+// no incoming provenance edges until it generates). Takes the engine
+// mutex — safe for external callers alongside Assemble /
+// RecordProvenance / Fork / Merge.
+func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.selectPrerequisitesLocked(ctx, local, anchor, scope, threadID, spineIDs)
+	return e.selectPrerequisitesLocked(ctx, local, anchor, scope, threadID)
 }
 
 // selectPrerequisitesLocked is SelectPrerequisites' body. Caller holds e.mu.
 // Candidate generation is the ANN oracle's job now, so it needs no corpus.
-func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, scope threadv1.SelectionScope, threadID string, spineIDs []string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
+func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
 	if local == nil || len(local.Chunks) == 0 {
 		return nil, PrerequisiteSelectionTelemetry{}, nil
 	}
@@ -133,16 +134,16 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	// — without it the /\ acceptance boundary has nothing to act on for
 	// roots (see structural-lift open-Q #3).
 	//
-	// The walk's anchor set is the cone (Local Context membership) UNION the
-	// provenance spine: a fresh turn's own messages have no incoming
-	// provenance edges (recorded contributor → anchor at generation time),
-	// so without the spine — the immediately preceding turn — the walk finds
-	// nothing at the trigger call and mass could neither act nor calibrate.
-	// The spine seeds reachability and receives mass like the cone but never
-	// surfaces from its own seeding; unlike the cone it is NOT in the
-	// exclusion predicate above, so prior-turn messages remain top-K cosine
-	// candidates on merit.
-	walkAnchors := append(append([]string(nil), local.MessageIDs...), spineIDs...)
+	// The walk's anchor set is the serialized MEMBERSHIP: the delivered
+	// window, preceding turn included. A fresh turn's own messages have no
+	// incoming provenance edges (recorded contributor → anchor at
+	// generation time), so the window-tail is the walk's entry into the
+	// recorded graph — without it the walk finds nothing at any trigger
+	// call and mass could neither act nor calibrate. Seeds never surface
+	// as candidates (they are delivered — the exclusion predicate above is
+	// the same id set); what surfaces is their undelivered ancestry, at
+	// its banked mass.
+	walkAnchors := local.MessageIDs
 	reachMass, reachThreads, reachTruncated := e.provenanceReach(walkAnchors, threadID, scope)
 	var provenanceReached int
 	if len(reachMass) > 0 {

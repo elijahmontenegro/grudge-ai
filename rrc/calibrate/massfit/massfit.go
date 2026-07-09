@@ -16,12 +16,12 @@
 // replaying per selection EVENT from the persisted selections table
 // rather than per turn from the raw corpus.
 //
-// Replay reconstructs, for each historical turn: the active discourse
-// as selection saw it (the turn through its trigger — not the turn's
-// finished message group) plus the provenance spine (the immediately
-// preceding turn) seeding the mass walk exactly as live selection seeds
-// it, the corpus and provenance edges as they existed when the turn ran
-// (as-of filtering by timestamp), the
+// Replay reconstructs, for each historical turn: the Local Context
+// window as selection saw it (the immediately preceding turn ∪ the turn
+// through its trigger — not the turn's finished message group), seeding
+// the mass walk from the whole window exactly as live selection seeds it
+// from the serialized membership, the corpus and provenance edges as
+// they existed when the turn ran (as-of filtering by timestamp), the
 // chain-ruled provenance mass of every reachable candidate (via
 // rrc.ProvenanceMass — the engine's exact walk, not a
 // reimplementation), the candidate's live similarity under the CURRENT
@@ -122,14 +122,17 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 	var samples []calibrate.LabeledSample
 	var stats Stats
 
-	// The replay cone must be the active discourse AS SELECTION SAW IT:
-	// the turn through its trigger — NOT the turn's full post-hoc message
-	// group (the generated messages did not exist at selection time; using
-	// them would leak the future). The mass walk is seeded with the cone
-	// PLUS the provenance spine (the immediately preceding turn), exactly
-	// as live selection seeds it: a trigger has no incoming provenance
-	// edges — they are recorded at generation, i.e. after — so a cone-only
-	// walk would find nothing at any trigger call and B could never fit.
+	// The replay window must be the Local Context AS SELECTION SAW IT:
+	// the immediately preceding turn ∪ the turn through its trigger — NOT
+	// the turn's full post-hoc message group (the generated messages did
+	// not exist at selection time; using them would leak the future). The
+	// mass walk seeds from the whole window, exactly as live selection
+	// seeds it from the serialized membership: a trigger has no incoming
+	// provenance edges — they are recorded at generation, i.e. after — so
+	// a turn-only walk would find nothing at any trigger call and B could
+	// never fit. Window members are delivered, so they are excluded from
+	// candidacy AND from the walk's own output — what surfaces (and gets
+	// judged) is their undelivered ancestry.
 	fallbackN := rrc.DefaultConfig().LocalContextSize
 
 	byThread := make(map[string][]*threadv1.Message)
@@ -175,18 +178,36 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 		if len(coneMsgs) == 0 {
 			continue
 		}
-		cone := make(map[string]bool, len(coneMsgs))
-		coneIDs := make([]string, 0, len(coneMsgs))
-		for _, m := range coneMsgs {
-			cone[m.Id] = true
-			coneIDs = append(coneIDs, m.Id)
+		// Window = the immediately preceding turn ∪ the turn-through-
+		// trigger, mirroring the live window fetch (turn-complete; legacy
+		// empty-turn rows never form a tail). Derived from the replay's
+		// own corpus slice — no storage reads.
+		windowMsgs := coneMsgs
+		if turn.id != "" {
+			tailTurn := ""
+			for i := len(threadThroughTrigger) - 1; i >= 0; i-- {
+				m := threadThroughTrigger[i]
+				if m.TurnId != "" && m.TurnId != turn.id {
+					tailTurn = m.TurnId
+					break
+				}
+			}
+			if tailTurn != "" {
+				var tail []*threadv1.Message
+				for _, m := range threadThroughTrigger {
+					if m.TurnId == tailTurn {
+						tail = append(tail, m)
+					}
+				}
+				windowMsgs = append(tail, coneMsgs...)
+			}
 		}
-		// The walk's anchor set = cone ∪ spine, mirroring live selection.
-		// Spine members stay eligible CANDIDATES below (they are excluded
-		// only from the walk's own output, exactly as live) — the candidate
-		// filter keys on the cone alone.
-		spineIDs := rrc.BuildProvenanceSpine(threadThroughTrigger, turn.id)
-		walkAnchors := append(append([]string(nil), coneIDs...), spineIDs...)
+		window := make(map[string]bool, len(windowMsgs))
+		walkAnchors := make([]string, 0, len(windowMsgs))
+		for _, m := range windowMsgs {
+			window[m.Id] = true
+			walkAnchors = append(walkAnchors, m.Id)
+		}
 
 		// The world as this turn saw it.
 		var edgesAsOf []*rrcv1.Edge
@@ -198,7 +219,7 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 		asOf := make(map[string]bool, len(corpus))
 		var asOfIDs []string
 		for _, m := range corpus {
-			if m.CreatedAt.AsTime().Before(anchorTime) && !cone[m.Id] && rrc.SerializeMessageForScoring(m) != "" {
+			if m.CreatedAt.AsTime().Before(anchorTime) && !window[m.Id] && rrc.SerializeMessageForScoring(m) != "" {
 				asOf[m.Id] = true
 				asOfIDs = append(asOfIDs, m.Id)
 			}
@@ -256,7 +277,7 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 		// from the same as-of corpus — the coverage-bias corrective.
 		contrastIDs := drawContrast(rng, asOfIDs, mass, len(massIDs))
 
-		local := rrc.SerializeLocalContext(coneMsgs, "", chunkCfg)
+		local := rrc.SerializeLocalContext(windowMsgs, turn.id, chunkCfg)
 		if local == nil || len(local.Chunks) == 0 {
 			continue
 		}

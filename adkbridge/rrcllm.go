@@ -47,9 +47,12 @@ type TokenScales interface {
 // and its shape matches rrc.CorpusStore so it flows straight into
 // AssembleRequest.Store.
 type CorpusStore interface {
-	// Local Context construction (bounded, invariant under corpus growth).
+	// Local Context window construction (bounded, invariant under corpus
+	// growth): the current turn and its immediately preceding turn, each
+	// fetched turn-complete, plus the recency gate/fallback.
 	RecentMessages(threadID string, n int) ([]*threadv1.Message, error)
 	TurnMessages(threadID, turnID string) ([]*threadv1.Message, error)
+	PrecedingTurnID(threadID, currentTurnID string) (string, error)
 	// Assemble's Store (also the rrc.CorpusStore shape).
 	Messages(ids []string) (map[string]*threadv1.Message, error)
 	TurnPeers(msgs []*threadv1.Message) ([]*threadv1.Message, error)
@@ -124,10 +127,19 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 		protoTools := toolDeclarations(req)
 
 		cfg := r.engine.Config()
-		// Local Context from bounded, indexed fetches — never the full corpus:
-		// the in-flight turn (by turn_id) unioned with a recency window (last-N
-		// by position). Both are invariant under corpus growth. Candidate
-		// generation is the ANN index's job now, so no candidate corpus loads.
+		// Local Context is the in-flight WINDOW: the immediately preceding
+		// turn ∪ the current turn record, each fetched TURN-COMPLETE from
+		// bounded, indexed reads — never the full corpus and never a
+		// size-truncated slice (a recency LIMIT decapitates a long
+		// preceding turn, and loses it entirely once the current turn
+		// outgrows the limit — which is exactly how the old spine went
+		// blind mid-tool-loop). The window serves both consumers: the
+		// network sees it whole (tools included — the model is never blind
+		// to the exchange it is continuing), and the engine takes
+		// membership, exclusion, and mass-walk seeds from it while the
+		// QUERY stays the current turn's semantic projection. The recency
+		// fetch survives as the empty-corpus gate and the no-turn-identity
+		// fallback window (an autonomous tick with nothing stored yet).
 		recent, err := r.db.RecentMessages(r.threadID, cfg.LocalContextSize)
 		if err != nil {
 			yield(nil, fmt.Errorf("load recent messages: %w", err))
@@ -142,43 +154,52 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 			yield(nil, fmt.Errorf("load turn messages: %w", err))
 			return
 		}
-		window := mergeByPosition(recent, turnMsgs)
+		window := recent
+		effTurnID := ""
+		if r.CurrentTurnID != "" && len(turnMsgs) > 0 {
+			effTurnID = r.CurrentTurnID
+			precedingID, perr := r.db.PrecedingTurnID(r.threadID, r.CurrentTurnID)
+			if perr != nil {
+				yield(nil, fmt.Errorf("load preceding turn id: %w", perr))
+				return
+			}
+			var preceding []*threadv1.Message
+			if precedingID != "" {
+				if preceding, err = r.db.TurnMessages(r.threadID, precedingID); err != nil {
+					yield(nil, fmt.Errorf("load preceding turn: %w", err))
+					return
+				}
+			}
+			window = mergeByPosition(preceding, turnMsgs)
+		}
 
-		// The turn RECORD (delivery: the model must see its own turn whole,
-		// tools included) vs Local Context (the semantic discourse: the
-		// query and the anchor). One slice used to play both roles; the
-		// split keeps tools out of Local Context without breaking the
-		// agentic loop. Falls back to bounded recency when no turn identity
-		// is available (an autonomous tick's first call).
-		turnRecord := rrc.BuildActiveDiscourse(window, r.CurrentTurnID, cfg.LocalContextSize)
+		// The turn RECORD — the in-flight suffix of the window — still
+		// derives the anchor (and, after generation, the provenance
+		// contributors). The window-tail is delivery and graph seeding,
+		// never discourse focus.
+		turnRecord := rrc.BuildActiveDiscourse(window, effTurnID, cfg.LocalContextSize)
 		localContext := rrc.SemanticMessages(turnRecord)
 		if len(localContext) == 0 {
 			yield(nil, fmt.Errorf("RRC: no semantic Local Context in the active turn (%d record messages)", len(turnRecord)))
 			return
 		}
-		// The anchor is the last SEMANTIC message — the current discourse
-		// focus (the trigger at call 1, the latest thinking mid-turn) —
-		// never a trailing tool_result: edges, selections, and provenance
-		// target the reasoning, not mechanical blocks.
+		// The anchor is the last SEMANTIC message of the current turn — the
+		// discourse focus (the trigger at call 1, the latest thinking
+		// mid-turn) — never a trailing tool_result: edges, selections, and
+		// provenance target the reasoning, not mechanical blocks.
 		anchor := localContext[len(localContext)-1]
-
-		// Provenance spine: the immediately preceding turn, derived from the
-		// window already in hand (zero extra reads). Seeds the mass walk's
-		// entry into the recorded graph — a fresh turn's own messages carry
-		// no incoming provenance edges yet. Walk seed only; never query
-		// material, never delivered, never excluded from retrieval.
-		spineIDs := rrc.BuildProvenanceSpine(window, r.CurrentTurnID)
 
 		// ADK supplies no current content for an autonomous continuation
 		// without a newly stored event. Such a tick keeps native Local
 		// Context but does not invent a serialization or audit event.
-		// Serialized over the delivered union (turn record): the query
-		// Chunks come out semantic-only by construction, while MessageIDs —
-		// membership: exclusion, provenance cone, audit — cover everything
-		// delivered, tools included, so nothing delivered is re-retrieved.
+		// Serialized over the WINDOW: MessageIDs — membership: exclusion,
+		// mass-walk seeds, audit — cover everything delivered, tools and
+		// tail included, so nothing delivered is ever re-retrieved; the
+		// query Chunks stay the current turn's semantic projection via the
+		// discriminator.
 		var serializedLocal *rrc.SerializedLocalContext
 		if len(req.Contents) > 0 {
-			serializedLocal = rrc.SerializeLocalContext(turnRecord, "", cfg.Chunk)
+			serializedLocal = rrc.SerializeLocalContext(window, effTurnID, cfg.Chunk)
 		}
 
 		// Budget conversion: ContextBudgetTokens is model truth (the
@@ -205,16 +226,15 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 		var priorSelection *rrcv1.SelectionResult
 		for {
 			result, err := r.engine.Assemble(ctx, rrc.AssembleRequest{
-				SerializedLocalContext: serializedLocal, Anchor: anchor, Store: r.db, LocalContext: localContext,
-				TurnDelivery: turnRecord,
-				Scope:        r.Scope, ThreadID: r.threadID, System: systemMsg,
+				SerializedLocalContext: serializedLocal, Anchor: anchor, Store: r.db, LocalContext: window,
+				CurrentTurnID: effTurnID,
+				Scope:         r.Scope, ThreadID: r.threadID, System: systemMsg,
 				Budget: budget, HeadroomPct: cfg.BudgetHeadroomPct,
-				PerMsgDelim:        cfg.PerMsgDelimiterTokens,
-				FixedTokens:        estimateToolSchemaTokens(protoTools, cfg.Chunk),
-				ExcludeIDs:         excludeIDs,
-				ProvenanceSpineIDs: spineIDs,
-				PriorSelection:     priorSelection,
-				CountText:          r.CountText,
+				PerMsgDelim:    cfg.PerMsgDelimiterTokens,
+				FixedTokens:    estimateToolSchemaTokens(protoTools, cfg.Chunk),
+				ExcludeIDs:     excludeIDs,
+				PriorSelection: priorSelection,
+				CountText:      r.CountText,
 			})
 			if err != nil {
 				yield(nil, err)

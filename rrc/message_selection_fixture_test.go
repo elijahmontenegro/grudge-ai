@@ -21,5 +21,5 @@ func (e *Engine) selectViaFixture(ctx context.Context, message *threadv1.Message
 		MessageIDs:  []string{message.Id},
 		Chunks:      []SerializedLocalContextChunk{{Index: 0, Text: strings.TrimSpace(pbtext.TextFromBlocks(message.Content))}},
 	}
-	return e.SelectPrerequisites(ctx, serialized, message, threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS, message.ThreadId, nil)
+	return e.SelectPrerequisites(ctx, serialized, message, threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS, message.ThreadId)
 }

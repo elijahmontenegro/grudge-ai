@@ -36,12 +36,12 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	if req.HeadroomPct > 0 && req.HeadroomPct <= 1 {
 		effectiveBudget = int(float64(req.Budget) * req.HeadroomPct)
 	}
-	// Delivery roots = Local Context (the semantic discourse: query and
-	// anchor) UNION TurnDelivery (the whole in-flight turn record, tools
-	// included). One slice used to play both roles; the split keeps tools
-	// out of Local Context while the model still sees its own turn whole on
-	// the wire. Nil TurnDelivery degenerates to Local Context alone.
-	deliveryRoots := unionByPosition(req.LocalContext, req.TurnDelivery)
+	// Delivery roots = Local Context, THE window: the immediately preceding
+	// turn ∪ the current turn record, all block types. The whole window is
+	// delivered — the model is never blind to the exchange it is continuing
+	// — while the query stays the current turn's semantic projection
+	// (CurrentTurnID discriminates inside SerializeLocalContext).
+	deliveryRoots := append([]*threadv1.Message(nil), req.LocalContext...)
 	// Bounded protocol index for delivery closure: the delivery roots plus
 	// the messages sharing their turns, where any tool-call/result
 	// counterparts live.
@@ -100,7 +100,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	case serializedLocal != nil:
 		e.mu.Lock()
 		var err error
-		edges, prerequisiteSelection, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Scope, req.ThreadID, req.ProvenanceSpineIDs)
+		edges, prerequisiteSelection, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Scope, req.ThreadID)
 		if err != nil {
 			e.mu.Unlock()
 			return AssembleResult{}, fmt.Errorf("assemble SelectPrerequisites: %w", err)
@@ -300,26 +300,6 @@ type AssembleRequest struct {
 	// reproduces the undiscriminated behavior byte-for-byte.
 	CurrentTurnID string
 
-	// TurnDelivery is the whole in-flight turn verbatim — tools included —
-	// guaranteeing the model sees its own turn on the wire. Local Context
-	// (the semantic discourse: the query and the anchor) and TurnDelivery
-	// (the mechanical turn record) are distinct roles this request used to
-	// fuse into one slice; the delivery roots are their union by position,
-	// and the serialized membership (MessageIDs — exclusion, provenance
-	// cone, audit) covers the union while the query Chunks stay semantic.
-	// Nil is valid: the union degenerates to LocalContext (tests, benches,
-	// callers without turn structure).
-	TurnDelivery []*threadv1.Message
-
-	// ProvenanceSpineIDs seeds the provenance mass walk with the immediately
-	// preceding turn's message ids — the recorded graph's entry point for a
-	// fresh turn, whose own messages have no incoming provenance edges until
-	// it generates. Graph-walk seed ONLY: never query material, never
-	// delivered, never excluded from retrieval. See BuildProvenanceSpine.
-	// Nil is valid (no prior turn, or the recency-fallback path, where the
-	// window already spans prior turns).
-	ProvenanceSpineIDs []string
-
 	// CountText overrides how a wire message's text is extracted for
 	// budget counting. Providers' codecs send different subsets of a
 	// message's content blocks (some drop thinking, some send text
@@ -428,32 +408,6 @@ func (e *Engine) wireTokens(countText func(*llmv1.LLMMessage) string, system *ll
 		total += e.cfg.Chunk.Estimate(countText(m)) + delim
 	}
 	return total
-}
-
-// unionByPosition merges two message slices, deduplicating by id and
-// ordering by (ThreadId, Position) — the same corpus order groupsToWire
-// emits. Local Context is normally a subset of TurnDelivery; an empty
-// second slice yields the first unchanged.
-func unionByPosition(a, b []*threadv1.Message) []*threadv1.Message {
-	if len(b) == 0 {
-		return append([]*threadv1.Message(nil), a...)
-	}
-	seen := make(map[string]bool, len(a)+len(b))
-	out := make([]*threadv1.Message, 0, len(a)+len(b))
-	for _, m := range append(append([]*threadv1.Message(nil), a...), b...) {
-		if m == nil || seen[m.Id] {
-			continue
-		}
-		seen[m.Id] = true
-		out = append(out, m)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].ThreadId != out[j].ThreadId {
-			return out[i].ThreadId < out[j].ThreadId
-		}
-		return out[i].Position < out[j].Position
-	})
-	return out
 }
 
 // pinnedLocalIDs pins the Anchor (by id — under the window the last

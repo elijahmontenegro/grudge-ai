@@ -212,10 +212,10 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	engine := testEngine(scorer, oracle)
 	serialized := testSerializedLocalContext(anchor)
 
-	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1", nil); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1", nil); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if scorer.callCount != 1 {
@@ -223,7 +223,7 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	}
 	changed := *serialized
 	changed.Fingerprint = serialized.Fingerprint + "-changed"
-	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1", nil); err != nil {
+	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if scorer.callCount != 2 {
@@ -346,42 +346,6 @@ func TestBuildActiveDiscourse_UnknownTurnIDFallsBack(t *testing.T) {
 	got := messageIDs(BuildActiveDiscourse(corpus, "turn-not-yet-stored", 2))
 	if len(got) == 0 {
 		t.Fatal("unknown turn id must fall back to recency, not return empty")
-	}
-}
-
-// TestBuildProvenanceSpine: the spine is the immediately preceding TURN —
-// turn-shaped (the discourse unit), never a message count — and exists only
-// when turn identity does.
-func TestBuildProvenanceSpine(t *testing.T) {
-	window := []*threadv1.Message{
-		withTurn(localMessage("z0", threadv1.Role_ROLE_USER, 0, textBlock("older ask")), "turn-Z"),
-		withTurn(localMessage("a0", threadv1.Role_ROLE_USER, 1, textBlock("prior ask")), "turn-A"),
-		withTurn(localMessage("a1", threadv1.Role_ROLE_ASSISTANT, 2, textBlock("prior answer")), "turn-A"),
-		withTurn(localMessage("b0", threadv1.Role_ROLE_USER, 3, textBlock("current ask")), "turn-B"),
-	}
-	// The latest complete turn before the current one — all of it, and only it.
-	if got := BuildProvenanceSpine(window, "turn-B"); !sameIDs(got, []string{"a0", "a1"}) {
-		t.Fatalf("spine=%v, want [a0 a1] (the immediately preceding turn)", got)
-	}
-	// No current turn identity (recency-fallback path): no spine — the
-	// window already spans prior turns.
-	if got := BuildProvenanceSpine(window, ""); got != nil {
-		t.Fatalf("no-turn-id path must have no spine, got %v", got)
-	}
-	// No preceding turn at all (thread's first turn).
-	first := []*threadv1.Message{
-		withTurn(localMessage("b0", threadv1.Role_ROLE_USER, 0, textBlock("first ask")), "turn-B"),
-	}
-	if got := BuildProvenanceSpine(first, "turn-B"); got != nil {
-		t.Fatalf("first turn has no spine, got %v", got)
-	}
-	// Legacy rows without turn identity form no spine.
-	legacy := []*threadv1.Message{
-		localMessage("l0", threadv1.Role_ROLE_USER, 0, textBlock("legacy")),
-		withTurn(localMessage("b0", threadv1.Role_ROLE_USER, 1, textBlock("current ask")), "turn-B"),
-	}
-	if got := BuildProvenanceSpine(legacy, "turn-B"); got != nil {
-		t.Fatalf("legacy empty-turn rows must form no spine, got %v", got)
 	}
 }
 

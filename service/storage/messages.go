@@ -461,6 +461,25 @@ func (d *DB) MaxPosition(threadID string) int64 {
 	return pos
 }
 
+// PrecedingTurnID returns the latest turn id in the thread other than
+// currentTurnID, "" when none exists. This selects the Local Context
+// window's tail: the immediately preceding turn — the discourse state the
+// in-flight turn continues, delivered whole so the model is never blind
+// to the exchange it is continuing. Walks idx_messages_thread_pos
+// backwards and stops at the first non-current, non-empty turn id, so
+// rows examined are bounded by the current turn's own length —
+// corpus-invariant. Legacy rows with empty turn_id never form a tail.
+func (d *DB) PrecedingTurnID(threadID, currentTurnID string) (string, error) {
+	var id string
+	err := d.QueryRow(`SELECT turn_id FROM messages
+		WHERE thread_id = ? AND turn_id != '' AND turn_id != ?
+		ORDER BY position DESC LIMIT 1`, threadID, currentTurnID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return id, err
+}
+
 // marshalContentBlocks encodes repeated ContentBlock as a proto wrapper.
 func marshalContentBlocks(blocks []*threadv1.ContentBlock) ([]byte, error) {
 	// Use LLMMessage as a wrapper since it has repeated ContentBlock

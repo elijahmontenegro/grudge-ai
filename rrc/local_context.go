@@ -36,22 +36,28 @@ type SerializedLocalContext struct {
 // 40-step tool loop keeps all 40 steps, and the triggering event is never
 // pushed out.
 //
-// The turn record is the DELIVERY set (TurnDelivery — the model must see
-// its own turn whole, tools included). Local Context proper — the semantic
-// discourse that queries and anchors — is its SemanticMessages projection;
-// tools are turn record, never discourse.
+// The turn record is the in-flight SUFFIX of Local Context — the window
+// spanning the immediately preceding turn and the current turn, delivered
+// whole to the model. Within the window, the turn record derives the
+// anchor (via its SemanticMessages projection: the discourse that queries
+// and anchors — tools are record, never discourse) and, after generation,
+// the provenance contributors. The window-tail is delivery, membership,
+// and graph seeding; the turn record is focus.
 //
-// The turn is the bounding unit. Nothing reaches backward out of it: prior
-// turns already spent their selections producing this one, and a
+// The QUERY is bounded by the turn. Nothing queries backward out of it:
+// prior turns already spent their selections producing this one, and a
 // referential fragment ("yes, do that") is disambiguated by the system's
-// own mechanisms — retrieval (similarity plus banked provenance mass) and,
+// own mechanisms — the delivered window (the exchange being continued is
+// on the wire), retrieval (similarity plus banked provenance mass), and,
 // at the next model call, the model's thinking restating the referent —
-// never by grabbing a positional neighbor. A lone user question is a
-// complete, valid Local Context. (An earlier reachBackForAnchors imported
-// the nearest prior user/assistant message when the turn lacked an
-// "anchor pair"; that backward positional grab is a rejected anti-pattern
-// — it blended off-topic neighbors into the query and measurably
-// suppressed true prerequisites below the acceptance floor.)
+// never by grabbing a positional neighbor into the query. (An earlier
+// reachBackForAnchors imported the nearest prior user/assistant message
+// INTO THE QUERY when the turn lacked an "anchor pair"; that backward
+// positional grab is a rejected anti-pattern — it blended off-topic
+// neighbors into the query and measurably suppressed true prerequisites
+// below the acceptance floor. It was also, covertly, the only delivery
+// of the preceding exchange; the window now does that job in the right
+// layer.)
 //
 // One fallback where turn identity is unavailable — currentTurnID == ""
 // or no message of the turn stored yet (an autonomous tick's first model
@@ -98,49 +104,6 @@ func SemanticMessages(msgs []*threadv1.Message) []*threadv1.Message {
 		}
 	}
 	return out
-}
-
-// BuildProvenanceSpine returns the message IDs of the immediately preceding
-// turn in the window — the provenance walk's entry into the recorded graph.
-// A fresh turn's own messages have no incoming provenance edges (edges are
-// recorded contributor → anchor at generation time, i.e. after), so a
-// turn-only walk seed finds nothing at the trigger call and the mass lift
-// could neither act nor ever calibrate (replay reconstructs trigger-call
-// cones). The spine is the discourse state this turn continues: seeding the
-// walk with it lets the fresh turn INHERIT the influence its thread already
-// banked — the prior turn's spent selections, flowing forward through
-// recorded edges — instead of re-deriving them.
-//
-// The spine is a GRAPH-WALK seed and nothing else: it contributes no query
-// chunk (dilution is structurally impossible), is not delivered, is not
-// excluded from retrieval (prior-turn messages stay cosine candidates on
-// merit), and is not a provenance contributor. Turn-shaped by design — the
-// turn is the discourse unit, not a message count. Legacy rows without turn
-// identity form no spine; with no current turn id (the recency-window
-// fallback) the window already spans prior turns and needs no spine.
-func BuildProvenanceSpine(window []*threadv1.Message, currentTurnID string) []string {
-	if currentTurnID == "" {
-		return nil
-	}
-	spineTurn := ""
-	for i := len(window) - 1; i >= 0; i-- {
-		m := window[i]
-		if m.TurnId == "" || m.TurnId == currentTurnID {
-			continue
-		}
-		spineTurn = m.TurnId
-		break
-	}
-	if spineTurn == "" {
-		return nil
-	}
-	var ids []string
-	for _, m := range window {
-		if m.TurnId == spineTurn {
-			ids = append(ids, m.Id)
-		}
-	}
-	return ids
 }
 
 // BuildLocalContext returns the bounded same-thread discourse ending at
