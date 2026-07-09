@@ -94,7 +94,6 @@ type EngineConfig struct {
 	// context size, reserving max output tokens via BudgetHeadroomPct.
 	ContextBudgetTokens int
 
-
 	// BudgetHeadroomPct is a fixed global margin on the context
 	// budget. estimate ≤ ContextBudgetTokens × BudgetHeadroomPct.
 	// A pure safety margin: output-token reserve plus residual

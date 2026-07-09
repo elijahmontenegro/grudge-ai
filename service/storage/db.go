@@ -106,7 +106,7 @@ func (d *DB) initialize() error {
 // migrateV4ToV5 adds the edges.scorer_model observation-attribute column
 // (instrument identity: which scorer's units the edge's raw similarity
 // and contribution weights are in — the retroactively-unrecoverable
-// stamp). Pre-existing edges keep '' — honest: their instrument was
+// stamp). Pre-existing edges keep ” — honest: their instrument was
 // never recorded, which is exactly the gap the stamp closes going
 // forward. Idempotent via the column check so a step interrupted between
 // ALTER and the identity update re-runs cleanly.
