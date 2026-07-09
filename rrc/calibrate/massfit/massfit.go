@@ -54,7 +54,7 @@ import (
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
 
-// judgeMaxAttempts / maxToleratedDrops make the replay resilient to
+// judgeMaxAttempts / dropTolerance make the replay resilient to
 // TRANSIENT scorer/judge failures without letting SYSTEMATIC breakage
 // silently thin the sample set. The judge is often a cloud model
 // (regenjudge runs the main completer); a 128-call replay firing rapidly
@@ -65,8 +65,31 @@ import (
 // so the caller can log it (no silent cap). Only when drops exceed the
 // tolerance is it systematic — a broken judge/scorer — and the replay
 // aborts loudly.
-const judgeMaxAttempts = 3
-const maxToleratedDrops = 8
+const judgeMaxAttempts = 4
+
+// dropTolerance is how many post-retry sample failures are treated as
+// transient noise before the replay declares systematic breakage. It
+// SCALES with the label budget: a long run (512 labels, ~30 min against a
+// cloud judge) naturally accumulates momentary timeouts, and a cloud
+// judge under a sustained call burst was MEASURED to fail ~10% of calls
+// even after retries. So the tolerance sits at 25% of the budget (floor
+// 8): comfortably above an ordinarily-flaky cloud judge, still far below
+// a genuinely broken one (which fails ~100%). Drops don't bias the fit —
+// failures are random w.r.t. sim/mass/label — so a fit on 75%+ survivors
+// is sound; the guard's job is only to refuse a fit on a broken judge.
+func dropTolerance() int {
+	if t := maxLabels / 4; t > 8 {
+		return t
+	}
+	return 8
+}
+
+// OnSample, when set, is called for every labeled (mass?, sim, mass,
+// verdict) pair — calibration introspection so a fit's outcome can be
+// read against the actual data (is the mass→need relation linear,
+// non-monotonic, flat?) rather than inferred from the coefficient alone.
+// Nil in production; the caller wires it behind an env gate.
+var OnSample func(withMass bool, sim, mass float64, isPrereq bool)
 
 // retryTransient runs op up to judgeMaxAttempts with linear backoff,
 // returning the last error if all attempts fail. Cancellation is honored
@@ -75,10 +98,13 @@ func retryTransient(ctx context.Context, op func() error) error {
 	var err error
 	for attempt := 0; attempt < judgeMaxAttempts; attempt++ {
 		if attempt > 0 {
+			// Real backoff (1s, 2s, 3s): a cloud judge's context-deadline
+			// timeout wants recovery time, not an immediate re-fire that
+			// hits the same congestion and burns a retry for nothing.
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+			case <-time.After(time.Duration(attempt) * time.Second):
 			}
 		}
 		if err = op(); err == nil {
@@ -98,13 +124,15 @@ type Scorer interface {
 // maxLabels bounds one replay run's judge work. Per-run cost is a
 // constant, not corpus-proportional — the per-step-invariance stance;
 // total cost across a corpus's life is amortized by the caller's
-// doubling watermark. Deliberately generous relative to the seed set's
-// ~155 samples so the mass axis is not starved.
-const maxLabels = 128
+// doubling watermark. Sized so the mass axis is fit on a
+// statistically-meaningful sample: at 128 the fitted B was dominated by
+// noise (a single coefficient on ~65 mass pairs), so it is raised to
+// give the fit real power. The judge is bounded per run regardless.
+const maxLabels = 512
 
 // perTurnMassCap bounds mass-bearing candidates taken per turn, so one
 // heavily-provenanced turn cannot monopolize the label budget.
-const perTurnMassCap = 4
+const perTurnMassCap = 10
 
 // localChunkCap bounds how many Local Context chunks score each
 // candidate (max-merged) — mirrors the engine's per-chunk max-merge
@@ -127,7 +155,7 @@ type Stats struct {
 	Truncated bool
 	// Dropped counts (candidate) samples skipped after a scorer or judge
 	// call failed every retry — transient infrastructure hiccups tolerated
-	// up to maxToleratedDrops. Surfaced so a thinned sample set is never
+	// up to dropTolerance(). Surfaced so a thinned sample set is never
 	// silent; past the tolerance Replay aborts instead.
 	Dropped int
 }
@@ -352,8 +380,8 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 					// sim/mass/label). Past the tolerance it is systematic
 					// breakage, not noise, and we abort loudly.
 					stats.Dropped++
-					if stats.Dropped > maxToleratedDrops {
-						return nil, stats, fmt.Errorf("massfit: %d transient scorer/judge failures exceed tolerance (%d) — infrastructure unstable, aborting (last scorer=%v judge=%v)", stats.Dropped, maxToleratedDrops, serr, jerr)
+					if stats.Dropped > dropTolerance() {
+						return nil, stats, fmt.Errorf("massfit: %d transient scorer/judge failures exceed tolerance (%d) — infrastructure unstable, aborting (last scorer=%v judge=%v)", stats.Dropped, dropTolerance(), serr, jerr)
 					}
 					continue
 				}
@@ -363,6 +391,9 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 					stats.MassPairs++
 				} else {
 					stats.ContrastPairs++
+				}
+				if OnSample != nil {
+					OnSample(group.withMass, sim, m, isPrereq)
 				}
 				samples = append(samples, calibrate.LabeledSample{Sim: sim, Mass: m, IsPrereq: isPrereq})
 			}

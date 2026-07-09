@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -440,6 +441,17 @@ func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scor
 	}
 
 	log.Printf("[Calibrate] mass refit armed for %s (%d provenance edges, prior fit at %d) — replaying corpus", scorerModelID, edgeCount, art.ProvenanceEdgesAtFit)
+	// Calibration introspection, env-gated: dump each labeled pair so a
+	// fit's outcome can be read against the data, not inferred from B.
+	if os.Getenv("GRUDGE_MASSFIT_DUMP") != "" {
+		massfit.OnSample = func(withMass bool, sim, mass float64, isPrereq bool) {
+			kind := "CONTRAST"
+			if withMass {
+				kind = "MASS"
+			}
+			log.Printf("[MassSample] %s sim=%.4f mass=%.4f prereq=%v", kind, sim, mass, isPrereq)
+		}
+	}
 	judge := regenjudge.New(completer, massfit.NewCorpusProvider(corpus))
 	replaySamples, stats, err := massfit.Replay(ctx, corpus, edges, scorer, judge, chunkCfg)
 	if err != nil {
