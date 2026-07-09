@@ -5,8 +5,9 @@ against the LIVE Docker services (not isolated-model loaders). Compares against
 the prior isolated-model result of 29/31 stage-2 top-1.
 
 If parity holds, the substrate is correctly wired through the live HTTP path
-end-to-end (TEI /embed + Qwen3 instruct prefix + vLLM /v1/chat/completions
-+ enable_thinking=false + Yes-token logprob extraction + sigmoid recipe).
+end-to-end (TEI /embed + Qwen3 instruct prefix + vLLM /classify score-model
+serving + raw "Yes"-logit head + sigmoid(logit/5) recipe — the same path
+core/adapter/zerank/zerank.go scores through in production).
 """
 import json
 import math
@@ -40,31 +41,33 @@ def embed(texts, prefix=""):
     return np.asarray(r.json(), dtype=np.float32)
 
 
-def rerank_score(query, candidate):
-    """One vLLM call mirroring core/adapter/zerank/zerank.go scoreOne."""
-    r = requests.post(f"{VLLM_URL}/v1/chat/completions", json={
+def rerank_scores(query, candidates):
+    """One batched vLLM /classify call mirroring core/adapter/zerank/zerank.go.
+
+    zerank is served as a vLLM SCORE model (re-headed to sequence
+    classification whose single classifier weight is the "Yes" lm_head
+    row), so the pooled /classify logit IS the raw "Yes" logit.
+    use_activation=false returns it raw (vLLM's built-in sigmoid lacks
+    the /5 temperature and saturates); the model card's sigmoid(logit/5)
+    maps it to [0,1]. Prompts carry the generation suffix, byte-identical
+    to apply_chat_template(add_generation_prompt=True) — vLLM's own
+    messages mode would pool the wrong position. This replaced the dead
+    pre-score-model recipe (/v1/chat/completions + Yes-token logprob),
+    which 404s under score-model serving.
+    """
+    inputs = [
+        "<|im_start|>system\n" + query + "<|im_end|>\n"
+        "<|im_start|>user\n" + doc + "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        for doc in candidates
+    ]
+    r = requests.post(f"{VLLM_URL}/classify", json={
         "model": "zeroentropy/zerank-1-small",
-        "messages": [
-            {"role": "system", "content": query},
-            {"role": "user", "content": candidate},
-        ],
-        "max_tokens": 1,
-        "temperature": 0,
-        "logprobs": True,
-        "top_logprobs": 20,
-        "chat_template_kwargs": {"enable_thinking": False},
-    }, timeout=60)
+        "input": inputs,
+        "use_activation": False,
+    }, timeout=120)
     r.raise_for_status()
-    d = r.json()
-    top = d["choices"][0]["logprobs"]["content"][0]["top_logprobs"]
-    yes_lp = -math.inf
-    for tok in top:
-        t = tok["token"].lstrip(" \t")
-        if t in ("Yes", "yes"):
-            yes_lp = max(yes_lp, tok["logprob"])
-    if yes_lp == -math.inf:
-        return 0.0
-    return 1.0 / (1.0 + math.exp(-yes_lp / 5.0))
+    return [1.0 / (1.0 + math.exp(-d["probs"][0] / 5.0)) for d in r.json()["data"]]
 
 
 def main():
@@ -94,7 +97,7 @@ def main():
 
         # Stage 1: 5-way, rerank all
         s1_texts = [p["correct"]] + p["distractors"]
-        s1_l2 = [rerank_score(p["query"], t) for t in s1_texts]
+        s1_l2 = rerank_scores(p["query"], s1_texts)
         s1_rank = sorted(range(len(s1_texts)), key=lambda i: -s1_l2[i]).index(0) + 1
 
         # Stage 2: 29-way, dense top-K then rerank
@@ -105,7 +108,7 @@ def main():
         s2_l1 = s2_l1_embs @ q_emb
         topk_idx = np.argsort(-s2_l1)[:RERANK_TOP_K].tolist()
         topk_texts = [s2_texts[i] for i in topk_idx]
-        s2_l2 = [rerank_score(p["query"], t) for t in topk_texts]
+        s2_l2 = rerank_scores(p["query"], topk_texts)
         s2_reranked = sorted(zip(topk_idx, s2_l2), key=lambda x: -x[1])
         s2_order = [i for i, _ in s2_reranked]
         s2_rank = s2_order.index(0) + 1 if 0 in s2_order else len(s2_texts)
