@@ -108,6 +108,51 @@ func TestMaxPosition(t *testing.T) {
 	}
 }
 
+// TestPrecedingTurnID covers the window-tail selector: the latest turn
+// id other than the current one — none on a first turn, legacy empty
+// turn ids never form a tail, and mid-turn the CURRENT turn's own rows
+// must not shadow the true preceding turn.
+func TestPrecedingTurnID(t *testing.T) {
+	db := testDB(t)
+	if err := db.CreateThread(&threadv1.Thread{Id: "tw", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(id string, pos int64, turn string) *threadv1.Message {
+		return &threadv1.Message{Id: id, ThreadId: "tw", TurnId: turn, Role: threadv1.Role_ROLE_USER, Position: pos}
+	}
+	// Empty thread: no tail.
+	if got, err := db.PrecedingTurnID("tw", "turn-B"); err != nil || got != "" {
+		t.Fatalf("empty thread: got %q err=%v, want \"\"", got, err)
+	}
+	for _, m := range []*threadv1.Message{
+		mk("l0", 0, ""),       // legacy row: never a tail
+		mk("a0", 1, "turn-A"), // the true preceding turn
+		mk("a1", 2, "turn-A"),
+		mk("l1", 3, ""),       // legacy row between turns: skipped
+		mk("b0", 4, "turn-B"), // current turn, mid-flight
+		mk("b1", 5, "turn-B"),
+	} {
+		if err := db.InsertMessage(m, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Mid-turn: the current turn's own rows sit at the top of the
+	// position order — they must be skipped, not returned.
+	if got, err := db.PrecedingTurnID("tw", "turn-B"); err != nil || got != "turn-A" {
+		t.Fatalf("mid-turn: got %q err=%v, want turn-A", got, err)
+	}
+	// First turn of a thread whose history is only legacy rows: no tail.
+	if err := db.CreateThread(&threadv1.Thread{Id: "tl", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertMessage(&threadv1.Message{Id: "x0", ThreadId: "tl", Role: threadv1.Role_ROLE_USER, Position: 0}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.PrecedingTurnID("tl", "turn-Z"); err != nil || got != "" {
+		t.Fatalf("legacy-only history: got %q err=%v, want \"\"", got, err)
+	}
+}
+
 // TestTurnStartPosition_SnapsToTurnBoundary verifies the Layer-2 branch
 // snap: a position inside a turn resolves to that turn's first position,
 // so a branch prefix never bisects a tool_call/tool_result pair. Turn
