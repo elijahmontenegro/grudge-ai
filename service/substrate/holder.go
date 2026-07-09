@@ -460,6 +460,9 @@ func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scor
 	if stats.Truncated {
 		log.Printf("[Calibrate] mass replay: provenance walk hit its cap on at least one turn — masses are floor estimates there")
 	}
+	if stats.Dropped > 0 {
+		log.Printf("[Calibrate] mass replay: dropped %d sample(s) to transient scorer/judge failures (tolerated) — fit runs on the survivors", stats.Dropped)
+	}
 	seedSamples, _, _, err := seedfit.Samples(ctx, scorer, seed.Pairs(), 0)
 	if err != nil {
 		log.Printf("[Calibrate] mass refit seed scoring failed: %v", err)

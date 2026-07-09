@@ -44,6 +44,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"time"
 
 	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
@@ -52,6 +53,40 @@ import (
 	"github.com/elijahmontenegro/grudge/rrc/calibrate/regenjudge"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
+
+// judgeMaxAttempts / maxToleratedDrops make the replay resilient to
+// TRANSIENT scorer/judge failures without letting SYSTEMATIC breakage
+// silently thin the sample set. The judge is often a cloud model
+// (regenjudge runs the main completer); a 128-call replay firing rapidly
+// will occasionally hit a rate-limit or a momentary timeout, and one such
+// hiccup must not abort the whole fit. Each call retries a few times; a
+// still-failing sample is DROPPED (never biases the fit — transient
+// failures are random w.r.t. sim/mass/label) and counted in Stats.Dropped
+// so the caller can log it (no silent cap). Only when drops exceed the
+// tolerance is it systematic — a broken judge/scorer — and the replay
+// aborts loudly.
+const judgeMaxAttempts = 3
+const maxToleratedDrops = 8
+
+// retryTransient runs op up to judgeMaxAttempts with linear backoff,
+// returning the last error if all attempts fail. Cancellation is honored
+// between attempts.
+func retryTransient(ctx context.Context, op func() error) error {
+	var err error
+	for attempt := 0; attempt < judgeMaxAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+			}
+		}
+		if err = op(); err == nil {
+			return nil
+		}
+	}
+	return err
+}
 
 // Scorer is the one-method scoring contract replay needs. Structurally
 // identical to rrc.Scorer / core.Scorer, declared here so importing the
@@ -90,6 +125,11 @@ type Stats struct {
 	// Truncated reports that at least one turn's provenance walk hit
 	// provenanceReachCap — the no-silent-cap contract, surfaced.
 	Truncated bool
+	// Dropped counts (candidate) samples skipped after a scorer or judge
+	// call failed every retry — transient infrastructure hiccups tolerated
+	// up to maxToleratedDrops. Surfaced so a thinned sample set is never
+	// silent; past the tolerance Replay aborts instead.
+	Dropped int
 }
 
 // turnGroup is one historical turn: its id and messages in corpus order.
@@ -99,11 +139,13 @@ type turnGroup struct {
 }
 
 // Replay walks the corpus turn by turn and returns judge-labeled
-// (sim, mass) samples. It aborts on any scorer or judge error rather
-// than returning a silently thinned sample set, and errors when the
-// corpus yields no mass-bearing pairs at all — the caller armed on raw
-// edge counts, and "structure exists but none of it is reachable"
-// must surface, not fit B from nothing.
+// (sim, mass) samples. It tolerates a bounded number of TRANSIENT
+// scorer/judge failures (each call retries; a persistently-failing
+// sample is dropped and counted in Stats.Dropped — surfaced, never
+// silent), and aborts only when drops exceed the tolerance (systematic
+// breakage). It errors when the corpus yields no mass-bearing pairs at
+// all — the caller armed on raw edge counts, and "structure exists but
+// none of it is reachable" must surface, not fit B from nothing.
 func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge, scorer Scorer, judge calibrate.CounterfactualJudge, chunkCfg chunk.Config) ([]calibrate.LabeledSample, Stats, error) {
 	if scorer == nil {
 		return nil, Stats{}, fmt.Errorf("massfit: nil scorer")
@@ -291,13 +333,29 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 				if len(samples) >= maxLabels {
 					break
 				}
-				sim, err := scoreCandidate(ctx, scorer, local, byID[id], chunkCfg)
-				if err != nil {
-					return nil, stats, fmt.Errorf("massfit: score turn=%s candidate=%s: %w", turn.id, id, err)
-				}
-				isPrereq, err := judge.IsPrerequisite(ctx, turn.id, id)
-				if err != nil {
-					return nil, stats, fmt.Errorf("massfit: judge turn=%s candidate=%s: %w", turn.id, id, err)
+				var sim float64
+				serr := retryTransient(ctx, func() error {
+					var e error
+					sim, e = scoreCandidate(ctx, scorer, local, byID[id], chunkCfg)
+					return e
+				})
+				var isPrereq bool
+				jerr := retryTransient(ctx, func() error {
+					var e error
+					isPrereq, e = judge.IsPrerequisite(ctx, turn.id, id)
+					return e
+				})
+				if serr != nil || jerr != nil {
+					// Transient hiccup survived the retries: drop this sample
+					// rather than abort the whole replay — a dropped sample
+					// doesn't bias the fit (failures are random w.r.t.
+					// sim/mass/label). Past the tolerance it is systematic
+					// breakage, not noise, and we abort loudly.
+					stats.Dropped++
+					if stats.Dropped > maxToleratedDrops {
+						return nil, stats, fmt.Errorf("massfit: %d transient scorer/judge failures exceed tolerance (%d) — infrastructure unstable, aborting (last scorer=%v judge=%v)", stats.Dropped, maxToleratedDrops, serr, jerr)
+					}
+					continue
 				}
 				m := 0.0
 				if group.withMass {
@@ -312,6 +370,15 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 	}
 
 	if stats.MassPairs == 0 {
+		// Drops with zero surviving mass pairs is a judge/scorer failure
+		// wearing corpus-youth's clothes — the mass pairs existed, we just
+		// couldn't label them. On a small corpus this never trips the
+		// in-loop count tolerance, so surface it here as infrastructure,
+		// not a cold-start deferral (which would wrongly defer instead of
+		// alerting).
+		if stats.Dropped > 0 {
+			return nil, stats, fmt.Errorf("massfit: no mass pairs survived labeling — %d dropped to scorer/judge failures; infrastructure unstable, aborting", stats.Dropped)
+		}
 		// Not a failure: provenance edges exist but none reach an eligible
 		// candidate through any turn's cone, so B cannot be grounded yet. The
 		// caller treats ErrCorpusTooYoung as a deferral — keep the current

@@ -3,6 +3,7 @@ package massfit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -45,6 +46,29 @@ type idJudge struct{ prereqID string }
 
 func (j idJudge) IsPrerequisite(_ context.Context, _, candidateID string) (bool, error) {
 	return candidateID == j.prereqID, nil
+}
+
+// flakyJudge fails its first failN calls (a transient cloud hiccup),
+// then labels like idJudge. Tracks total call count for retry assertions.
+type flakyJudge struct {
+	prereqID string
+	failN    int
+	calls    int
+}
+
+func (j *flakyJudge) IsPrerequisite(_ context.Context, _, candidateID string) (bool, error) {
+	j.calls++
+	if j.calls <= j.failN {
+		return false, fmt.Errorf("transient: context deadline exceeded")
+	}
+	return candidateID == j.prereqID, nil
+}
+
+// deadJudge fails every call — systematic breakage.
+type deadJudge struct{}
+
+func (deadJudge) IsPrerequisite(_ context.Context, _, _ string) (bool, error) {
+	return false, fmt.Errorf("provider endpoint unreachable")
 }
 
 func msg(id, threadID, turnID string, role threadv1.Role, text string, at time.Time) *threadv1.Message {
@@ -181,5 +205,43 @@ func TestCorpusProvider_ResolvesTurnAndCandidate(t *testing.T) {
 	}
 	if _, err := p.Resolve("turn-b", "no-such-msg"); err == nil {
 		t.Fatal("unknown candidate must error")
+	}
+}
+
+// TestReplay_ToleratesTransientJudgeFailures: a judge that fails a couple
+// of early calls (a cloud rate-limit / momentary timeout) must not abort
+// the replay — retryTransient re-issues the call and the fit proceeds on
+// the full sample set, with no drops recorded.
+func TestReplay_ToleratesTransientJudgeFailures(t *testing.T) {
+	corpus, edges := fixture()
+	// Fail the first 2 calls; retryTransient (3 attempts) clears them.
+	j := &flakyJudge{prereqID: "m0", failN: 2}
+	samples, stats, err := Replay(context.Background(), corpus, edges, markerScorer{}, j, testChunkCfg())
+	if err != nil {
+		t.Fatalf("transient failures must not abort the replay: %v", err)
+	}
+	if stats.Dropped != 0 {
+		t.Fatalf("retries should have cleared the transient failures, dropped=%d", stats.Dropped)
+	}
+	if len(samples) == 0 || stats.MassPairs == 0 {
+		t.Fatalf("replay should have produced labeled samples: %+v", stats)
+	}
+}
+
+// TestReplay_AbortsOnSystematicJudgeFailure: a judge that fails EVERY
+// call is systematic breakage, not a hiccup — once drops exceed the
+// tolerance the replay aborts loudly rather than fit B on a thinned,
+// biased set.
+func TestReplay_AbortsOnSystematicJudgeFailure(t *testing.T) {
+	corpus, edges := fixture()
+	_, stats, err := Replay(context.Background(), corpus, edges, markerScorer{}, deadJudge{}, testChunkCfg())
+	if err == nil {
+		t.Fatal("a judge that fails every call must abort the replay")
+	}
+	if !strings.Contains(err.Error(), "infrastructure unstable") {
+		t.Fatalf("abort should name the systematic cause, got: %v", err)
+	}
+	if stats.Dropped == 0 {
+		t.Fatalf("systematic failure should record drops, got %d", stats.Dropped)
 	}
 }
