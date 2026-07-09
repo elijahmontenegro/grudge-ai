@@ -270,6 +270,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 			SheddedCount:          len(shedIDs),
 			TotalTokens:           total,
 			EffectiveBudget:       effectiveBudget,
+			RealizedPrice:         realizedPrice,
 			PrerequisiteSelection: prerequisiteSelection,
 			SelectMs:              selectMs,
 			MMRMs:                 mmrMs,
@@ -367,12 +368,18 @@ type AssembleResult struct {
 }
 
 type AssembleTelemetry struct {
-	SelectedCount         int
-	LocalContextCount     int
-	ClosureCount          int
-	SheddedCount          int
-	TotalTokens           int
-	EffectiveBudget       int
+	SelectedCount     int
+	LocalContextCount int
+	ClosureCount      int
+	SheddedCount      int
+	TotalTokens       int
+	EffectiveBudget   int
+	// RealizedPrice is the budget shadow price μ this assembly's shed
+	// equilibrium realized — zero on slack (complementary slackness),
+	// the marginal refused density when the budget bit. The economics
+	// are load-bearing state and must never be silent: this is how a
+	// binding deployment is observed.
+	RealizedPrice         float64
 	PrerequisiteSelection PrerequisiteSelectionTelemetry
 	SelectMs              int64
 	MMRMs                 int64

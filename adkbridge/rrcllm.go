@@ -258,9 +258,9 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 				r.OnAssemble(result.Telemetry)
 			}
 			t := result.Telemetry
-			log.Printf("RRC: assembly thread=%s selected=%d local=%d closure=%d shed=%d total=%d budget=%d scale=%.3f wire=%d",
+			log.Printf("RRC: assembly thread=%s selected=%d local=%d closure=%d shed=%d price=%.5f total=%d budget=%d scale=%.3f wire=%d",
 				r.threadID, t.SelectedCount, t.LocalContextCount, t.ClosureCount,
-				t.SheddedCount, t.TotalTokens, t.EffectiveBudget, scale, len(result.Wire))
+				t.SheddedCount, t.RealizedPrice, t.TotalTokens, t.EffectiveBudget, scale, len(result.Wire))
 
 			protoReq := completionRequest(req, stream, result.Wire, protoTools, cfg.ContextBudgetTokens)
 			var usage *llmv1.Usage
