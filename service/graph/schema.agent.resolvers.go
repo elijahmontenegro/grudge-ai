@@ -56,6 +56,17 @@ func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (boo
 
 // ResumeAgent is the resolver for the resumeAgent field.
 func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, correction *string) (bool, error) {
+	// Precondition BEFORE side effect: a thread with no agent state has
+	// nothing to resume. Loading state first means a failed resume stores
+	// nothing — the old order stored the correction and then errored, so
+	// each retry of the "failed" mutation stacked another correction row
+	// into the corpus (measured live on a never-paused thread).
+	// Same full-row UPSERT concern as PauseAgent — preserve Mode/RoundCount
+	// rather than zeroing them via a partial state save.
+	st, err := r.db.GetAgentState(threadID)
+	if err != nil {
+		return false, fmt.Errorf("load state: %w", err)
+	}
 	if correction != nil && *correction != "" {
 		agentRunner, err := r.getOrCreateRunner(threadID)
 		if err != nil {
@@ -79,12 +90,6 @@ func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, cor
 		if err := r.storeMessage(msg, *correction); err != nil {
 			return false, fmt.Errorf("insert correction: %w", err)
 		}
-	}
-	// Same full-row UPSERT concern as PauseAgent — preserve Mode/RoundCount
-	// rather than zeroing them via a partial state save.
-	st, err := r.db.GetAgentState(threadID)
-	if err != nil {
-		return false, fmt.Errorf("load state: %w", err)
 	}
 	// Two resume paths:
 	//   (a) Active autonomous loop, just paused → flip the pause gate.
