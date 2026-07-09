@@ -231,9 +231,9 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		// the neutral structural-lift PRIOR. That state is load-bearing —
 		// the whole /\ mass lift rides B — so it is logged legibly rather
 		// than reverse-engineered from the code.
-		massAxis := fmt.Sprintf("structural-lift PRIOR, uncalibrated — refines per-deployment once %d+ provenance edges accrue", massRefitMinEdges)
+		massAxis := fmt.Sprintf("structural-lift PRIOR, uncalibrated — refines per-deployment once %d provenance edges accrue", massRefitThreshold(art))
 		if art.MassSamples > 0 {
-			massAxis = fmt.Sprintf("corpus-fitted over %d mass pairs", art.MassSamples)
+			massAxis = fmt.Sprintf("corpus-fitted over %d mass pairs (last fit at %d edges; refines again at %d)", art.MassSamples, art.ProvenanceEdgesAtFit, massRefitThreshold(art))
 		}
 		log.Printf("Loaded acceptance calibrator (scorer=%s): A=%.3f B=%.3f C=%.3f | similarity+bias: seed-fit over %d pairs (log-loss %.3f) | mass axis: %s",
 			s.RerankerModelID, art.Calibrator.A, art.Calibrator.B, art.Calibrator.C,

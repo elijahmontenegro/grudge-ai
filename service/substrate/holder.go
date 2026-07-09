@@ -368,6 +368,24 @@ func (h *Holder) maybeCalibrate(subs *Substrate) {
 // there is nothing for a user to know better about.
 const massRefitMinEdges = 64
 
+// massRefitThreshold is the provenance-edge count at which THIS artifact's
+// next mass refit arms: the base floor, or double the edge count of the
+// last successful fit, or double the last failed attempt — whichever is
+// highest (successful fits and failure memory both back off on corpus
+// doubling). The single source of truth for the arming gate and the
+// boot log's "when does the mass axis refine" figure, so the two can't
+// drift.
+func massRefitThreshold(art calibrate.Artifact) int {
+	t := massRefitMinEdges
+	if art.ProvenanceEdgesAtFit > 0 && 2*art.ProvenanceEdgesAtFit > t {
+		t = 2 * art.ProvenanceEdgesAtFit
+	}
+	if art.MassAttemptEdges > 0 && 2*art.MassAttemptEdges > t {
+		t = 2 * art.MassAttemptEdges
+	}
+	return t
+}
+
 // maybeMassRefit fits the calibrator's mass axis (B) from replayed
 // corpus history, watermark-gated: it runs when provenance structure
 // first crosses massRefitMinEdges, and re-runs when the structure has
@@ -394,19 +412,12 @@ func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scor
 		log.Printf("[Calibrate] mass refit arming check failed: %v", err)
 		return
 	}
-	// Arming: past the floor, past the doubling watermark of the last
-	// successful mass fit, AND past the doubling watermark of the last
+	// Arming threshold: the base floor, the doubling watermark of the
+	// last successful mass fit, and the doubling watermark of the last
 	// FAILED attempt — failure memory, so an armed-but-failing replay
 	// (broken judge, unreachable structure, refused fit) retries on
 	// corpus growth, not on every reload.
-	threshold := massRefitMinEdges
-	if art.ProvenanceEdgesAtFit > 0 && 2*art.ProvenanceEdgesAtFit > threshold {
-		threshold = 2 * art.ProvenanceEdgesAtFit
-	}
-	if art.MassAttemptEdges > 0 && 2*art.MassAttemptEdges > threshold {
-		threshold = 2 * art.MassAttemptEdges
-	}
-	if edgeCount < threshold {
+	if edgeCount < massRefitThreshold(art) {
 		return
 	}
 	recordAttempt := func() {
