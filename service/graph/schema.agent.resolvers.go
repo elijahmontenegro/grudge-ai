@@ -57,16 +57,23 @@ func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (boo
 // ResumeAgent is the resolver for the resumeAgent field.
 func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, correction *string) (bool, error) {
 	if correction != nil && *correction != "" {
-		corpus, err := r.db.ThreadCorpus(threadID)
+		agentRunner, err := r.getOrCreateRunner(threadID)
 		if err != nil {
-			return false, fmt.Errorf("load corpus: %w", err)
+			return false, fmt.Errorf("resume runner: %w", err)
 		}
+		// The correction is its own turn — a fresh user-authored discourse
+		// event, not part of any in-flight turn — so it carries turn
+		// identity (or it falls out of the Local Context window and
+		// TurnMessages entirely) and a runner-minted position (the old
+		// int64(len(corpus)) stamp collided with existing rows whenever
+		// history carried position gaps or duplicates).
 		msg := &threadv1.Message{
 			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
 			Role:      threadv1.Role_ROLE_USER,
 			Content:   pbtext.BlocksFromText(*correction),
-			Position:  int64(len(corpus)),
+			Position:  agentRunner.NextPosition(),
 			ThreadId:  threadID,
+			TurnId:    fmt.Sprintf("turn-%s-%d", threadID, time.Now().UnixNano()),
 			CreatedAt: timestamppb.Now(),
 		}
 		if err := r.storeMessage(msg, *correction); err != nil {

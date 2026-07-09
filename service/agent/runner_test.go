@@ -49,6 +49,57 @@ func newTestRunner(t *testing.T, threadID string) *Runner {
 	}
 }
 
+// TestPositionAuthority_MaxSeededAndCollisionFree pins A2-W7: every
+// position mints from the runner's msgSeq, seeded from MAX(position) —
+// never COUNT(*). With gaps or duplicated positions in history (the
+// measured pre-A2 corpus shape), a count seed mints colliding positions;
+// the max seed places every new row strictly above every existing one,
+// and out-of-runner writers (NextPosition) share the same atomic so they
+// can never collide with runner message sites.
+func TestPositionAuthority_MaxSeededAndCollisionFree(t *testing.T) {
+	r := newTestRunner(t, "t-pos")
+	// Gap + duplicate: COUNT(*)=3 but the high-water mark is 20.
+	for _, m := range []*threadv1.Message{
+		{Id: "h0", ThreadId: "t-pos", Role: threadv1.Role_ROLE_USER, Position: 0},
+		{Id: "h1", ThreadId: "t-pos", Role: threadv1.Role_ROLE_ASSISTANT, Position: 20},
+		{Id: "h2", ThreadId: "t-pos", Role: threadv1.Role_ROLE_USER, Position: 20},
+	} {
+		if err := r.db.InsertMessage(m, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := r.NextPosition()
+	if first != 21 {
+		t.Fatalf("NextPosition over max=20 corpus = %d, want 21 (a COUNT seed would mint 4)", first)
+	}
+	// The runner message-site pattern: the id mint advances msgSeq, then
+	// Position reads it — strictly increasing past the resolver mint.
+	_ = r.nextMsgID()
+	pos := r.msgSeq.Load()
+	if pos != first+1 {
+		t.Fatalf("runner site minted %d, want %d (strictly after NextPosition)", pos, first+1)
+	}
+	// Re-syncing never regresses the counter below in-memory mints
+	// (buffered tool calls hold positions the DB cannot see yet).
+	r.syncMsgSeq()
+	if got := r.msgSeq.Load(); got != pos {
+		t.Fatalf("syncMsgSeq regressed the counter: %d -> %d", pos, got)
+	}
+}
+
+// TestCurrentTurn_AccessorIsMuFree: resolver-side writers read the
+// in-flight turn id without the runner mutex; a fresh runner reads "".
+func TestCurrentTurn_AccessorIsMuFree(t *testing.T) {
+	r := newTestRunner(t, "t-turn")
+	if got := r.CurrentTurn(); got != "" {
+		t.Fatalf("fresh runner CurrentTurn = %q, want empty", got)
+	}
+	r.currentTurnID.Store("turn-t-turn-1")
+	if got := r.CurrentTurn(); got != "turn-t-turn-1" {
+		t.Fatalf("CurrentTurn = %q, want turn-t-turn-1", got)
+	}
+}
+
 // eventSeq builds an iter.Seq2 from a slice of events. Every event
 // yields with nil error.
 func eventSeq(events ...*session.Event) iter.Seq2[*session.Event, error] {

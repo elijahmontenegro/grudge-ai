@@ -82,6 +82,32 @@ func TestInsertToolCallPair_WritesBothRows(t *testing.T) {
 	}
 }
 
+// TestMaxPosition covers the position-authority seed: -1 on an empty
+// thread; the true high-water mark on a corpus carrying gaps and
+// duplicated positions, where COUNT(*) understates it and a count-seeded
+// counter would mint colliding positions.
+func TestMaxPosition(t *testing.T) {
+	db := testDB(t)
+	if err := db.CreateThread(&threadv1.Thread{Id: "tp", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.MaxPosition("tp"); got != -1 {
+		t.Fatalf("empty thread MaxPosition = %d, want -1", got)
+	}
+	for _, m := range []*threadv1.Message{
+		{Id: "p0", ThreadId: "tp", Role: threadv1.Role_ROLE_USER, Position: 0},
+		{Id: "p1", ThreadId: "tp", Role: threadv1.Role_ROLE_ASSISTANT, Position: 8},
+		{Id: "p2", ThreadId: "tp", Role: threadv1.Role_ROLE_USER, Position: 8},
+	} {
+		if err := db.InsertMessage(m, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := db.MaxPosition("tp"); got != 8 {
+		t.Fatalf("MaxPosition = %d, want 8 (COUNT(*) is 3)", got)
+	}
+}
+
 // TestTurnStartPosition_SnapsToTurnBoundary verifies the Layer-2 branch
 // snap: a position inside a turn resolves to that turn's first position,
 // so a branch prefix never bisects a tool_call/tool_result pair. Turn

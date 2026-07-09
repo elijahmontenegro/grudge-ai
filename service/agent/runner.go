@@ -49,9 +49,11 @@ type Runner struct {
 	// currentTurnID is the active-discourse identity stamped on every
 	// message stored during the in-flight SendMessage (the triggering
 	// event plus the model/tool events it spawns). Minted at SendMessage
-	// entry, read by indexMessage. Guarded by mu (held for the whole
-	// SendMessage call); indexMessage only runs under that lock.
-	currentTurnID string
+	// entry, read by indexMessage/indexPair — and, via CurrentTurn,
+	// by resolver-side writers (a tool-denial feedback row lands
+	// mid-turn and must join it) that cannot block on mu, which is held
+	// for the whole SendMessage call. Atomic for exactly that reason.
+	currentTurnID atomic.Value // string
 	autoState     *AutonomousState
 	// turnCancel holds the derived-context cancel for the in-flight
 	// turn. Atomic pointer because r.mu is held for the entire
@@ -304,7 +306,7 @@ func (r *Runner) indexMessage(msg *threadv1.Message) error {
 	// final assistant text — shares the turn's id, so BuildActiveDiscourse
 	// can recover the in-flight local discourse without fixed-N recency.
 	if msg.TurnId == "" {
-		msg.TurnId = r.currentTurnID
+		msg.TurnId = r.CurrentTurn()
 	}
 	if r.inserter == nil {
 		// Tests construct a Runner with no inserter wired so they can
@@ -330,10 +332,10 @@ func (r *Runner) indexMessage(msg *threadv1.Message) error {
 // indexMessage) so TurnPeers still groups them.
 func (r *Runner) indexPair(call, result *threadv1.Message) error {
 	if call.TurnId == "" {
-		call.TurnId = r.currentTurnID
+		call.TurnId = r.CurrentTurn()
 	}
 	if result.TurnId == "" {
-		result.TurnId = r.currentTurnID
+		result.TurnId = r.CurrentTurn()
 	}
 	pStart := time.Now()
 	var err error
@@ -361,6 +363,39 @@ func (r *Runner) nextMsgID() string {
 	// two calls land inside the same nanosecond tick, which is rare but
 	// observed in tight tool-call loops.
 	return fmt.Sprintf("msg-%s-%d-%d", r.threadID, time.Now().UnixNano(), r.msgSeq.Add(1))
+}
+
+// CurrentTurn returns the in-flight turn's active-discourse identity, ""
+// before the first SendMessage. Safe off-thread (mu-free): resolver-side
+// writers read it while the turn holds mu.
+func (r *Runner) CurrentTurn() string {
+	if v, ok := r.currentTurnID.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// syncMsgSeq raises msgSeq to the thread's stored position high-water
+// mark (idempotent). Seeded from MAX(position) — never COUNT(*): with
+// historical gaps or duplicated positions a count-seeded counter mints
+// colliding positions (measured: every turn's trigger landing on the
+// previous turn's final answer), and on a branch thread a count seed
+// starts below the branch point so new rows sort under the prefix.
+func (r *Runner) syncMsgSeq() {
+	if p := r.db.MaxPosition(r.threadID); p > r.msgSeq.Load() {
+		r.msgSeq.Store(p)
+	}
+}
+
+// NextPosition mints the next message position for out-of-runner writers
+// (resolver-stored corrections, tool-denial feedback). One position
+// authority: the same atomic every runner message site reads, so a
+// resolver write can never collide with the in-flight turn's messages —
+// including tool calls buffered in memory awaiting their result, which
+// no DB-derived position (MAX or COUNT) can see.
+func (r *Runner) NextPosition() int64 {
+	r.syncMsgSeq()
+	return r.msgSeq.Add(1)
 }
 
 // SendMessage processes a user message through the ADK agent loop.
@@ -408,23 +443,21 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope threadv1
 		r.persistTickTrace(tickStart, retErr)
 	}()
 
-	// Bounded aggregate, not a full corpus load: the runner only needs the
-	// thread's message count for tick bookkeeping and the sequence counter.
+	// Bounded aggregates, not a full corpus load: the runner needs the
+	// thread's message count for tick bookkeeping, and the position
+	// authority (msgSeq) raised to the stored high-water mark.
 	count := r.db.MessageCount(r.threadID)
 	r.tickCorpusSize = count
-
-	// Sync message counter to corpus length (idempotent on repeated calls)
-	if cur := int64(count); cur > r.msgSeq.Load() {
-		r.msgSeq.Store(cur)
-	}
+	r.syncMsgSeq()
 
 	// Mint the active-discourse identity for this turn before the
 	// triggering event is stored, so the trigger and every model/tool
 	// event it spawns share it (indexMessage stamps it). Set it on the
 	// RRCLLM so BuildActiveDiscourse recovers exactly this turn's
 	// in-flight discourse as Local Context.
-	r.currentTurnID = fmt.Sprintf("turn-%s-%d", r.threadID, time.Now().UnixNano())
-	r.rrcLLM.CurrentTurnID = r.currentTurnID
+	turnID := fmt.Sprintf("turn-%s-%d", r.threadID, time.Now().UnixNano())
+	r.currentTurnID.Store(turnID)
+	r.rrcLLM.CurrentTurnID = turnID
 
 	// Store the user Event only when it carries real content. Empty-
 	// content autonomous ticks do not enter the Store — they are a
@@ -439,11 +472,18 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope threadv1
 				Block: &threadv1.ContentBlock_Attachment{Attachment: a},
 			})
 		}
+		// Position from the same authority as every other message site
+		// (id mint advances msgSeq, then the position reads it). The old
+		// int64(count) stamp collided with the previous turn's final
+		// answer at every seam: model-side messages count themselves into
+		// msgSeq while COUNT(*) lags one behind — the corpus's total
+		// order was held by rowid luck exactly where the Local Context
+		// window spans turns.
 		userMsg := &threadv1.Message{
 			Id:       r.nextMsgID(),
 			Role:     threadv1.Role_ROLE_USER,
 			Content:  blocks,
-			Position: int64(count),
+			Position: r.msgSeq.Load(),
 			ThreadId: r.threadID,
 		}
 		if err := r.indexMessage(userMsg); err != nil {

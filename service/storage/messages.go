@@ -449,6 +449,18 @@ func (d *DB) MessageCount(threadID string) int {
 	return count
 }
 
+// MaxPosition returns the highest message position in a thread, -1 when
+// the thread has no messages. The position authority (the runner's
+// msgSeq) seeds from this — never from row counts: COUNT(*) drifts from
+// the true order high-water mark whenever historical rows carry gaps or
+// duplicated positions, and a count-seeded counter then mints colliding
+// positions. Single seek on idx_messages_thread_pos.
+func (d *DB) MaxPosition(threadID string) int64 {
+	pos := int64(-1)
+	d.QueryRow(`SELECT COALESCE(MAX(position), -1) FROM messages WHERE thread_id = ?`, threadID).Scan(&pos)
+	return pos
+}
+
 // marshalContentBlocks encodes repeated ContentBlock as a proto wrapper.
 func marshalContentBlocks(blocks []*threadv1.ContentBlock) ([]byte, error) {
 	// Use LLMMessage as a wrapper since it has repeated ContentBlock

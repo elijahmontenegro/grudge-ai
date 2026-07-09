@@ -127,13 +127,16 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 	// the branch point, and later Selection Queries can retrieve from that
 	// inherited corpus.
 
-	// Insert the edited message at the branch point
+	// Insert the edited message at the branch point. It is its own turn:
+	// without turn identity the branch seed is invisible to TurnMessages
+	// and to the branch's own Local Context window on its first send.
 	msg := &threadv1.Message{
 		Id:       fmt.Sprintf("msg-%s-0", newThread.Id),
 		Role:     threadv1.Role_ROLE_USER,
 		Content:  pbtext.BlocksFromText(newContent),
 		Position: branchPos,
 		ThreadId: newThread.Id,
+		TurnId:   fmt.Sprintf("turn-%s-%d", newThread.Id, time.Now().UnixNano()),
 	}
 	if err := r.storeMessage(msg, newContent); err != nil {
 		return nil, err
