@@ -249,6 +249,68 @@ The service uses RWMutex on the global DAG and score cache for concurrent select
 
 Performance optimization is explicitly deferred. Correctness and completeness are the targets. O(N) pairwise scoring per message arrival is the accepted cost of prerequisite detection accuracy. The system may be slow; it must not be wrong.
 
+=== Local Context (the Selector Input)
+
+Added 2026-07-08 (Local Context remediation; see
+docs/plan-iterations/2026-07-08-rrc-local-context-remediation.md). This section is
+normative: the earlier absence of a Local Context definition is the vacuum the
+implementation drifted into (backward anchor-reach, text-only anchoring, blob chunking
+-- all removed).
+
+Local Context is the in-flight TURN's *semantic* discourse: user text, assistant text,
+and thinking -- co-equal, uniformly treated. Thinking is the primary disambiguation
+signal (the model is the best QUD analyzer in the system); no code path may privilege
+one semantic block type over another. Images, attachments, and tool calls/results are
+NOT semantic: they are turn record, and whatever matters about them re-enters the
+discourse through the model's thinking and response.
+
+Four distinct roles, four owners -- never fused into one object:
+
+[cols="1,1,2"]
+|===
+| Role | Owner | Content
+
+| Scoring query (disambiguation)
+| serialized Local Context chunks
+| semantic messages, ONE QUERY UNIT PER MESSAGE -- a chunk never spans two messages;
+  the selection aggregator max-merges per candidate over units, so the message that
+  bears the query dominates instead of being blended with neighbors
+
+| Membership (exclusion, provenance cone, audit)
+| serialized Local Context message ids
+| the full delivered union, tools included -- nothing delivered is ever re-retrieved
+
+| Wire delivery (native restoration)
+| the turn record (TurnDelivery)
+| the whole in-flight turn verbatim, tools included, through exact protocol closure
+
+| Graph-walk entry (mass recall)
+| the Provenance Spine
+| the immediately preceding turn, seeding the provenance walk's anchor set -- a fresh
+  turn's own messages have no incoming provenance edges until it generates
+|===
+
+The turn is the bounding unit, built FORWARD: the trigger queries at its call, the
+flushed thinking queries at the next call (disambiguation compounds across calls via
+carry-forward), the response concludes the record. A lone user question is a complete,
+valid Local Context. The anchor is the last SEMANTIC message -- the current discourse
+focus -- never a trailing tool block.
+
+Rejected anti-patterns (each was implemented once and measurably harmful; do not
+reintroduce):
+
+- **Backward positional reach** (grabbing a prior turn's message to "complete" the
+  query): pasted an off-topic neighbor into a recall query and suppressed the true
+  prerequisite below the acceptance floor (0.84 solo -> 0.46 blended). Referential
+  fragments are disambiguated by retrieval + banked provenance mass + next-call
+  thinking -- by the system, not by adjacency.
+- **Blob chunking** (concatenate the span, slice by size): fuses messages and defeats
+  the max-merge.
+- **Text-over-thinking anchoring**: thinking is a full semantic anchor.
+- **Recorded lineage edges into a trigger**: nothing generated the trigger; such an
+  edge encodes temporal succession -- a rejected signal -- as scored graph weight. The
+  spine is a walk seed, never a recorded edge.
+
 === Prerequisite Detection
 
 ==== Cross-Encoder Pairwise Dependency Classification
