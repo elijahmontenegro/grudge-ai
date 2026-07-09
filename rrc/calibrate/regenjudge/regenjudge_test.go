@@ -60,3 +60,43 @@ func TestJudge_YesNoParsing(t *testing.T) {
 		t.Fatal("unclear reply must default to NO")
 	}
 }
+
+// TestParseVerdict_ReasoningModelThinkingPrefix pins the bug that made the
+// mass fit uncalibratable: a reasoning judge returns its chain of thought
+// in a SEPARATE thinking block and "YES" in the text block. The verdict is
+// the answer, never the reasoning — a thinking-prefixed YES must parse
+// true, a thinking-prefixed NO must parse false.
+func TestParseVerdict_ReasoningModelThinkingPrefix(t *testing.T) {
+	mk := func(thinking, answer string) *llmv1.CompletionResponse {
+		var blocks []*threadv1.ContentBlock
+		if thinking != "" {
+			blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Thinking{
+				Thinking: &threadv1.ThinkingContent{Text: thinking},
+			}})
+		}
+		if answer != "" {
+			blocks = append(blocks, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{
+				Text: &threadv1.TextContent{Text: answer},
+			}})
+		}
+		return &llmv1.CompletionResponse{Message: &llmv1.LLMMessage{Role: threadv1.Role_ROLE_ASSISTANT, Content: blocks}}
+	}
+	cases := []struct {
+		name             string
+		thinking, answer string
+		want             bool
+	}{
+		{"thinking-prefixed YES", "The user asks for X; the candidate reveals X. This is needed.", "YES", true},
+		{"thinking-prefixed NO", "The candidate is only topically similar, not required.", "NO", false},
+		{"clean YES no thinking", "", "YES", true},
+		{"clean NO no thinking", "", "NO", false},
+		{"answer only in thinking (fallback)", "...therefore the answer is YES", "", true},
+		{"preamble then verdict", "", "Based on the discourse, YES", true},
+		{"empty response defaults NO", "", "", false},
+	}
+	for _, c := range cases {
+		if got := parseVerdict(mk(c.thinking, c.answer)); got != c.want {
+			t.Errorf("%s: parseVerdict = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

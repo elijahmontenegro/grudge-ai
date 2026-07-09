@@ -139,12 +139,44 @@ func buildPrompt(tc TurnContext) string {
 // parseVerdict reads the model's answer as yes/no, defaulting to NO (the
 // precision-first default: when the judge is unclear, do not label a
 // candidate a prerequisite).
+//
+// The verdict is the model's ANSWER, not its reasoning. A reasoning judge
+// (glm/qwen-family) returns its chain of thought in a SEPARATE thinking
+// block; pbtext.TextFromBlocks folds thinking in AHEAD of the answer, so a
+// leading-"yes" check on the concatenation read the reasoning's first word
+// ("The user is asking…") and silently flipped every verdict to NO —
+// starving the mass fit of positive labels and driving B negative
+// regardless of the corpus. Read the non-thinking answer text; fall back
+// to the whole response only if the model emitted no separate answer.
 func parseVerdict(resp *llmv1.CompletionResponse) bool {
 	if resp == nil || resp.Message == nil {
 		return false
 	}
-	text := strings.ToLower(pbtext.TextFromBlocks(resp.Message.Content))
-	text = strings.TrimSpace(text)
-	// Look for a leading yes; default no.
-	return strings.HasPrefix(text, "yes")
+	answer := strings.ToLower(strings.TrimSpace(answerText(resp.Message.Content)))
+	if answer == "" {
+		answer = strings.ToLower(strings.TrimSpace(pbtext.TextFromBlocks(resp.Message.Content)))
+	}
+	switch {
+	case strings.HasPrefix(answer, "yes"):
+		return true
+	case strings.HasPrefix(answer, "no"):
+		return false
+	default:
+		// Preamble before the one-word verdict: take the last explicit
+		// yes/no token seen.
+		return strings.LastIndex(answer, "yes") > strings.LastIndex(answer, "no")
+	}
+}
+
+// answerText extracts the model's answer — the non-thinking text blocks —
+// so a reasoning model's chain of thought never masquerades as the verdict.
+func answerText(blocks []*threadv1.ContentBlock) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if t := b.GetText(); t != nil {
+			sb.WriteString(t.Text)
+			sb.WriteByte('\n')
+		}
+	}
+	return sb.String()
 }
