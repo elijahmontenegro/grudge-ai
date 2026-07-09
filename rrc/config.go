@@ -76,8 +76,10 @@ type EngineConfig struct {
 	// ContextBudgetTokens is the target cap for the assembled prompt
 	// (System + Selected + Local Context). The assembler
 	// pre-sizes Selected against this budget before sending: if the
-	// token estimate exceeds, lowest-score Selected entries are
-	// dropped until the estimate fits. This moves shed-to-fit from
+	// token estimate exceeds, the lowest-DENSITY Selected groups
+	// (excess acceptance probability per wire token) are shed until
+	// the estimate fits, and the marginal refused density is realized
+	// as the thread's budget shadow price mu. This moves shed-to-fit from
 	// a reactive round-trip loop to a proactive single-pass
 	// computation — the reactive path remains as a safety net for
 	// when the estimator undercounts, not as steady-state traffic.

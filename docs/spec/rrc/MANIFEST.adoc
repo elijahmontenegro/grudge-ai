@@ -431,27 +431,50 @@ The engine does not know about "subagents." It operates on threads — fork is a
 
 === Selection Scoring
 
-==== Score Fusion
+==== Calibrated Acceptance and the Budget-Price Law
 
-Each prerequisite edge carries scores from the signals that produced it:
+(Replaced 2026-07-09. The prior Score Fusion section documented the retired
+pre-A4 mechanism -- NLI entailment scores, hand-set fusion weights
+(w1/w2/w3), a temporal-proximity term, a flat edge threshold. NLI was found
+insufficient and removed; temporal-as-edge-signal was rejected as
+duplicating Local Context's job; hand weights and flat thresholds are rules
+where laws belong.)
 
-- **Cross-encoder dependency score** -- Entailment probability from the NLI cross-encoder. Range 0-1. Edge creation threshold: 0.5 (configurable). Below threshold, no edge is created. Derivation: 0.5 is the Bayesian decision boundary for probability outputs -- entailment is more likely than not. Below 0.5, the combined probability of contradiction+neutral exceeds entailment. Starting point; tunable.
-- **QUD edge weight** -- Binary: 1 if a QUD edge exists (carry-forward discovered a connection), 0 if not. A QUD edge either exists or it doesn't.
-- **Temporal proximity** -- `1 / (1 + distance)` where distance is message position difference. Adjacent messages ~0.5, 9 apart ~0.1, 99 apart ~0.01.
+Acceptance is one law: *P(prereq | signals) >= LossRatio + mu*tokens*.
 
-Score fusion formula:
+- **P** fuses the raw signals -- semantic similarity (the scorer's raw
+  cross-encoder score) and structural descendant mass (the provenance
+  walk) -- through a FITTED calibrator, sigma(A*sim + B*mass + C).
+  Coefficients are owned by fitting procedures (seed-fit at first boot per
+  scorer, drift-triggered refit, mass-refit on the corpus watermark),
+  never by hands. The zero-mass floor is this law evaluated at mass = 0,
+  not a second rule.
+- **LossRatio** is the precision stance -- V_harm/(V_gain+V_harm) -- the
+  one honest hand-set scalar: a value judgment, not derivable from data.
+- **mu** is the token budget's shadow price, READ OFF the assembly shed
+  equilibrium, never set: exactly zero whenever the budget has slack
+  (complementary slackness), and the marginal refused DENSITY (excess P
+  per wire token) when the budget binds. The shed ranks by density --
+  greedy knapsack, so a marginally-better giant can no longer crowd out
+  several cheap goods -- and the thread's next selection charges each
+  candidate mu times its delivery-cost lower bound. Selection is the price
+  filter; the shed is the hard enforcer; a one-call-stale price can never
+  overrun the budget. Warm-started dual feedback: no fixpoint, no knob.
+- **Diversity is not a knob**: a candidate's effective value is its NOVEL
+  FRACTION -- value * (1 - max similarity to the already-kept) -- a
+  derived form with zero free parameters, itself scheduled to be replaced
+  by a third fitted calibrator signal, P(needed | sim, mass, redundancy),
+  when the corpus can feed the fit.
 
-----
-score = w1 * cross_encoder_score + w2 * qud_weight + w3 * temporal_proximity
-----
-
-Starting weights: `w1=0.7, w2=0.2, w3=0.1`. Cross-encoder (0.7) dominates -- the only signal from message 1, present for all edges, trained on entailment. QUD (0.2) is a binary boost -- meaningful promotion for carry-forward-discovered edges. Temporal (0.1) is a weak positional prior -- max contribution 0.05 at adjacency. Sum = 1.0 for interpretability. The ordering is principled; the magnitudes are starting points. Explicitly tunable.
-
-**Temporal decay derivation:** Hyperbolic decay. d=1→0.5, d=9→0.1, d=99→0.01. Why not exponential? e^(-0.1*50)≈0.007 -- decays too aggressively, temporal signal becomes effectively zero beyond a few messages. Why not logarithmic? 1/log(101)≈0.22 at d=100 -- decays too slowly, temporal signal stays too strong at long distances. Inverse linear is the middle ground: strong for nearby messages, weak but non-zero for distant ones. The 0.1 weight further dampens its influence.
+Resource rules vs truth rules: caps and cadences (the provenance walk's
+compute cap, the refit watermarks) are permissible resource rules -- but
+WHAT they keep must follow the law's own currency (the walk truncates
+best-first by path-product bound into the anchor set, never by hop order),
+and truncation is always instrumented, never silent.
 
 ==== Bounded Selective Assembly
 
-Zero-return is valid. If no message scores above threshold, the prompt is novel and the model receives it without augmentation.
+Zero-return is valid. If no candidate clears calibrated acceptance, the prompt is novel and the model receives it without augmentation.
 
 === Payload Assembly
 
