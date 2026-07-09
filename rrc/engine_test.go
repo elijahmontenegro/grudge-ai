@@ -487,9 +487,10 @@ func TestSelect_ProbabilityFloorCutoff(t *testing.T) {
 func TestSelect_ThreadScope(t *testing.T) {
 	e := testEngine(newMockScorer(), newMockChunkOracle())
 
-	// Edges set CrossEncoderScore directly — extractSubgraph reads it
-	// via edgeScoreUnderConfig as the gating signal. CE=1.0 clears
-	// acceptance decisively → both edges qualify.
+	// Both edges are SEEDS (hop-1, into the anchor): the walk gates them
+	// on their stored verdicts — this event's own Score (0.8/0.9 clear
+	// the 0.5 floor). CrossEncoderScore is the recorded observation that
+	// hop≥2 traversal would derive from (relationalEdgeScore).
 	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m0", ToMessageId: "m2",
 		Score: 0.8, CrossEncoderScore: 1.0,
@@ -1218,6 +1219,100 @@ func TestApplyMMR_ExactScores(t *testing.T) {
 	}
 }
 
+// TestSelect_LiftNeverLaundersIntoTransitivePull pins A3, both
+// directions: hop≥2 traversal consumes the recorded OBSERVATION under
+// the current calibrator, never the stored verdict. A mass-lifted edge
+// (weak dependency 0.38 accepted at P .93 via circumstance) must NOT
+// pull transitively on its old verdict; an edge whose old verdict was
+// weak but whose observed dependency is strong MUST pull. Inferences
+// are perishable; observations keep.
+func TestSelect_LiftNeverLaundersIntoTransitivePull(t *testing.T) {
+	e := testEngine(newMockScorer(), newMockChunkOracle())
+
+	// Fresh seed into the current anchor: this event's own verdict.
+	e.dag.AddEdge(&rrcv1.Edge{
+		FromMessageId: "c1", ToMessageId: "anchor",
+		Score: 0.9, CrossEncoderScore: 0.8,
+		FromThreadId: "t1", ToThreadId: "t1",
+	})
+	// Fossil A: past turn accepted c2 into c1's generation via MASS
+	// (observed dependency 0.38, stored verdict 0.93). The lift was that
+	// turn's circumstance — it must not survive as dependency strength.
+	e.dag.AddEdge(&rrcv1.Edge{
+		FromMessageId: "c2", ToMessageId: "c1",
+		Score: 0.93, CrossEncoderScore: 0.38,
+		FromThreadId: "t1", ToThreadId: "t1",
+	})
+	// Fossil B: strong observed dependency (0.85) whose stored verdict is
+	// weak (0.4 — e.g. a stiffer old curve). The observation must carry.
+	e.dag.AddEdge(&rrcv1.Edge{
+		FromMessageId: "c3", ToMessageId: "c1",
+		Score: 0.4, CrossEncoderScore: 0.85,
+		FromThreadId: "t1", ToThreadId: "t1",
+	})
+
+	result, err := e.Select("anchor", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := map[string]bool{}
+	for _, s := range result.Selected {
+		selected[s.MessageId] = true
+	}
+	if !selected["c1"] {
+		t.Fatal("seed c1 must be selected (this event's verdict)")
+	}
+	if selected["c2"] {
+		t.Fatal("mass-lifted fossil pulled transitively on its stored verdict — the lift laundered into the walk")
+	}
+	if !selected["c3"] {
+		t.Fatal("strong observed dependency must pull regardless of its weak stored verdict")
+	}
+}
+
+// TestSelect_RefitReGatesHistoryWithoutRewrite pins A3's retroactivity:
+// a calibrator change re-prices every historical hop≥2 edge at walk
+// time — no rewrite, no migration, no version stamp. The identical
+// stored edge is pulled under a permissive curve and refused under a
+// stiff one.
+func TestSelect_RefitReGatesHistoryWithoutRewrite(t *testing.T) {
+	edges := []*rrcv1.Edge{
+		{FromMessageId: "c1", ToMessageId: "anchor",
+			Score: 0.9, CrossEncoderScore: 0.8,
+			FromThreadId: "t1", ToThreadId: "t1"},
+		{FromMessageId: "c2", ToMessageId: "c1",
+			Score: 0.9, CrossEncoderScore: 0.65,
+			FromThreadId: "t1", ToThreadId: "t1"},
+	}
+	run := func(cfg EngineConfig) map[string]bool {
+		e := NewEngine(cfg, newMockScorer(), WithChunkOracle(newMockChunkOracle()))
+		for _, ed := range edges {
+			e.dag.AddEdge(ed)
+		}
+		result, err := e.Select("anchor", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]bool{}
+		for _, s := range result.Selected {
+			got[s.MessageId] = true
+		}
+		return got
+	}
+
+	permissive := testConfig()
+	permissive.Calibrator = calibrate.Bootstrap(0.50, 12.0, 6.0) // floor 0.50: rel(0.65)≈0.86
+	stiff := testConfig()
+	stiff.Calibrator = calibrate.Bootstrap(0.75, 12.0, 6.0) // floor 0.75: rel(0.65)≈0.23
+
+	if got := run(permissive); !got["c2"] {
+		t.Fatalf("permissive curve must pull the 0.65-dependency chain, got %v", got)
+	}
+	if got := run(stiff); got["c2"] {
+		t.Fatalf("stiff curve must refuse the same stored edge — history re-gated with no rewrite, got %v", got)
+	}
+}
+
 // TestSelect_ProvenanceWeightIsRawEvidence pins A2-W6: every selected
 // entry carries provenance_weight = the product of RAW CrossEncoderScore
 // along its via-path — never the calibrated/effective score, and never
@@ -1228,7 +1323,7 @@ func TestApplyMMR_ExactScores(t *testing.T) {
 func TestSelect_ProvenanceWeightIsRawEvidence(t *testing.T) {
 	e := testEngine(newMockScorer(), newMockChunkOracle())
 
-	// Chain m0 -e1-> m1 -e2-> m2 with the calibrated Score deliberately
+	// Chain m0 -e1-> m1 -e2-> m2 with the stored verdict deliberately
 	// different from the raw CrossEncoderScore on every edge.
 	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m1", ToMessageId: "m2",
@@ -1237,7 +1332,7 @@ func TestSelect_ProvenanceWeightIsRawEvidence(t *testing.T) {
 	})
 	e.dag.AddEdge(&rrcv1.Edge{
 		FromMessageId: "m0", ToMessageId: "m1",
-		Score: 0.95, CrossEncoderScore: 0.6,
+		Score: 0.95, CrossEncoderScore: 0.75,
 		FromThreadId: "t1", ToThreadId: "t1",
 	})
 
@@ -1255,19 +1350,23 @@ func TestSelect_ProvenanceWeightIsRawEvidence(t *testing.T) {
 	}
 	// 1-hop: the accepting edge's raw CE, NOT the calibrated 0.8.
 	if math.Abs(float64(m1.ProvenanceWeight)-0.7) > 1e-6 {
-		t.Fatalf("m1 provenance_weight = %v, want raw 0.7 (calibrated Score is 0.8)", m1.ProvenanceWeight)
+		t.Fatalf("m1 provenance_weight = %v, want raw 0.7 (stored verdict is 0.8)", m1.ProvenanceWeight)
 	}
 	m0, ok := got["m0"]
 	if !ok {
 		t.Fatal("m0 not selected")
 	}
-	// 2-hop: chain product of RAW evidence (0.7×0.6), while the effective
-	// score chain-rules the calibrated probabilities (0.8×0.95).
-	if math.Abs(float64(m0.ProvenanceWeight)-0.42) > 1e-6 {
-		t.Fatalf("m0 provenance_weight = %v, want 0.42 (raw chain product)", m0.ProvenanceWeight)
+	// 2-hop: chain product of RAW evidence (0.7×0.75), while the effective
+	// score factorizes per the perishable-inference law — the hop-1 entry
+	// verdict (0.8, this event's own) × the hop-2 RELATIONAL strength
+	// derived from the recorded observation under the current calibrator
+	// (never the stored 0.95, a past event's verdict).
+	if math.Abs(float64(m0.ProvenanceWeight)-0.525) > 1e-6 {
+		t.Fatalf("m0 provenance_weight = %v, want 0.525 (raw chain product)", m0.ProvenanceWeight)
 	}
-	if math.Abs(float64(m0.EffectiveScore)-0.76) > 1e-5 {
-		t.Fatalf("m0 effective = %v, want 0.76 (calibrated chain)", m0.EffectiveScore)
+	wantEffective := 0.8 * e.cfg.Calibrator.Predict(0.75, 0)
+	if math.Abs(float64(m0.EffectiveScore)-wantEffective) > 1e-5 {
+		t.Fatalf("m0 effective = %v, want %v (entry verdict × relational strength)", m0.EffectiveScore, wantEffective)
 	}
 
 	// MMR rewrites EffectiveScore (negative for near-duplicates) but must

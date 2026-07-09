@@ -26,23 +26,55 @@ type selectionEntry struct {
 	ProvenanceWeight float64
 }
 
-// edgeScoreUnderConfig returns the traversal score for an edge. Post-A4 this
-// is the calibrated P(prereq) stored in Score (edge formation writes the
-// Calibrator's output there), so multi-hop traversal chain-rules calibrated
-// probabilities — the same currency acceptance uses — rather than raw CE
-// scores gated by a flat threshold. Kept as a named function so a future
-// per-edge adjustment (age decay, re-calibration) lands here.
-func edgeScoreUnderConfig(edge *rrcv1.Edge, _ EngineConfig) float64 {
+// Traversal currency — the perishable-inference law: an inference
+// (calibrated P, effective score, MMR rewrite) may be consumed only
+// within the selection event that produced it; anything consumed later
+// must be an OBSERVATION (raw sim, raw evidence weight) interpreted by
+// the CURRENT instrument. Stored edge.Score is a past event's verdict:
+// its instrument (A,B,C as fitted then) and its circumstance (the mass
+// that justified delivery into THAT turn) are both foreign to a later
+// walk. Consuming it fossilized the lift into the transitive pull — a
+// mass-recalled edge (sim 0.38, accepted at P≈0.83 via mass) read as
+// 0.83 of dependency strength when the observed dependency is
+// σ(A·0.38+C) ≈ 0.13 — the same laundering class the provenance
+// channel's raw-weight banking fix killed.
+
+// seedEdgeScore is the hop-1 currency: the stored calibrated verdict.
+// A seed edge points into the CURRENT anchor — a message that did not
+// exist before this turn — so its stored Score is THIS selection
+// event's own acceptance P, consumed within the event that produced it:
+// fresh by construction, present circumstance included (mass
+// legitimately prices entry into the present turn, once).
+func seedEdgeScore(edge *rrcv1.Edge) float64 {
 	return float64(edge.Score)
+}
+
+// relationalEdgeScore is the hop≥2 currency: the pair's semantic
+// dependency strength, derived from the recorded observation
+// (CrossEncoderScore) under the CURRENT calibrator at mass zero.
+// Circumstance never fossilizes into relation — structural liveness has
+// its own channel (the provenance mass walk); this walk is dependency
+// closure only. Deriving at read time is what makes calibration
+// genuinely retroactive: a curve refit re-gates every historical edge
+// with no rewrite (stored-P consumption delivered that only for
+// LossRatio changes). edge.Score remains WRITTEN as the formation-time
+// audit record; it is never load-bearing after its own event. A legacy
+// edge with no recorded observation prices to σ(C) ≈ 0 and dies — the
+// derive-from-observation analog of the zero-evidence provenance skip.
+func relationalEdgeScore(edge *rrcv1.Edge, cfg EngineConfig) float64 {
+	return cfg.Calibrator.Predict(float64(edge.CrossEncoderScore), 0)
 }
 
 // extractSubgraph performs best-first backward traversal from promptID through
 // the DAG. Returns selected entries and a map of messages excluded due to score floor.
 //
-// Edges are re-projected under current config at walk time — stored
-// edges that no longer clear calibrated acceptance are skipped. This
-// is how a config change takes effect retroactively without a
-// separate rebuild path.
+// Hop≥2 edges are re-derived from their recorded observations under the
+// current calibrator at walk time (relationalEdgeScore) — stored edges
+// whose observed dependency no longer clears calibrated acceptance are
+// skipped. This is how calibration takes effect retroactively without a
+// separate rebuild path: the fit moves, every historical edge re-gates,
+// nothing is rewritten. Hop-1 edges are this selection event's own
+// fresh verdicts (seedEdgeScore).
 func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threadv1.SelectionScope, cfg EngineConfig) ([]selectionEntry, map[string]float64) {
 	visited := make(map[string]bool)
 	visited[promptID] = true
@@ -62,10 +94,11 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threa
 		if !scopeAllows(edge, promptThreadID, scope) {
 			continue
 		}
-		// Edge Score is calibrated P(prereq) (A4). Accept into the walk at
-		// the precision floor (μ=0 at selection; the token-price μ is applied
-		// later in the assembly shed loop). Replaces the flat EdgeThreshold.
-		score := edgeScoreUnderConfig(edge, cfg)
+		// Seed edges carry THIS event's calibrated verdict (A4) — accept
+		// into the walk at the precision floor (μ=0 at selection; the
+		// token-price μ is applied later in the assembly shed loop).
+		// Replaces the flat EdgeThreshold.
+		score := seedEdgeScore(edge)
 		if !accept(score, cfg.LossRatio, 0, 0) {
 			continue
 		}
@@ -95,10 +128,12 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threa
 		visited[entry.MessageID] = true
 
 		// Chain-ruled calibrated probability floor (A4, replacing ScoreFloor).
-		// EffectiveScore is the product of calibrated edge probabilities along
-		// the path — a genuine P(prereq) for the multi-hop chain — so the same
-		// precision stance that gates formation gates reach. A deep chain whose
-		// product falls below the stance stops here.
+		// EffectiveScore factorizes as (this event's entry verdict at hop 1)
+		// × (current-instrument relational strengths beyond): circumstance
+		// prices entry into the present turn exactly once; past that, only
+		// observed dependency chains. The same precision stance that gates
+		// formation gates reach; a deep chain whose product falls below the
+		// stance stops here.
 		if entry.EffectiveScore < cfg.LossRatio {
 			belowFloor[entry.MessageID] = entry.EffectiveScore
 			continue
@@ -117,7 +152,7 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threa
 			if !scopeAllows(edge, promptThreadID, scope) {
 				continue
 			}
-			edgeScore := edgeScoreUnderConfig(edge, cfg)
+			edgeScore := relationalEdgeScore(edge, cfg)
 			if !accept(edgeScore, cfg.LossRatio, 0, 0) {
 				continue
 			}
