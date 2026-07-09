@@ -171,6 +171,28 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	var finalSelected []DeliveryGroup
 	var finalWire []*llmv1.LLMMessage
 	var total int
+	// The shed's currency is DENSITY — excess acceptance probability per
+	// wire token, the greedy knapsack ranking under a budget — and its
+	// equilibrium realizes the budget's shadow price μ: zero when the
+	// budget never bites (complementary slackness), else the marginal
+	// refused density. A value-ranked shed is the wrong currency: one
+	// marginally-better giant crowds out several cheap goods.
+	groupCost := make(map[string]int)
+	costOf := func(g DeliveryGroup) int {
+		if c, ok := groupCost[g.RootID]; ok {
+			return c
+		}
+		c := e.wireTokens(req.CountText, nil, groupsToWire([]DeliveryGroup{g}, localIDs), nil, 0, req.PerMsgDelim)
+		if c < 1 {
+			c = 1
+		}
+		groupCost[g.RootID] = c
+		return c
+	}
+	densityOf := func(g DeliveryGroup) float64 {
+		return (g.Score - e.cfg.LossRatio) / float64(costOf(g))
+	}
+	realizedPrice := 0.0
 	for {
 		var groups []DeliveryGroup
 		for _, s := range selected.Selected {
@@ -207,17 +229,25 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 			finalSelected = groups
 			break
 		}
-		drop, ok := lowestScoreGroup(groups)
+		drop, ok := lowestDensityGroup(groups, densityOf)
 		if !ok {
 			return AssembleResult{}, fmt.Errorf(
 				"assemble: fixed system and Local Context require %d tokens, budget is %d",
 				total, effectiveBudget,
 			)
 		}
+		// Greedy sheds lowest-density first, so the LAST shed is the best
+		// density the budget refused — the marginal price.
+		if d := densityOf(drop); d > realizedPrice {
+			realizedPrice = d
+		}
 		for _, id := range drop.RootIDs {
 			dropped[id] = true
 		}
 	}
+	// Publish the realized shadow price for the thread's next selection —
+	// the warm-started dual. Zero is meaningful (slack) and is stored.
+	e.setPrice(req.ThreadID, realizedPrice)
 
 	shedIDs := make([]string, 0, len(dropped))
 	for id := range dropped {
@@ -473,13 +503,16 @@ func removeMessage(messages []*threadv1.Message, id string) []*threadv1.Message 
 	return out
 }
 
-func lowestScoreGroup(groups []DeliveryGroup) (DeliveryGroup, bool) {
+// lowestDensityGroup returns the group with the lowest excess-value
+// density — the greedy knapsack's next casualty and, when it is the last
+// one shed, the realized shadow price's source.
+func lowestDensityGroup(groups []DeliveryGroup, density func(DeliveryGroup) float64) (DeliveryGroup, bool) {
 	var selected DeliveryGroup
 	found := false
 	lowest := math.Inf(1)
 	for _, g := range groups {
-		if g.Score < lowest {
-			lowest, selected, found = g.Score, g, true
+		if d := density(g); d < lowest {
+			lowest, selected, found = d, g, true
 		}
 	}
 	return selected, found

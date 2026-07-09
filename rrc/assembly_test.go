@@ -2,6 +2,7 @@ package rrc
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
@@ -257,5 +258,119 @@ func TestEquivalentProtocolClosuresShedTogether(t *testing.T) {
 	}
 	if strings.Join(groups[0].RootIDs, ",") != "call,result" {
 		t.Fatalf("unexpected roots: %v", groups[0].RootIDs)
+	}
+}
+
+// TestAssemble_DensityShedRealizesPriceThatFiltersNextSelection pins the
+// budget-price law (A4-D1/D3) end to end. (1) The shed ranks by
+// excess-value DENSITY: a higher-score giant with terrible density sheds
+// before a cheap dense good — the old value-ranked shed would have
+// dropped the small group first and then the giant anyway. (2) The shed
+// equilibrium REALIZES the budget's shadow price μ — zero under slack
+// (complementary slackness), the marginal refused density when binding.
+// (3) Warm-started dual feedback: the thread's next selection charges
+// μ·tokens, so a candidate whose P clears the precision stance but
+// cannot pay its cost at the realized price forms no edge — while the
+// identical candidate on a slack thread does.
+func TestAssemble_DensityShedRealizesPriceThatFiltersNextSelection(t *testing.T) {
+	mc := newMockScorer()
+	o := newMockChunkOracle()
+	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
+	cfg.DiversityLambda = 0
+	cfg.MinBatchStdDev = 0
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
+	ctx := context.Background()
+
+	bigText := strings.Repeat("giant low density content ", 32)
+	smallText := strings.Repeat("small dense content ", 8)
+	big := addMsg(o, "big", 0, "tp", bigText)
+	small := addMsg(o, "small", 1, "tp", smallText)
+	anchor := addMsg(o, "q", 2, "tp", "the priced query")
+	o.SetRetrievalScore(bigText, 0.9)
+	o.SetRetrievalScore(smallText, 0.8)
+	mc.SetScore(bigText, "the priced query", 0.9)
+	mc.SetScore(smallText, "the priced query", 0.7)
+
+	local := &SerializedLocalContext{
+		EventID: "sel-q", Fingerprint: "fp-shed",
+		MessageIDs: []string{"q"},
+		Chunks:     []SerializedLocalContextChunk{{Index: 0, Text: "the priced query"}},
+	}
+	res, err := e.Assemble(ctx, AssembleRequest{
+		SerializedLocalContext: local, Anchor: anchor,
+		Store:        sliceStore([]*threadv1.Message{big, small, anchor}),
+		LocalContext: []*threadv1.Message{anchor},
+		Scope:        threadv1.SelectionScope_SELECTION_SCOPE_THREAD, ThreadID: "tp",
+		Budget: 60,
+	})
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	shed := map[string]bool{}
+	for _, id := range res.Shed {
+		shed[id] = true
+	}
+	if !shed["big"] || shed["small"] {
+		t.Fatalf("density shed must drop the low-density giant and keep the dense good; shed=%v", res.Shed)
+	}
+	price := e.lastPrice("tp")
+	if price <= 0 {
+		t.Fatalf("a binding shed must realize a positive shadow price, got %v", price)
+	}
+	if free := e.lastPrice("t-free"); free != 0 {
+		t.Fatalf("an untouched thread prices at zero (complementary slackness), got %v", free)
+	}
+
+	// (3) The dual: sim 0.65 → P = σ(12·0.65−7.2) ≈ 0.65 under
+	// DefaultConfig's bootstrap — clears the 0.5 stance, cannot pay
+	// μ·(~110 tokens) at the realized price (~0.0023·110 ≈ 0.25).
+	candText := strings.Repeat("marginal candidate content ", 16)
+	addMsg(o, "cand", 3, "tp", candText)
+	addMsg(o, "q2", 0, "t-free", "the follow-up query")
+	addMsg(o, "cand2", 1, "t-free", candText)
+	o.SetRetrievalScore(candText, 0.9)
+	mc.SetScore(candText, "the follow-up query", 0.65)
+
+	sel := func(threadID, anchorID, fp string) int {
+		a := &threadv1.Message{Id: anchorID, ThreadId: threadID, Role: threadv1.Role_ROLE_USER,
+			Content: pbtext.BlocksFromText("the follow-up query")}
+		l := &SerializedLocalContext{
+			EventID: "sel-" + anchorID, Fingerprint: fp,
+			MessageIDs: []string{anchorID},
+			Chunks:     []SerializedLocalContextChunk{{Index: 0, Text: "the follow-up query"}},
+		}
+		edges, _, err := e.SelectPrerequisites(ctx, l, a, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, threadID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(edges)
+	}
+	if n := sel("tp", "q", "fp-priced"); n != 0 {
+		t.Fatalf("P≈0.65 cannot pay μ·tokens at price %v on the priced thread; got %d edges", price, n)
+	}
+	if n := sel("t-free", "q2", "fp-free"); n != 1 {
+		t.Fatalf("the identical candidate on a slack thread (μ=0) must form its edge; got %d", n)
+	}
+}
+
+// TestMassFloorUnderPrice pins the floor's arithmetic: vacuous at μ=0
+// (complementary slackness), unclearable when LossRatio+μ ≥ 1, and
+// monotone in the price while clearable. Under sane fits the floor stays
+// negative until extreme prices — the acceptance term μ·tokens, not the
+// reach prune, is the working part of the law at ordinary prices.
+func TestMassFloorUnderPrice(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Chunk.Estimator = charEstimator{}
+	e := NewEngine(cfg, newMockScorer(), WithChunkOracle(newMockChunkOracle()))
+	if f := e.massFloorUnderPrice(0); f != 0 {
+		t.Fatalf("slack must be vacuous: %v", f)
+	}
+	if f := e.massFloorUnderPrice(0.6); !math.IsInf(f, 1) {
+		t.Fatalf("LossRatio+μ ≥ 1 is unclearable at any mass: %v", f)
+	}
+	lo, hi := e.massFloorUnderPrice(0.2), e.massFloorUnderPrice(0.4)
+	if !(hi > lo) {
+		t.Fatalf("floor must rise with the price: %v vs %v", lo, hi)
 	}
 }

@@ -26,6 +26,37 @@ type Engine struct {
 	oracle     ChunkOracle
 	edgeFilter func(*rrcv1.Edge) bool
 	logger     *slog.Logger
+
+	// price holds the per-thread realized budget shadow price μ — the
+	// dual variable read off the assembly shed equilibrium, never set by
+	// hand. Complementary slackness: a non-binding budget has price
+	// exactly zero, so under slack the acceptance term μ·tokens is
+	// dormant BY LAW, not by stub. When the shed bites, μ is the
+	// marginal refused density (excess acceptance probability per wire
+	// token), and the NEXT call's selection filters at that price while
+	// the shed remains the hard constraint — warm-started dual feedback,
+	// one call stale, never budget-violating. Derived, reconstructible
+	// state (like the score cache): a restart resets to zero — correct
+	// under slack, re-discovered by the next binding shed.
+	priceMu sync.Mutex
+	price   map[string]float64
+}
+
+// lastPrice returns the thread's realized budget shadow price from the
+// most recent assembly equilibrium (zero before any, and whenever the
+// budget had slack).
+func (e *Engine) lastPrice(threadID string) float64 {
+	e.priceMu.Lock()
+	defer e.priceMu.Unlock()
+	return e.price[threadID]
+}
+
+// setPrice publishes a thread's realized shadow price after a shed
+// equilibrium. Zero is meaningful (slack) and is stored, not skipped.
+func (e *Engine) setPrice(threadID string, mu float64) {
+	e.priceMu.Lock()
+	defer e.priceMu.Unlock()
+	e.price[threadID] = mu
 }
 
 type ChunkRef struct {
@@ -133,6 +164,7 @@ func NewEngine(cfg EngineConfig, scorer Scorer, options ...Option) *Engine {
 		scores: newScoreCache(),
 		cfg:    cfg,
 		logger: slog.Default(),
+		price:  make(map[string]float64),
 	}
 	for _, option := range options {
 		option(engine)

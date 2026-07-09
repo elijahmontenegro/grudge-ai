@@ -51,7 +51,19 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 		PredExcludeMessageIDs{MessageIDs: append([]string(nil), local.MessageIDs...)},
 	}}
 
+	// The thread's realized budget shadow price from the previous
+	// assembly equilibrium — complementary slackness makes it exactly
+	// zero under slack, so the μ·tokens acceptance term is dormant by
+	// law whenever the budget doesn't bind.
+	price := e.lastPrice(threadID)
+
 	bestScore := make(map[string]float64)
+	// bestTokens is each candidate's delivery-cost LOWER BOUND — the
+	// token estimate of its best-scoring chunk. Selection is the price
+	// FILTER (charge at least this); the assembly shed is the hard
+	// enforcer with exact wire costs, so an underestimate here can never
+	// overrun the budget.
+	bestTokens := make(map[string]int)
 	// threadByID maps a candidate message id to its thread, for edge
 	// construction — filled from the candidates' own ThreadID (retrieval) and
 	// the provenance walk (reach), never a corpus scan.
@@ -122,6 +134,7 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 			current, exists := bestScore[candidate.ref.MessageID]
 			if !exists || candidate.score > current {
 				bestScore[candidate.ref.MessageID] = candidate.score
+				bestTokens[candidate.ref.MessageID] = e.cfg.Chunk.Estimate(candidate.ref.Text)
 			}
 		}
 	}
@@ -147,17 +160,27 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	reachMass, reachThreads, reachTruncated := e.provenanceReach(walkAnchors, threadID, scope)
 	var provenanceReached int
 	if len(reachMass) > 0 {
+		// Value-stop under a binding budget: below massFloor, no
+		// candidate can clear priced acceptance even at sim = 1, so
+		// scoring a reach-only candidate under it is provably wasted
+		// scorer compute. Sound because the floor tests EXACT mass
+		// (post-walk), never the best-path bound. μ = 0 (slack) makes
+		// the floor non-positive — vacuous by complementary slackness.
+		massFloor := e.massFloorUnderPrice(price)
 		missing := make([]string, 0, len(reachMass))
 		for id := range reachMass {
 			if _, alreadyScored := bestScore[id]; alreadyScored {
 				continue // top-K cosine already surfaced it
+			}
+			if reachMass[id] < massFloor {
+				continue // sterile at the current price
 			}
 			// The walk already applied scope and excludes the cone (local
 			// context), so a reached id needs no further eligibility check.
 			missing = append(missing, id)
 		}
 		if len(missing) > 0 {
-			provReached, err := e.scoreReachedMessages(ctx, local, missing, bestScore)
+			provReached, err := e.scoreReachedMessages(ctx, local, missing, bestScore, bestTokens)
 			if err != nil {
 				return nil, PrerequisiteSelectionTelemetry{}, err
 			}
@@ -201,21 +224,25 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 		}, nil
 	}
 
-	// Acceptance is calibrated expected value, not a flat threshold (A4).
-	// Each candidate's raw similarity (candidate.score) and structural mass
-	// (reachMass) fuse through the Calibrator into P(prereq); accept when
-	// expected value clears the marginal token price. At edge FORMATION the
-	// shadow price μ is 0 (the token-scarcity cut happens later, in the
-	// assembly shed loop where the budget binds), so the formation floor is
-	// P(prereq) ≥ LossRatio — the precision stance. The stored edge Score is
-	// the calibrated P so downstream traversal and budget ranking speak the
-	// same currency; CrossEncoderScore retains the raw similarity.
+	// Acceptance is calibrated expected value against the token budget's
+	// marginal price (A4, complete). Each candidate's raw similarity
+	// (candidate.score) and structural mass (reachMass) fuse through the
+	// Calibrator into P(prereq); accept when the excess over the
+	// precision stance covers the candidate's cost at the thread's
+	// realized shadow price: P ≥ LossRatio + μ·tokens. μ comes from the
+	// previous assembly's shed equilibrium — exactly zero under slack
+	// (complementary slackness), the marginal refused density when the
+	// budget bit — and tokens is the candidate's delivery-cost lower
+	// bound. Selection is the price filter; the shed stays the hard
+	// enforcer. The stored edge Score is the calibrated P — the
+	// formation-time audit record (traversal beyond hop 1 derives from
+	// CrossEncoderScore under the current calibrator; see selection.go).
 	var edges []*rrcv1.Edge
 	for _, candidate := range candidates {
 		sim := candidate.score
 		mass := reachMass[candidate.id]
 		p := e.cfg.Calibrator.Predict(sim, mass)
-		if !accept(p, e.cfg.LossRatio, 0 /* μ at formation */, 0 /* tokens n/a at formation */) {
+		if !accept(p, e.cfg.LossRatio, price, bestTokens[candidate.id]) {
 			continue
 		}
 		edge := &rrcv1.Edge{
@@ -274,7 +301,7 @@ type PrerequisiteSelectionTelemetry struct {
 // compete on identical footing. Returns the number of (chunk-pair) scores
 // computed. Scores are cached like the cosine path. Uncached-only: a reached
 // message whose pair was already scored this fingerprint reuses the cache.
-func (e *Engine) scoreReachedMessages(ctx context.Context, local *SerializedLocalContext, messageIDs []string, bestScore map[string]float64) (int, error) {
+func (e *Engine) scoreReachedMessages(ctx context.Context, local *SerializedLocalContext, messageIDs []string, bestScore map[string]float64, bestTokens map[string]int) (int, error) {
 	chunksByMsg, err := e.oracle.ChunksForMessages(ctx, messageIDs)
 	if err != nil {
 		return 0, fmt.Errorf("provenance reach: chunks for messages: %w", err)
@@ -286,6 +313,7 @@ func (e *Engine) scoreReachedMessages(ctx context.Context, local *SerializedLoca
 				if s, ok := e.scores.getLocalContext(local.Fingerprint, localChunk.Index, msgID, cand.ChunkIndex); ok {
 					if cur, exists := bestScore[msgID]; !exists || s > cur {
 						bestScore[msgID] = s
+						bestTokens[msgID] = e.cfg.Chunk.Estimate(cand.Text)
 					}
 					continue
 				}
@@ -305,9 +333,32 @@ func (e *Engine) scoreReachedMessages(ctx context.Context, local *SerializedLoca
 				e.scores.setLocalContext(local.Fingerprint, localChunk.Index, msgID, cand.ChunkIndex, score)
 				if cur, exists := bestScore[msgID]; !exists || score > cur {
 					bestScore[msgID] = score
+					bestTokens[msgID] = e.cfg.Chunk.Estimate(cand.Text)
 				}
 			}
 		}
 	}
 	return scored, nil
+}
+
+// massFloorUnderPrice: under shadow price μ, the mass below which NO
+// candidate clears priced acceptance even at sim = 1 and minimal cost
+// (t_min = 1 token): σ(A + B·m + C) < LossRatio + μ. A theorem of the
+// fitted acceptance law, not a knob — it moves when the fit moves.
+// μ = 0 (slack) yields a non-positive floor: vacuous by complementary
+// slackness, which is why the walk's yield is only ever priced when the
+// budget actually binds. A target ≥ 1 is unclearable at any mass.
+func (e *Engine) massFloorUnderPrice(mu float64) float64 {
+	if mu <= 0 {
+		return 0
+	}
+	target := e.cfg.LossRatio + mu
+	if target >= 1 {
+		return math.Inf(1)
+	}
+	c := e.cfg.Calibrator
+	if c.B <= 0 {
+		return 0
+	}
+	return (math.Log(target/(1-target)) - c.A - c.C) / c.B
 }
