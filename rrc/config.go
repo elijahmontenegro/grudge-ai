@@ -94,16 +94,6 @@ type EngineConfig struct {
 	// context size, reserving max output tokens via BudgetHeadroomPct.
 	ContextBudgetTokens int
 
-	// DiversityLambda is the MMR tradeoff between relevance and
-	// diversity at post-Selection emission. effective(C) =
-	// λ·origScore(C) - (1-λ)·max_sim(C, already_kept). At λ=1 MMR
-	// degenerates to score-desc (today's behavior); at λ=0 it picks
-	// purely for diversity with no regard for relevance. 0.7 is the
-	// standard default from Carbonell & Goldstein (1998) — mostly
-	// relevance-driven but with enough diversity penalty to collapse
-	// near-duplicate chains (the "nine copies of let me check the
-	// chapter" pattern) to one or two representatives.
-	DiversityLambda float64
 
 	// BudgetHeadroomPct is a fixed global margin on the context
 	// budget. estimate ≤ ContextBudgetTokens × BudgetHeadroomPct.
@@ -174,7 +164,6 @@ func DefaultConfig() EngineConfig {
 		ContextBudgetTokens: 150000,
 
 		// MMR diversity default per Carbonell & Goldstein (1998).
-		DiversityLambda: 0.7,
 		// 10% margin holds output reserve + residual estimation
 		// noise; tokenizer-scale drift is the learned scale's job.
 		BudgetHeadroomPct: 0.90,

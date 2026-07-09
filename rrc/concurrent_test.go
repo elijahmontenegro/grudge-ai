@@ -29,7 +29,6 @@ func TestAssemble_ConcurrentSameEngine(t *testing.T) {
 	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
 	cfg.LocalContextSize = 1
-	cfg.DiversityLambda = 0
 
 	prior1 := addMsg(o, "m1", 0, "t1", "alpha")
 	prior2 := addMsg(o, "m2", 1, "t1", "beta")
@@ -90,7 +89,6 @@ func TestEngineSwap_OldEngineKeepsWorking(t *testing.T) {
 	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
 	cfg.LocalContextSize = 1
-	cfg.DiversityLambda = 0
 
 	o := newMockChunkOracle()
 	prior := addMsg(o, "p1", 0, "t1", "p")

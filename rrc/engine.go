@@ -232,15 +232,26 @@ func (e *Engine) selectLocked(anchorID string, scope threadv1.SelectionScope, th
 	return result, nil
 }
 
-// ApplyMMR reranks selected for diversity via MMR (Carbonell &
-// Goldstein 1998): effective(C) = λ·orig(C) − (1−λ)·max_sim(C, kept),
-// greedy pick-max-effective, first pick the highest-original-score
-// candidate. The oracle supplies only the per-message representative
-// vectors; the algorithm is engine-owned. When the oracle has no
-// representation for any candidate the input is returned unchanged —
-// an unmeasurable diversity penalty must not silently rescale scores.
-func (e *Engine) ApplyMMR(ctx context.Context, selected []*rrcv1.SelectedMessage, lambda float64) ([]*rrcv1.SelectedMessage, error) {
-	if len(selected) <= 1 || lambda <= 0 || lambda >= 1 {
+// ApplyMMR reranks selected for diversity: a candidate's effective value
+// is its NOVEL FRACTION — orig(C) · (1 − max_sim(C, kept)) — greedy
+// pick-max-effective, first pick the highest-original-score candidate.
+// The convex-combination λ knob is gone: what a candidate is worth is
+// what it adds that the kept set doesn't already carry — a derived form
+// with zero free parameters, and value stays ≥ 0 (the old
+// λ·orig − (1−λ)·max_sim rewrite went provably negative on
+// near-duplicates, and before raw-weight banking those rewrites reached
+// the recorded graph). This form is itself scheduled to die: the
+// redundancy discount belongs to the calibrator as a third fitted
+// signal — P(needed | sim, mass, redundancy), learned from regenerative
+// counterfactuals, where a redundant-but-relevant candidate judges
+// not-needed because its twin sufficed — landing when the corpus can
+// feed the fit (the same watermark gate as B). The oracle supplies only
+// the per-message representative vectors; the algorithm is
+// engine-owned. When the oracle has no representation for any candidate
+// the input is returned unchanged — unmeasurable redundancy must not
+// silently rescale scores.
+func (e *Engine) ApplyMMR(ctx context.Context, selected []*rrcv1.SelectedMessage) ([]*rrcv1.SelectedMessage, error) {
+	if len(selected) <= 1 {
 		return selected, nil
 	}
 	if e.oracle == nil {
@@ -295,7 +306,13 @@ func (e *Engine) ApplyMMR(ctx context.Context, selected []*rrcv1.SelectedMessage
 					maxSim = s
 				}
 			}
-			effective := lambda*original[cand.MessageId] - (1.0-lambda)*maxSim
+			if maxSim < 0 {
+				maxSim = 0
+			}
+			if maxSim > 1 {
+				maxSim = 1
+			}
+			effective := original[cand.MessageId] * (1.0 - maxSim)
 			if effective > bestScore {
 				bestScore = effective
 				bestIdx = i

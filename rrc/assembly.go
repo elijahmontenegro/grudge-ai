@@ -117,9 +117,9 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 		selected.LocalContextMessageIds = append([]string(nil), serializedLocal.MessageIDs...)
 		selected.AnchorMessageId = req.Anchor.Id
 
-		if e.cfg.DiversityLambda > 0 && e.cfg.DiversityLambda < 1 && len(selected.Selected) > 1 {
+		if len(selected.Selected) > 1 {
 			mmrStart := time.Now()
-			ranked, mmrErr := e.ApplyMMR(ctx, selected.Selected, e.cfg.DiversityLambda)
+			ranked, mmrErr := e.ApplyMMR(ctx, selected.Selected)
 			mmrMs = time.Since(mmrStart).Milliseconds()
 			if mmrErr != nil {
 				e.logger.Warn("RRC: MMR rerank skipped", "localContext", serializedLocal.Fingerprint, "err", mmrErr)

@@ -20,7 +20,6 @@ func TestAssemble_PriorSelectionReusesNoReselect(t *testing.T) {
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
-	cfg.DiversityLambda = 0
 	cfg.MinBatchStdDev = 0 // isolate reuse from the batch-flatness gate
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	ctx := context.Background()
@@ -81,7 +80,6 @@ func TestAssemble_PriorSelectionShedsWholeGroups(t *testing.T) {
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
-	cfg.DiversityLambda = 0
 	cfg.MinBatchStdDev = 0 // isolate reuse/shed from the batch-flatness gate
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	ctx := context.Background()

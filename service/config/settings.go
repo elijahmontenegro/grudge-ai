@@ -47,21 +47,30 @@ type EngineConfig struct {
 	LocalContextSize      int     `json:"local_context_size"`
 	RerankTopK            int     `json:"rerank_top_k"`
 	ContextBudgetTokens   int     `json:"context_budget_tokens"`
-	DiversityLambda       float64 `json:"diversity_lambda"`
 	BudgetHeadroomPct     float64 `json:"budget_headroom_pct"`
 	PerMsgDelimiterTokens int     `json:"per_msg_delimiter_tokens"`
 }
 
 func (e *EngineConfig) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	// Retired keys migrate by tolerated deletion: diversity_lambda died
+	// with the MMR λ knob (the redundancy discount is derived — the
+	// novel fraction — and later a fitted calibrator axis; never a
+	// configuration). An existing settings file keeps loading; the key
+	// drops on the next save.
+	delete(fields, "diversity_lambda")
+	cleaned, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
 	type plain EngineConfig
-	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder := json.NewDecoder(bytes.NewReader(cleaned))
 	decoder.DisallowUnknownFields()
 	var decoded plain
 	if err := decoder.Decode(&decoded); err != nil {
-		return err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
 	// loss_ratio is optional (absent = keep the default stance); every
@@ -69,7 +78,7 @@ func (e *EngineConfig) UnmarshalJSON(data []byte) error {
 	// error, not a request for defaults.
 	required := []string{
 		"min_batch_stddev", "local_context_size", "rerank_top_k",
-		"context_budget_tokens", "diversity_lambda",
+		"context_budget_tokens",
 		"budget_headroom_pct", "per_msg_delimiter_tokens",
 	}
 	for _, key := range required {
@@ -93,7 +102,6 @@ func (e EngineConfig) ApplyTo(base rrc.EngineConfig) rrc.EngineConfig {
 	base.LocalContextSize = e.LocalContextSize
 	base.RerankTopK = e.RerankTopK
 	base.ContextBudgetTokens = e.ContextBudgetTokens
-	base.DiversityLambda = e.DiversityLambda
 	base.BudgetHeadroomPct = e.BudgetHeadroomPct
 	base.PerMsgDelimiterTokens = e.PerMsgDelimiterTokens
 	return base
@@ -109,7 +117,6 @@ func EngineConfigFromRRC(ec rrc.EngineConfig) EngineConfig {
 		LocalContextSize:      ec.LocalContextSize,
 		RerankTopK:            ec.RerankTopK,
 		ContextBudgetTokens:   ec.ContextBudgetTokens,
-		DiversityLambda:       ec.DiversityLambda,
 		BudgetHeadroomPct:     ec.BudgetHeadroomPct,
 		PerMsgDelimiterTokens: ec.PerMsgDelimiterTokens,
 	}
@@ -119,11 +126,10 @@ func (e EngineConfig) Validate() error {
 	if e.MinBatchStdDev < 0 ||
 		e.LocalContextSize <= 0 || e.RerankTopK <= 0 ||
 		e.ContextBudgetTokens < 0 ||
-		e.DiversityLambda < 0 || e.DiversityLambda > 1 ||
 		e.BudgetHeadroomPct < 0 || e.BudgetHeadroomPct > 1 ||
 		e.LossRatio < 0 || e.LossRatio > 1 ||
 		e.PerMsgDelimiterTokens < 0 {
-		return fmt.Errorf("engine config: Local Context size and top-K must be positive; other values cannot be negative; lambda, headroom, and loss_ratio must be in [0,1]")
+		return fmt.Errorf("engine config: Local Context size and top-K must be positive; other values cannot be negative; headroom and loss_ratio must be in [0,1]")
 	}
 	return nil
 }
@@ -254,7 +260,6 @@ func defaultSettings() Settings {
 			LocalContextSize:      10,
 			RerankTopK:            64,
 			ContextBudgetTokens:   150000,
-			DiversityLambda:       0.7,
 			BudgetHeadroomPct:     0.90,
 			PerMsgDelimiterTokens: 5,
 		},

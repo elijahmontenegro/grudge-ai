@@ -81,7 +81,6 @@ func TestAssemble_WindowDelivery(t *testing.T) {
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
-	cfg.DiversityLambda = 0
 	cfg.MinBatchStdDev = 0
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
@@ -277,7 +276,6 @@ func TestAssemble_DensityShedRealizesPriceThatFiltersNextSelection(t *testing.T)
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
-	cfg.DiversityLambda = 0
 	cfg.MinBatchStdDev = 0
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	ctx := context.Background()

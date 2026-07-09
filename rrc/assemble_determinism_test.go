@@ -44,7 +44,6 @@ func TestAssemble_Deterministic(t *testing.T) {
 	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
 	cfg.LocalContextSize = 1
-	cfg.DiversityLambda = 0 // disable MMR — focus the test on Selection
 
 	prior1 := addMsg(o, "m1", 0, "t1", "alpha")
 	prior2 := addMsg(o, "m2", 1, "t1", "beta")

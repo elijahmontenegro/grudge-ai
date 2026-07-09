@@ -111,7 +111,6 @@ func usageHarness(t *testing.T, completer interface {
 	cfg.Chunk.Estimator = testEstimator{}
 	cfg.LocalContextSize = 1
 	cfg.MinBatchStdDev = 0
-	cfg.DiversityLambda = 0
 	cfg.ContextBudgetTokens = 1000
 	cfg.BudgetHeadroomPct = 0.9
 	engine := rrc.NewEngine(cfg, &fixedScorer{}, rrc.WithChunkOracle(fixedOracle{

@@ -122,7 +122,6 @@ func TestProtocolClosureBypassesAcceptanceGate(t *testing.T) {
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
-	cfg.DiversityLambda = 0
 	cfg.MinBatchStdDev = 0
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	ctx := context.Background()

@@ -106,11 +106,11 @@ func (r *mutationResolver) UpdateSettings(ctx context.Context, input SettingsInp
 
 	if engine != nil {
 		live := r.substrate.Engine().Config()
-		log.Printf("[Settings] Engine config applied live: lossRatio=%.3f minStd=%.3f local=%d topK=%d budget=%d lambda=%.2f headroom=%.2f delim=%d",
+		log.Printf("[Settings] Engine config applied live: lossRatio=%.3f minStd=%.3f local=%d topK=%d budget=%d headroom=%.2f delim=%d",
 			live.LossRatio, live.MinBatchStdDev,
 			live.LocalContextSize, live.RerankTopK,
 			live.ContextBudgetTokens,
-			live.DiversityLambda, live.BudgetHeadroomPct, live.PerMsgDelimiterTokens)
+			live.BudgetHeadroomPct, live.PerMsgDelimiterTokens)
 	}
 	return r.Query().Settings(ctx)
 }

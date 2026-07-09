@@ -1099,7 +1099,6 @@ func (o *vectorOracle) RepresentativeVectors(_ context.Context, ids []string) (m
 func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
-	cfg.DiversityLambda = 0.7
 
 	o := newVectorOracle()
 	// dup1..dup3 are near-identical vectors (cosine ≈ 1).
@@ -1117,7 +1116,7 @@ func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 		{MessageId: "distinct", EffectiveScore: 0.60},
 	}
 
-	out, err := e.ApplyMMR(context.Background(), selected, cfg.DiversityLambda)
+	out, err := e.ApplyMMR(context.Background(), selected)
 	if err != nil {
 		t.Fatalf("ApplyMMR error: %v", err)
 	}
@@ -1128,21 +1127,29 @@ func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 	if out[0].MessageId != "dup1" {
 		t.Errorf("first pick should be highest orig score (dup1); got %s", out[0].MessageId)
 	}
-	// Second pick should be distinct (orthogonal → diversity bonus
-	// overwhelms the orig-score gap). Under λ=0.7:
-	//   dup2 effective = 0.7*0.94 - 0.3*~0.99 ≈ 0.36
-	//   distinct effective = 0.7*0.60 - 0.3*0   = 0.42
+	// Second pick is distinct: its novel fraction is 1 (orthogonal), so
+	// it keeps full value 0.60, while the dups collapse to
+	// 0.94·(1−~0.99) ≈ 0.005.
 	if out[1].MessageId != "distinct" {
-		t.Errorf("second pick should be distinct (diversity bonus beats orig-score gap); got %s", out[1].MessageId)
+		t.Errorf("second pick should be distinct (novelty beats the orig-score gap); got %s", out[1].MessageId)
 	}
-	// Scores of non-first picks must be the MMR-adjusted values (lower
-	// than orig), not the originals — otherwise downstream shed would
-	// behave as if MMR never ran.
+	// Duplicates carry their DISCOUNTED value (≈0, well below original);
+	// a fully-novel candidate keeps its original value undiscounted —
+	// the novel-fraction form never penalizes what adds new information,
+	// and never goes negative (the old λ rewrite provably did).
 	for i := 1; i < len(out); i++ {
-		for _, s := range selected {
-			if s.MessageId == out[i].MessageId && float64(out[i].EffectiveScore) >= float64(s.EffectiveScore) {
-				t.Errorf("MMR-adjusted score for %s (%.3f) should be below original (%.3f)",
-					out[i].MessageId, out[i].EffectiveScore, s.EffectiveScore)
+		got := float64(out[i].EffectiveScore)
+		if got < 0 {
+			t.Errorf("novel-fraction value must be ≥ 0, got %.3f for %s", got, out[i].MessageId)
+		}
+		switch out[i].MessageId {
+		case "dup2", "dup3":
+			if got > 0.1 {
+				t.Errorf("near-duplicate %s should be discounted to ≈0, got %.3f", out[i].MessageId, got)
+			}
+		case "distinct":
+			if got < 0.599 {
+				t.Errorf("fully-novel candidate keeps its value, got %.3f", got)
 			}
 		}
 	}
@@ -1158,7 +1165,7 @@ func TestApplyMMR_NoOracleError(t *testing.T) {
 	_, err := e.ApplyMMR(context.Background(), []*rrcv1.SelectedMessage{
 		{MessageId: "a", EffectiveScore: 0.5},
 		{MessageId: "b", EffectiveScore: 0.4},
-	}, 0.7)
+	})
 	if err == nil {
 		t.Fatal("expected ApplyMMR error without oracle wired")
 	}
@@ -1189,7 +1196,7 @@ func TestApplyMMR_ExactScores(t *testing.T) {
 		{MessageId: "far", EffectiveScore: 0.50},
 	}
 	e := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(o))
-	out, err := e.ApplyMMR(context.Background(), selected, 0.5)
+	out, err := e.ApplyMMR(context.Background(), selected)
 	if err != nil {
 		t.Fatalf("ApplyMMR error: %v", err)
 	}
@@ -1203,17 +1210,17 @@ func TestApplyMMR_ExactScores(t *testing.T) {
 		}
 	}
 
-	// near's effective score must be the MMR-adjusted (negative) value,
-	// not its original 0.90. Same for far (0.25, not 0.50).
+	// Novel-fraction values: near duplicates anchor exactly (cos 1) →
+	// 0.90·(1−1) = 0; far is orthogonal → keeps its full 0.50.
 	for _, s := range out[1:] {
 		switch s.MessageId {
 		case "near":
-			if math.Abs(float64(s.EffectiveScore)-(-0.05)) > 1e-5 {
-				t.Errorf("near effective: want -0.05, got %v", s.EffectiveScore)
+			if math.Abs(float64(s.EffectiveScore)) > 1e-5 {
+				t.Errorf("near effective: want 0 (zero novel fraction), got %v", s.EffectiveScore)
 			}
 		case "far":
-			if math.Abs(float64(s.EffectiveScore)-0.25) > 1e-5 {
-				t.Errorf("far effective: want 0.25, got %v", s.EffectiveScore)
+			if math.Abs(float64(s.EffectiveScore)-0.50) > 1e-5 {
+				t.Errorf("far effective: want 0.50 (fully novel), got %v", s.EffectiveScore)
 			}
 		}
 	}
@@ -1379,7 +1386,7 @@ func TestSelect_ProvenanceWeightIsRawEvidence(t *testing.T) {
 		{MessageId: "near", EffectiveScore: 0.90, ProvenanceWeight: 0.59},
 	}
 	me := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(o))
-	out2, err := me.ApplyMMR(context.Background(), mmrIn, 0.5)
+	out2, err := me.ApplyMMR(context.Background(), mmrIn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1396,31 +1403,6 @@ func TestSelect_ProvenanceWeightIsRawEvidence(t *testing.T) {
 			if math.Abs(float64(s.ProvenanceWeight)-0.61) > 1e-6 {
 				t.Fatalf("anchor provenance_weight changed: %v", s.ProvenanceWeight)
 			}
-		}
-	}
-}
-
-// TestApplyMMR_LambdaExtremesNoOp verifies that λ at the boundary
-// values (0, 1) is treated as a no-op pass-through. Callers should
-// un-wire the diversity penalty explicitly rather than pay the cost
-// of computing "λ·x + 0" or "0 + (1-λ)·diversity" — those extremes
-// collapse to the non-MMR paths the caller already has.
-func TestApplyMMR_LambdaExtremesNoOp(t *testing.T) {
-	e := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(newVectorOracle()))
-	selected := []*rrcv1.SelectedMessage{
-		{MessageId: "a", EffectiveScore: 0.9},
-		{MessageId: "b", EffectiveScore: 0.8},
-	}
-	for _, lambda := range []float64{0.0, 1.0} {
-		out, err := e.ApplyMMR(context.Background(), selected, lambda)
-		if err != nil {
-			t.Fatalf("lambda=%.1f: unexpected error: %v", lambda, err)
-		}
-		if len(out) != 2 || out[0].MessageId != "a" || out[1].MessageId != "b" {
-			t.Errorf("lambda=%.1f: expected pass-through, got %v", lambda, out)
-		}
-		if out[0].EffectiveScore != 0.9 || out[1].EffectiveScore != 0.8 {
-			t.Errorf("lambda=%.1f: scores must not be rewritten on pass-through", lambda)
 		}
 	}
 }

@@ -93,7 +93,6 @@ func TestGenerateContentUsesCurrentThreadAnchorAndPublishesOneSelectionAcrossRet
 	cfg.Chunk.Estimator = testEstimator{}
 	cfg.LocalContextSize = 1
 	cfg.MinBatchStdDev = 0
-	cfg.DiversityLambda = 0
 	scorer := &fixedScorer{}
 	engine := rrc.NewEngine(cfg, scorer, rrc.WithChunkOracle(fixedOracle{
 		candidate: rrc.ChunkRef{MessageID: foreign.Id, ChunkIndex: 0, Text: "foreign prerequisite"},
