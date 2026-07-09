@@ -185,7 +185,6 @@ func assembleInstruction(threadID string, thread *threadv1.Thread, deps Deps) (s
 	}
 	return deps.Assembler.Assemble(prompt.TemplateData{
 		UserName:    deps.Config.Settings.GetUserName(),
-		ThreadName:  thread.Name,
 		Sandboxed:   thread.Sandboxed,
 		WorkingDirs: thread.WorkingDirs,
 		AgentsMD:    agentsMD,

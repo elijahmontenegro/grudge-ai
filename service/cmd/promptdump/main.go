@@ -35,7 +35,6 @@ import (
 func main() {
 	mode := flag.String("mode", "normal", "agent mode: normal, plan, autonomous")
 	userName := flag.String("user", "elijahmontenegro", "user name for the User section")
-	threadName := flag.String("thread", "promptdump", "thread name")
 	sandboxed := flag.Bool("sandboxed", false, "sandbox flag")
 	showPrompt := flag.Bool("prompt", true, "render the system prompt")
 	showTools := flag.Bool("tools", true, "render the tool descriptions")
@@ -57,7 +56,6 @@ func main() {
 		}
 		data := prompt.TemplateData{
 			UserName:    *userName,
-			ThreadName:  *threadName,
 			Sandboxed:   *sandboxed,
 			WorkingDirs: []string{"/example/working/dir"},
 			AgentsMD:    []string{"## Example project instructions\n\nMounted AGENTS.md content lands here."},

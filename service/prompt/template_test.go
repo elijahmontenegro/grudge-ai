@@ -16,7 +16,6 @@ var updateGoldens = flag.Bool("update", false, "rewrite golden files with curren
 func fixture(mode string) TemplateData {
 	return TemplateData{
 		UserName:    "elijahmontenegro",
-		ThreadName:  "test",
 		Sandboxed:   false,
 		WorkingDirs: []string{"/test"},
 		AgentsMD:    []string{"## test"},
