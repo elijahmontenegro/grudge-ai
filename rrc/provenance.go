@@ -1,10 +1,12 @@
 package rrc
 
 import (
+	"container/heap"
+	"sort"
+
 	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"sort"
 )
 
 // provenanceReachCap bounds how many provenance-reached candidate messages
@@ -166,24 +168,68 @@ func ProvenanceMass(edges []*rrcv1.Edge, anchorIDs []string, coneThreadID string
 // reached message's thread (read off the provenance edges it walks), so
 // the caller can build edges for reached messages without a full-corpus
 // lookup.
+// provIn is one incoming provenance relation: the contributor and its
+// recorded contribution weight.
+type provIn struct {
+	from   string
+	weight float64
+}
+
+// boundEntry / boundHeap: max-heap over best-path-product bounds with a
+// deterministic id tie-break. Lazy deletion — improved bounds push
+// duplicates; stale entries are skipped at pop against best[].
+type boundEntry struct {
+	id    string
+	bound float64
+}
+
+type boundHeap []boundEntry
+
+func (h boundHeap) Len() int { return len(h) }
+func (h boundHeap) Less(i, j int) bool {
+	if h[i].bound != h[j].bound {
+		return h[i].bound > h[j].bound
+	}
+	return h[i].id < h[j].id
+}
+func (h boundHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *boundHeap) Push(x any)   { *h = append(*h, x.(boundEntry)) }
+func (h *boundHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
 func provenanceMassWalk(d *dag, anchorIDs []string, coneThreadID string, scope threadv1.SelectionScope) (map[string]float64, map[string]string, bool) {
 	anchors := make(map[string]bool, len(anchorIDs))
 	for _, id := range anchorIDs {
 		anchors[id] = true
 	}
 
-	// Phase 1 — capped, deterministic reachability. BFS backward from the
-	// anchor set over provenance edges, expanding in sorted-id layers so
-	// the kept set under the cap is a function of the edge SET, not of
-	// edge insertion or slice order.
+	// Phase 1 — capped reachability, BEST-FIRST by path-product bound.
+	// The cap is a compute-resource rule (it bounds scorer pairs per
+	// step — permissible); WHICH nodes it keeps is a truth question, so
+	// truncation keeps the top-K by the law's own currency: the
+	// strongest recorded path into the anchor set. Weights ≤ 1 make
+	// expansion monotone (Dijkstra on the reversed graph; max-product ≡
+	// min-cost under -log), so nodes settle in non-increasing bound
+	// order and the settled set provably holds the highest-bound
+	// reachable nodes. The bound is the BEST single path — a lower bound
+	// on final path-SUM mass — so ordering keeps the dominant term. (The
+	// old layered BFS kept the hop-NEAREST K instead: an arbitrary WHICH
+	// leaking into truth whenever the cap bit.) Ties settle in id order
+	// for determinism; weights clamp to [0,1] for ORDERING only —
+	// phase-2 mass math is untouched.
 	inReach := make(map[string]bool)
 	threadByID := make(map[string]string)
-	seen := make(map[string]bool, len(anchorIDs))
+	settled := make(map[string]bool, len(anchorIDs))
 	for _, id := range anchorIDs {
-		seen[id] = true
+		settled[id] = true
 	}
-	contributorsOf := func(id string) []string {
-		var out []string
+	contributorsOf := func(id string) []provIn {
+		var out []provIn
 		for _, edge := range d.Prerequisites(id) {
 			if edge.Source != rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE {
 				continue
@@ -192,31 +238,49 @@ func provenanceMassWalk(d *dag, anchorIDs []string, coneThreadID string, scope t
 				continue
 			}
 			threadByID[edge.FromMessageId] = edge.FromThreadId
-			out = append(out, edge.FromMessageId)
+			out = append(out, provIn{from: edge.FromMessageId, weight: float64(edge.Score)})
 		}
 		return out
 	}
-	truncated := false
-	frontier := append([]string(nil), anchorIDs...)
-	for len(frontier) > 0 && !truncated {
-		var next []string
-		for _, id := range frontier {
-			for _, from := range contributorsOf(id) {
-				if !seen[from] {
-					seen[from] = true
-					next = append(next, from)
-				}
-			}
+	clamp01 := func(w float64) float64 {
+		if w < 0 {
+			return 0
 		}
-		sort.Strings(next)
-		frontier = frontier[:0]
-		for _, id := range next {
-			if len(inReach) >= provenanceReachCap {
-				truncated = true
-				break
-			}
-			inReach[id] = true
-			frontier = append(frontier, id)
+		if w > 1 {
+			return 1
+		}
+		return w
+	}
+	best := make(map[string]float64)
+	h := &boundHeap{}
+	push := func(id string, bound float64) {
+		if settled[id] {
+			return
+		}
+		if cur, ok := best[id]; !ok || bound > cur {
+			best[id] = bound
+			heap.Push(h, boundEntry{id: id, bound: bound})
+		}
+	}
+	for _, a := range anchorIDs {
+		for _, in := range contributorsOf(a) {
+			push(in.from, clamp01(in.weight))
+		}
+	}
+	truncated := false
+	for h.Len() > 0 {
+		top := heap.Pop(h).(boundEntry)
+		if settled[top.id] || top.bound < best[top.id] {
+			continue // already settled, or a stale lazy-deletion duplicate
+		}
+		if len(inReach) >= provenanceReachCap {
+			truncated = true // a valid unsettled candidate remains beyond the cap
+			break
+		}
+		settled[top.id] = true
+		inReach[top.id] = true
+		for _, in := range contributorsOf(top.id) {
+			push(in.from, top.bound*clamp01(in.weight))
 		}
 	}
 
@@ -277,13 +341,13 @@ func provenanceMassWalk(d *dag, anchorIDs []string, coneThreadID string, scope t
 		mass[v] = m
 		finalized[v] = true
 		var freed []string
-		for _, from := range contributorsOf(v) {
-			if !inReach[from] || finalized[from] {
+		for _, in := range contributorsOf(v) {
+			if !inReach[in.from] || finalized[in.from] {
 				continue
 			}
-			pending[from]--
-			if pending[from] == 0 {
-				freed = append(freed, from)
+			pending[in.from]--
+			if pending[in.from] == 0 {
+				freed = append(freed, in.from)
 			}
 		}
 		sort.Strings(freed)

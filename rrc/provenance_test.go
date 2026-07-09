@@ -2,6 +2,7 @@ package rrc
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
@@ -290,5 +291,49 @@ func TestProvenanceMass_DiamondAccumulatesBeforePropagating(t *testing.T) {
 		if got := mass["a"]; got < 0.899 || got > 0.901 {
 			t.Fatalf("perm %v: mass[a] = %v, want 0.9", p, got)
 		}
+	}
+}
+
+// TestProvenanceMass_CapKeepsStrongestPathsNotNearest pins A4-D4: when
+// the compute cap bites, truncation keeps the top-K by the law's own
+// currency — the strongest recorded path into the anchor set — not the
+// hop-nearest K. The old layered BFS filled the cap with 64 weak DIRECT
+// contributors and never reached a maximal-weight root one hop deeper:
+// an arbitrary WHICH leaking into truth exactly when the cap mattered.
+func TestProvenanceMass_CapKeepsStrongestPathsNotNearest(t *testing.T) {
+	mk := func(from, to string, w float32) *rrcv1.Edge {
+		return &rrcv1.Edge{
+			FromMessageId: from, ToMessageId: to, Score: w,
+			Source:       rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE,
+			FromThreadId: "t1", ToThreadId: "t1",
+		}
+	}
+	var edges []*rrcv1.Edge
+	// 66 weak direct contributors — hop-nearest, contribution 0.05 each.
+	for i := 0; i < 66; i++ {
+		edges = append(edges, mk(fmt.Sprintf("weak-%02d", i), "anchor", 0.05))
+	}
+	// One maximal-strength TWO-hop chain: root → mid → anchor at 1.0.
+	edges = append(edges, mk("mid", "anchor", 1.0), mk("root", "mid", 1.0))
+
+	mass, truncated := ProvenanceMass(edges, []string{"anchor"}, "t1",
+		threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS)
+	if !truncated {
+		t.Fatal("68 reachable > cap: truncation must be reported")
+	}
+	if got := mass["mid"]; got < 0.999 {
+		t.Fatalf("mass[mid] = %v, want 1.0 (strongest direct path must settle first)", got)
+	}
+	if got := mass["root"]; got < 0.999 {
+		t.Fatalf("mass[root] = %v, want 1.0 — the strongest path's root must survive the cap; hop-order truncation would have dropped it", got)
+	}
+	weak := 0
+	for id := range mass {
+		if len(id) >= 5 && id[:5] == "weak-" {
+			weak++
+		}
+	}
+	if weak != provenanceReachCap-2 {
+		t.Fatalf("cap should keep mid + root + %d weakest-path fillers, got %d weak", provenanceReachCap-2, weak)
 	}
 }
