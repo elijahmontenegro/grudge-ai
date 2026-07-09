@@ -43,6 +43,13 @@ message SelectedMessage {
   repeated Edge via_edges = 4;
   string thread_id = 5;       // Thread the selected message belongs to
   bool cross_thread = 6;      // True if selected from a different thread than the prompt
+  // Raw dependency evidence for provenance banking: the product of
+  // cross_encoder_score along the via-path (1-hop: the accepting edge's
+  // raw CE). Stamped at selection-entry construction — BEFORE transitive
+  // reduction prunes via_edges and BEFORE MMR rewrites effective_score —
+  // so neither the mass lift nor the diversity rewrite ever launders
+  // into the recorded provenance graph.
+  float provenance_weight = 7;
 }
 
 enum ExclusionReason {

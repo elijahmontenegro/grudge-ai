@@ -173,6 +173,7 @@ func (e *Engine) selectLocked(anchorID string, scope threadv1.SelectionScope, th
 			MessageId: item.MessageID, EffectiveScore: float32(item.EffectiveScore),
 			HopDepth: int32(item.HopDepth), ViaEdges: item.ViaEdges,
 			ThreadId: item.ThreadID, CrossThread: item.CrossThread,
+			ProvenanceWeight: float32(item.ProvenanceWeight),
 		})
 	}
 	for messageID, score := range belowFloor {

@@ -239,8 +239,15 @@ type SelectedMessage struct {
 	ViaEdges       []*Edge                `protobuf:"bytes,4,rep,name=via_edges,json=viaEdges,proto3" json:"via_edges,omitempty"`
 	ThreadId       string                 `protobuf:"bytes,5,opt,name=thread_id,json=threadId,proto3" json:"thread_id,omitempty"`           // Thread the selected message belongs to
 	CrossThread    bool                   `protobuf:"varint,6,opt,name=cross_thread,json=crossThread,proto3" json:"cross_thread,omitempty"` // True if selected from a different thread than the prompt
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Raw dependency evidence for provenance banking: the product of
+	// cross_encoder_score along the via-path (1-hop: the accepting edge's
+	// raw CE). Stamped at selection-entry construction — BEFORE transitive
+	// reduction prunes via_edges and BEFORE MMR rewrites effective_score —
+	// so neither the mass lift nor the diversity rewrite ever launders
+	// into the recorded provenance graph.
+	ProvenanceWeight float32 `protobuf:"fixed32,7,opt,name=provenance_weight,json=provenanceWeight,proto3" json:"provenance_weight,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SelectedMessage) Reset() {
@@ -313,6 +320,13 @@ func (x *SelectedMessage) GetCrossThread() bool {
 		return x.CrossThread
 	}
 	return false
+}
+
+func (x *SelectedMessage) GetProvenanceWeight() float32 {
+	if x != nil {
+		return x.ProvenanceWeight
+	}
+	return 0
 }
 
 type ExcludedMessage struct {
@@ -491,7 +505,7 @@ const file_grudge_rrc_v1_rrc_proto_rawDesc = "" +
 	"\x0efrom_thread_id\x18\t \x01(\tR\ffromThreadId\x12 \n" +
 	"\fto_thread_id\x18\n" +
 	" \x01(\tR\n" +
-	"toThreadId\"\xe8\x01\n" +
+	"toThreadId\"\x95\x02\n" +
 	"\x0fSelectedMessage\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12'\n" +
@@ -499,7 +513,8 @@ const file_grudge_rrc_v1_rrc_proto_rawDesc = "" +
 	"\thop_depth\x18\x03 \x01(\x05R\bhopDepth\x120\n" +
 	"\tvia_edges\x18\x04 \x03(\v2\x13.grudge.rrc.v1.EdgeR\bviaEdges\x12\x1b\n" +
 	"\tthread_id\x18\x05 \x01(\tR\bthreadId\x12!\n" +
-	"\fcross_thread\x18\x06 \x01(\bR\vcrossThread\"~\n" +
+	"\fcross_thread\x18\x06 \x01(\bR\vcrossThread\x12+\n" +
+	"\x11provenance_weight\x18\a \x01(\x02R\x10provenanceWeight\"~\n" +
 	"\x0fExcludedMessage\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x126\n" +

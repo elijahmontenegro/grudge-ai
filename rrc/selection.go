@@ -16,6 +16,14 @@ type selectionEntry struct {
 	ViaEdges       []*rrcv1.Edge
 	ThreadID       string
 	CrossThread    bool
+	// ProvenanceWeight is the RAW dependency evidence along the via-path:
+	// the product of CrossEncoderScore over its edges. This — never the
+	// calibrated/mass-lifted EffectiveScore and never MMR's rewrite — is
+	// what provenance banking records: banking a lifted score feeds the
+	// lift back into next turn's mass (measured echo: raw sim 0.36 banked
+	// as 0.99, re-lifted every turn). Stamped here because transitive
+	// reduction may prune ViaEdges, making the product unrecoverable later.
+	ProvenanceWeight float64
 }
 
 // edgeScoreUnderConfig returns the traversal score for an edge. Post-A4 this
@@ -64,12 +72,13 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threa
 		crossThread := edge.FromThreadId != promptThreadID
 		heap.Push(pq, &pqItem{
 			entry: selectionEntry{
-				MessageID:      edge.FromMessageId,
-				EffectiveScore: score,
-				HopDepth:       1,
-				ViaEdges:       []*rrcv1.Edge{edge},
-				ThreadID:       edge.FromThreadId,
-				CrossThread:    crossThread,
+				MessageID:        edge.FromMessageId,
+				EffectiveScore:   score,
+				HopDepth:         1,
+				ViaEdges:         []*rrcv1.Edge{edge},
+				ThreadID:         edge.FromThreadId,
+				CrossThread:      crossThread,
+				ProvenanceWeight: float64(edge.CrossEncoderScore),
 			},
 			priority: score,
 		})
@@ -122,6 +131,9 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threa
 					ViaEdges:       append(append([]*rrcv1.Edge{}, entry.ViaEdges...), edge),
 					ThreadID:       edge.FromThreadId,
 					CrossThread:    crossThread,
+					// Chain rule over RAW evidence — mirrors the mass
+					// walk's own path-product semantics.
+					ProvenanceWeight: entry.ProvenanceWeight * float64(edge.CrossEncoderScore),
 				},
 				priority: effectiveScore,
 			})

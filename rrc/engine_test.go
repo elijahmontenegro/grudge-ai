@@ -1218,6 +1218,89 @@ func TestApplyMMR_ExactScores(t *testing.T) {
 	}
 }
 
+// TestSelect_ProvenanceWeightIsRawEvidence pins A2-W6: every selected
+// entry carries provenance_weight = the product of RAW CrossEncoderScore
+// along its via-path — never the calibrated/effective score, and never
+// MMR's rewrite. Banking anything but raw evidence feeds the mass lift
+// back into the next turn's mass (the measured echo: raw sim 0.36 banked
+// as 0.99, re-lifted every turn) and would let MMR's provably-negative
+// rewrites pollute the recorded graph.
+func TestSelect_ProvenanceWeightIsRawEvidence(t *testing.T) {
+	e := testEngine(newMockScorer(), newMockChunkOracle())
+
+	// Chain m0 -e1-> m1 -e2-> m2 with the calibrated Score deliberately
+	// different from the raw CrossEncoderScore on every edge.
+	e.dag.AddEdge(&rrcv1.Edge{
+		FromMessageId: "m1", ToMessageId: "m2",
+		Score: 0.8, CrossEncoderScore: 0.7,
+		FromThreadId: "t1", ToThreadId: "t1",
+	})
+	e.dag.AddEdge(&rrcv1.Edge{
+		FromMessageId: "m0", ToMessageId: "m1",
+		Score: 0.95, CrossEncoderScore: 0.6,
+		FromThreadId: "t1", ToThreadId: "t1",
+	})
+
+	result, err := e.Select("m2", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]*rrcv1.SelectedMessage{}
+	for _, s := range result.Selected {
+		got[s.MessageId] = s
+	}
+	m1, ok := got["m1"]
+	if !ok {
+		t.Fatal("m1 not selected")
+	}
+	// 1-hop: the accepting edge's raw CE, NOT the calibrated 0.8.
+	if math.Abs(float64(m1.ProvenanceWeight)-0.7) > 1e-6 {
+		t.Fatalf("m1 provenance_weight = %v, want raw 0.7 (calibrated Score is 0.8)", m1.ProvenanceWeight)
+	}
+	m0, ok := got["m0"]
+	if !ok {
+		t.Fatal("m0 not selected")
+	}
+	// 2-hop: chain product of RAW evidence (0.7×0.6), while the effective
+	// score chain-rules the calibrated probabilities (0.8×0.95).
+	if math.Abs(float64(m0.ProvenanceWeight)-0.42) > 1e-6 {
+		t.Fatalf("m0 provenance_weight = %v, want 0.42 (raw chain product)", m0.ProvenanceWeight)
+	}
+	if math.Abs(float64(m0.EffectiveScore)-0.76) > 1e-5 {
+		t.Fatalf("m0 effective = %v, want 0.76 (calibrated chain)", m0.EffectiveScore)
+	}
+
+	// MMR rewrites EffectiveScore (negative for near-duplicates) but must
+	// leave the banked raw evidence untouched.
+	o := newVectorOracle()
+	o.set("anchor", []float32{1, 0, 0})
+	o.set("near", []float32{1, 0, 0})
+	mmrIn := []*rrcv1.SelectedMessage{
+		{MessageId: "anchor", EffectiveScore: 0.95, ProvenanceWeight: 0.61},
+		{MessageId: "near", EffectiveScore: 0.90, ProvenanceWeight: 0.59},
+	}
+	me := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(o))
+	out2, err := me.ApplyMMR(context.Background(), mmrIn, 0.5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range out2 {
+		switch s.MessageId {
+		case "near":
+			if s.EffectiveScore >= 0.90 {
+				t.Fatalf("near effective should be MMR-rewritten below 0.90, got %v", s.EffectiveScore)
+			}
+			if math.Abs(float64(s.ProvenanceWeight)-0.59) > 1e-6 {
+				t.Fatalf("MMR rewrote provenance_weight: %v", s.ProvenanceWeight)
+			}
+		case "anchor":
+			if math.Abs(float64(s.ProvenanceWeight)-0.61) > 1e-6 {
+				t.Fatalf("anchor provenance_weight changed: %v", s.ProvenanceWeight)
+			}
+		}
+	}
+}
+
 // TestApplyMMR_LambdaExtremesNoOp verifies that λ at the boundary
 // values (0, 1) is treated as a no-op pass-through. Callers should
 // un-wire the diversity penalty explicitly rather than pay the cost
