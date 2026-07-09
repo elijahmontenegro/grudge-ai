@@ -140,3 +140,50 @@ func TestGenerateContentUsesCurrentThreadAnchorAndPublishesOneSelectionAcrossRet
 		t.Fatalf("Local Context does not end in active event: %+v", lastWire)
 	}
 }
+
+// TestRecordProvenance_BanksRawEvidenceOnly pins A2-W5/W6: provenance
+// contributors are the turn record at 1.0 plus selected prerequisites at
+// their RAW via-path evidence (provenance_weight) — never the effective
+// (calibrated, mass-lifted, MMR-rewritten) score, which measurably feeds
+// the lift back into the next turn's mass (raw sim 0.36 banked as 0.99,
+// re-lifted every turn). Zero-evidence entries (legacy blobs predating
+// the field) bank nothing — a weightless edge adds rows, not mass.
+func TestRecordProvenance_BanksRawEvidenceOnly(t *testing.T) {
+	cfg := rrc.DefaultConfig()
+	cfg.Chunk.Estimator = testEstimator{}
+	engine := rrc.NewEngine(cfg, &fixedScorer{})
+	llm := NewRRCLLM(engine, nil, nil, "t1", "model")
+
+	var banked []*rrcv1.Edge
+	llm.OnEdge = func(e *rrcv1.Edge) { banked = append(banked, e) }
+
+	anchor := &threadv1.Message{Id: "anchor", ThreadId: "t1"}
+	turn := []*threadv1.Message{
+		{Id: "trigger", ThreadId: "t1"},
+		anchor,
+	}
+	sel := &rrcv1.SelectionResult{Selected: []*rrcv1.SelectedMessage{
+		// The measured echo shape: raw 0.36 lifted to 0.99 effective.
+		// The RAW value is what must reach the graph.
+		{MessageId: "hitchhiker", ThreadId: "t1", EffectiveScore: 0.99, ProvenanceWeight: 0.36},
+		{MessageId: "legacy", ThreadId: "t1", EffectiveScore: 0.90}, // provenance_weight zero
+	}}
+	llm.recordProvenance(anchor, turn, sel)
+
+	weights := map[string]float32{}
+	for _, e := range banked {
+		if e.ToMessageId != "anchor" {
+			t.Fatalf("edge target %q, want anchor", e.ToMessageId)
+		}
+		weights[e.FromMessageId] = e.Score
+	}
+	if got, ok := weights["hitchhiker"]; !ok || got != 0.36 {
+		t.Fatalf("selected banked at %v (present=%v), want raw 0.36 (effective was 0.99)", got, ok)
+	}
+	if _, ok := weights["legacy"]; ok {
+		t.Fatal("zero-evidence entry must bank nothing")
+	}
+	if got, ok := weights["trigger"]; !ok || got != 1.0 {
+		t.Fatalf("turn-record contributor banked at %v (present=%v), want 1.0", got, ok)
+	}
+}

@@ -295,12 +295,21 @@ func (r *RRCLLM) observeUsage(predicted, budget int, usage *llmv1.Usage) {
 // recordProvenance records, after a successful generation, that this turn
 // was generated from its delivered turn record (the active turn as the
 // model saw it — semantic discourse and tool steps alike, definitionally
-// load-bearing → weight 1.0) plus the selected prerequisites (weight =
-// their effective selection score). anchor is the turn's current semantic
-// focus. Edges are recorded into the DAG and persisted via OnEdge (same
-// path as cross-encoder edges; the (from,to,source) primary key lets them
-// coexist). A failed send records nothing — provenance is a fact about
-// what actually fed a completed turn.
+// load-bearing → weight 1.0) plus the selected prerequisites at their RAW
+// dependency evidence (provenance_weight: the via-path product of raw
+// cross-encoder scores). Never the effective score: that is the
+// calibrated, mass-lifted, MMR-rewritten posterior, and banking it feeds
+// the lift back into the next turn's mass — a measured self-reinforcing
+// echo (raw sim 0.36 banked as 0.99, re-lifted every turn) with MMR's
+// negative rewrites polluting the graph for free. Raw products < 1
+// self-damp across hops and turns. The window-tail (the delivered
+// preceding turn) is NEVER a contributor: an edge that would exist for
+// every turn regardless of content encodes zero information — positional
+// adjacency must not become graph weight. anchor is the turn's current
+// semantic focus. Edges are recorded into the DAG and persisted via
+// OnEdge (same path as cross-encoder edges; the (from,to,source) primary
+// key lets them coexist). A failed send records nothing — provenance is
+// a fact about what actually fed a completed turn.
 func (r *RRCLLM) recordProvenance(anchor *threadv1.Message, turnRecord []*threadv1.Message, selection *rrcv1.SelectionResult) {
 	if anchor == nil {
 		return
@@ -313,8 +322,14 @@ func (r *RRCLLM) recordProvenance(anchor *threadv1.Message, turnRecord []*thread
 	}
 	if selection != nil {
 		for _, s := range selection.Selected {
+			// Zero-weight entries carry no recorded evidence (legacy
+			// blobs predating the field, or edges whose raw CE was never
+			// set) — a weightless edge adds rows, not mass. Skip.
+			if s.ProvenanceWeight <= 0 {
+				continue
+			}
 			contributors = append(contributors, rrc.Contributor{
-				MessageID: s.MessageId, ThreadID: s.ThreadId, Weight: float64(s.EffectiveScore),
+				MessageID: s.MessageId, ThreadID: s.ThreadId, Weight: float64(s.ProvenanceWeight),
 			})
 		}
 	}
