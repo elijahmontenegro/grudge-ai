@@ -87,8 +87,57 @@ func (d *DB) initialize() error {
 	if err := d.QueryRow(`SELECT version, identity FROM schema_identity WHERE id = 1`).Scan(&version, &identity); err != nil {
 		return fmt.Errorf("unsupported development database; delete grudge.db and restart")
 	}
+	// Forward migrations: additive, versioned, one-way steps that bring a
+	// stored shape to the next identity in the chain. An identity outside
+	// the chain still fails the gate loudly — the gate guards philosophy
+	// drift; a compatible column addition is lawful versioning, not drift.
+	if version == 4 && identity == schemaIdentityV4 {
+		if err := d.migrateV4ToV5(); err != nil {
+			return fmt.Errorf("migrate schema v4 -> v5: %w", err)
+		}
+		version, identity = schemaVersion, schemaIdentity
+	}
 	if version != schemaVersion || identity != schemaIdentity {
 		return fmt.Errorf("unsupported database schema %d (%s); delete grudge.db and restart", version, identity)
 	}
 	return nil
+}
+
+// migrateV4ToV5 adds the edges.scorer_model observation-attribute column
+// (instrument identity: which scorer's units the edge's raw similarity
+// and contribution weights are in — the retroactively-unrecoverable
+// stamp). Pre-existing edges keep '' — honest: their instrument was
+// never recorded, which is exactly the gap the stamp closes going
+// forward. Idempotent via the column check so a step interrupted between
+// ALTER and the identity update re-runs cleanly.
+func (d *DB) migrateV4ToV5() error {
+	rows, err := d.Query(`PRAGMA table_info(edges)`)
+	if err != nil {
+		return err
+	}
+	hasCol := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "scorer_model" {
+			hasCol = true
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasCol {
+		if _, err := d.Exec(`ALTER TABLE edges ADD COLUMN scorer_model TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	_, err = d.Exec(`UPDATE schema_identity SET version = ?, identity = ? WHERE id = 1`, schemaVersion, schemaIdentity)
+	return err
 }

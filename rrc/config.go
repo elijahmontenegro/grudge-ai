@@ -29,6 +29,16 @@ type EngineConfig struct {
 	// self-fits from the embedded seed set on first boot per scorer).
 	Calibrator calibrate.Calibrator
 
+	// ScorerModelID names the instrument whose units every formed edge's
+	// observations are in (raw similarity, provenance contribution
+	// weights) — stamped onto edges at formation as an observation
+	// attribute, exactly as the scores cache keys by model. Stamping is
+	// the retroactively-unrecoverable part; consumption protocols for a
+	// mixed-instrument corpus derive from stamped data if a scorer swap
+	// ever occurs (re-MEASURE foreign-unit observations, never rewrite
+	// them). "" (tests, benches) stamps nothing.
+	ScorerModelID string
+
 	// LossRatio is the precision stance — V_harm/(V_gain+V_harm) — the
 	// single honest hand-set scalar in the acceptance mechanism. It is a
 	// value judgment (how much a wasted token is hated vs. a hallucinated

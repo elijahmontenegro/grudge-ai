@@ -2,8 +2,13 @@ package storage
 
 import "fmt"
 
-const schemaVersion = 4
-const schemaIdentity = "rrc-usage-grounded-accounting-v4"
+const schemaVersion = 5
+const schemaIdentity = "rrc-instrumented-observations-v5"
+
+// Prior identities that initialize() can migrate forward in place —
+// additive, versioned, one-way steps (see migrations in db.go). An
+// identity NOT in this chain still fails the gate loudly.
+const schemaIdentityV4 = "rrc-usage-grounded-accounting-v4"
 
 // defaultEmbeddingDim is the bootstrap vector width. It is only a
 // bootstrap default: the runtime probe (EnsureEmbeddingDim) reconciles it
@@ -98,6 +103,7 @@ CREATE TABLE edges (
     detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     from_thread_id TEXT NOT NULL,
     to_thread_id TEXT NOT NULL,
+    scorer_model TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (from_message_id, to_message_id, source)
 );
 CREATE INDEX idx_edges_to ON edges(to_message_id);

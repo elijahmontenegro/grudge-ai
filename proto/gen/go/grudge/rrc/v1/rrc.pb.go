@@ -141,8 +141,16 @@ type Edge struct {
 	DetectedAt        *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=detected_at,json=detectedAt,proto3" json:"detected_at,omitempty"`
 	FromThreadId      string                 `protobuf:"bytes,9,opt,name=from_thread_id,json=fromThreadId,proto3" json:"from_thread_id,omitempty"` // Thread origin of the source message. Visible in citations when cross-thread.
 	ToThreadId        string                 `protobuf:"bytes,10,opt,name=to_thread_id,json=toThreadId,proto3" json:"to_thread_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Which instrument measured this edge's observations. Raw similarity
+	// (cross_encoder_score) and provenance contribution weights are in the
+	// scorer's units — instrument-relative facts, like the scores cache's
+	// model key. Stamped at formation because it is retroactively
+	// unrecoverable: an unstamped edge's instrument is unknowable later.
+	// A scorer swap re-MEASURES foreign-unit observations (a new fact by a
+	// new instrument); it never rewrites them.
+	ScorerModel   string `protobuf:"bytes,11,opt,name=scorer_model,json=scorerModel,proto3" json:"scorer_model,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Edge) Reset() {
@@ -227,6 +235,13 @@ func (x *Edge) GetFromThreadId() string {
 func (x *Edge) GetToThreadId() string {
 	if x != nil {
 		return x.ToThreadId
+	}
+	return ""
+}
+
+func (x *Edge) GetScorerModel() string {
+	if x != nil {
+		return x.ScorerModel
 	}
 	return ""
 }
@@ -493,7 +508,7 @@ var File_grudge_rrc_v1_rrc_proto protoreflect.FileDescriptor
 
 const file_grudge_rrc_v1_rrc_proto_rawDesc = "" +
 	"\n" +
-	"\x17grudge/rrc/v1/rrc.proto\x12\rgrudge.rrc.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dgrudge/thread/v1/thread.proto\"\xd0\x02\n" +
+	"\x17grudge/rrc/v1/rrc.proto\x12\rgrudge.rrc.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dgrudge/thread/v1/thread.proto\"\xf3\x02\n" +
 	"\x04Edge\x12&\n" +
 	"\x0ffrom_message_id\x18\x01 \x01(\tR\rfromMessageId\x12\"\n" +
 	"\rto_message_id\x18\x02 \x01(\tR\vtoMessageId\x12\x14\n" +
@@ -505,7 +520,8 @@ const file_grudge_rrc_v1_rrc_proto_rawDesc = "" +
 	"\x0efrom_thread_id\x18\t \x01(\tR\ffromThreadId\x12 \n" +
 	"\fto_thread_id\x18\n" +
 	" \x01(\tR\n" +
-	"toThreadId\"\x95\x02\n" +
+	"toThreadId\x12!\n" +
+	"\fscorer_model\x18\v \x01(\tR\vscorerModel\"\x95\x02\n" +
 	"\x0fSelectedMessage\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12'\n" +

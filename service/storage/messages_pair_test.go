@@ -3,6 +3,7 @@ package storage
 import (
 	"testing"
 
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -198,5 +199,56 @@ func TestTurnStartPosition_SnapsToTurnBoundary(t *testing.T) {
 	// A position with no row snaps to itself.
 	if got, _ := db.TurnStartPosition("t1", 99); got != 99 {
 		t.Fatalf("missing position should snap to itself, got %d", got)
+	}
+}
+
+// TestEdgeScorerModel_RoundTripAndV4Migration pins the instrument stamp
+// (A4-D5): edges persist and reload the scorer that measured their
+// observations, and a v4-stamped database migrates forward in place —
+// additive, idempotent (the column check tolerates a step interrupted
+// between ALTER and the identity update), data intact.
+func TestEdgeScorerModel_RoundTripAndV4Migration(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.InsertEdge(&rrcv1.Edge{
+		FromMessageId: "c", ToMessageId: "a", Score: 0.8, CrossEncoderScore: 0.7,
+		Source:       rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER,
+		FromThreadId: "t1", ToThreadId: "t1",
+		DetectedAt: timestamppb.Now(), ScorerModel: "zerank-test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	edges, err := db.AllEdges()
+	if err != nil || len(edges) != 1 || edges[0].ScorerModel != "zerank-test" {
+		t.Fatalf("round-trip: edges=%v err=%v", edges, err)
+	}
+	// Simulate a v4-stamped database (the half-migrated shape: column
+	// present, identity old — exactly what an interrupted migration
+	// leaves) and reopen: the forward migration must run idempotently.
+	if _, err := db.Exec(`UPDATE schema_identity SET version = 4, identity = ?`, schemaIdentityV4); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen with v4 identity should migrate, got: %v", err)
+	}
+	defer db2.Close()
+	var version int
+	var identity string
+	if err := db2.QueryRow(`SELECT version, identity FROM schema_identity WHERE id = 1`).Scan(&version, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion || identity != schemaIdentity {
+		t.Fatalf("migration left (%d, %s), want (%d, %s)", version, identity, schemaVersion, schemaIdentity)
+	}
+	edges, err = db2.AllEdges()
+	if err != nil || len(edges) != 1 || edges[0].ScorerModel != "zerank-test" {
+		t.Fatalf("data must survive migration: edges=%v err=%v", edges, err)
 	}
 }

@@ -1438,3 +1438,38 @@ func TestNewEngine_RequiresEstimator(t *testing.T) {
 	}()
 	NewEngine(DefaultConfig(), newMockScorer())
 }
+
+// TestEdgesCarryInstrumentIdentity pins A4-D5: both edge channels stamp
+// the scorer whose units their observations are in — retroactively
+// unrecoverable, so it must ride formation from day one.
+func TestEdgesCarryInstrumentIdentity(t *testing.T) {
+	mc := newMockScorer()
+	mc.SetScore("a", "b", 0.9)
+	o := newMockChunkOracle()
+	cfg := testConfig()
+	cfg.ScorerModelID = "scorer-x"
+	cfg.MinBatchStdDev = 0 // single-candidate fixture: don't trip the flat-batch gate
+	e := NewEngine(cfg, mc, WithChunkOracle(o))
+
+	// Provenance channel.
+	pEdges := e.RecordProvenance(
+		&threadv1.Message{Id: "anchor", ThreadId: "t1"},
+		[]Contributor{{MessageID: "c", ThreadID: "t1", Weight: 1.0}},
+	)
+	if len(pEdges) != 1 || pEdges[0].ScorerModel != "scorer-x" {
+		t.Fatalf("provenance edge stamp: %+v", pEdges)
+	}
+
+	// Cross-encoder formation channel.
+	msgs := []*threadv1.Message{
+		addMsg(o, "m0", 0, "t1", "a"),
+		addMsg(o, "m1", 1, "t1", "b"),
+	}
+	ceEdges, _, err := e.selectViaFixture(context.Background(), msgs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ceEdges) == 0 || ceEdges[0].ScorerModel != "scorer-x" {
+		t.Fatalf("cross-encoder edge stamp: %+v", ceEdges)
+	}
+}

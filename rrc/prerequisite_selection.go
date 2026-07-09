@@ -227,6 +227,7 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 			DetectedAt:        timestamppb.Now(),
 			FromThreadId:      threadByID[candidate.id],
 			ToThreadId:        anchor.ThreadId,
+			ScorerModel:       e.cfg.ScorerModelID,
 		}
 		if !e.admitEdge(edge) {
 			continue

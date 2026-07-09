@@ -32,6 +32,14 @@ message Edge {
   google.protobuf.Timestamp detected_at = 8;
   string from_thread_id = 9;  // Thread origin of the source message. Visible in citations when cross-thread.
   string to_thread_id = 10;
+  // Which instrument measured this edge's observations. Raw similarity
+  // (cross_encoder_score) and provenance contribution weights are in the
+  // scorer's units — instrument-relative facts, like the scores cache's
+  // model key. Stamped at formation because it is retroactively
+  // unrecoverable: an unstamped edge's instrument is unknowable later.
+  // A scorer swap re-MEASURES foreign-unit observations (a new fact by a
+  // new instrument); it never rewrites them.
+  string scorer_model = 11;
 }
 
 // Selection result. Returned by the RRC engine. Drives citations in the UI.

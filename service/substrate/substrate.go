@@ -284,6 +284,10 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	if s.ChunkOracle != nil {
 		engineOpts = append(engineOpts, rrc.WithChunkOracle(s.ChunkOracle))
 	}
+	// Instrument identity: every formed edge's observations (raw sims,
+	// contribution weights) are stamped with the scorer that measured
+	// them — retroactively unrecoverable, so it rides config from day one.
+	rrcCfg.ScorerModelID = s.RerankerModelID
 	s.Engine = rrc.NewEngine(rrcCfg, s.Scorer, engineOpts...)
 
 	return s, nil

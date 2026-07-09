@@ -12,11 +12,11 @@ func (d *DB) InsertEdge(e *rrcv1.Edge) error {
 	_, err := d.Exec(
 		`INSERT OR REPLACE INTO edges
 		 (from_message_id, to_message_id, score, source, cross_encoder_score,
-		  detected_at, from_thread_id, to_thread_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		  detected_at, from_thread_id, to_thread_id, scorer_model)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.FromMessageId, e.ToMessageId, e.Score, int(e.Source),
 		e.CrossEncoderScore,
-		e.DetectedAt.AsTime(), e.FromThreadId, e.ToThreadId,
+		e.DetectedAt.AsTime(), e.FromThreadId, e.ToThreadId, e.ScorerModel,
 	)
 	return err
 }
@@ -25,7 +25,7 @@ func (d *DB) InsertEdge(e *rrcv1.Edge) error {
 func (d *DB) AllEdges() ([]*rrcv1.Edge, error) {
 	rows, err := d.Query(
 		`SELECT from_message_id, to_message_id, score, source, cross_encoder_score,
-		        detected_at, from_thread_id, to_thread_id
+		        detected_at, from_thread_id, to_thread_id, scorer_model
 		 FROM edges
 		 ORDER BY from_message_id, to_message_id, source`,
 	)
@@ -42,7 +42,7 @@ func (d *DB) AllEdges() ([]*rrcv1.Edge, error) {
 		if err := rows.Scan(
 			&e.FromMessageId, &e.ToMessageId, &e.Score, &sourceInt,
 			&e.CrossEncoderScore,
-			&detectedAt, &e.FromThreadId, &e.ToThreadId,
+			&detectedAt, &e.FromThreadId, &e.ToThreadId, &e.ScorerModel,
 		); err != nil {
 			return nil, err
 		}

@@ -70,6 +70,9 @@ func (e *Engine) RecordProvenance(anchor *threadv1.Message, contributors []Contr
 			DetectedAt:    timestamppb.Now(),
 			FromThreadId:  c.ThreadID,
 			ToThreadId:    anchor.ThreadId,
+			// Selected-contributor weights are raw-CE via-path products —
+			// instrument-relative like every observation.
+			ScorerModel: e.cfg.ScorerModelID,
 		}
 		if !e.admitEdge(edge) {
 			continue
