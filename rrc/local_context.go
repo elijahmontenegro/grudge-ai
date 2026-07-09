@@ -177,7 +177,16 @@ func BuildLocalContext(threadCorpus []*threadv1.Message, n int) []*threadv1.Mess
 // contributes its id to MessageIDs — membership: delivered, excluded from
 // re-retrieval, provenance-banked — but no query chunk. Message IDs
 // participate in the fingerprint but are not shown to the scorer.
-func SerializeLocalContext(local []*threadv1.Message, cfg chunk.Config) *SerializedLocalContext {
+//
+// currentTurnID discriminates the in-flight turn inside the window: when
+// set, only that turn's semantic messages become query chunks — the
+// window-tail (the delivered preceding turn) contributes membership ids
+// and nothing else, because prior turns already spent their selections
+// and their text in the query is the reach-back dilution reborn. ""
+// means the whole span is the discourse (the no-turn-identity recency
+// fallback, tests, benches) and reproduces the undiscriminated behavior
+// byte-for-byte.
+func SerializeLocalContext(local []*threadv1.Message, currentTurnID string, cfg chunk.Config) *SerializedLocalContext {
 	if len(local) == 0 {
 		return nil
 	}
@@ -186,6 +195,9 @@ func SerializeLocalContext(local []*threadv1.Message, cfg chunk.Config) *Seriali
 	next := 0
 	for _, m := range local {
 		ids = append(ids, m.Id)
+		if currentTurnID != "" && m.TurnId != currentTurnID {
+			continue
+		}
 		text := serializeSemanticMessage(m)
 		if strings.TrimSpace(text) == "" {
 			continue

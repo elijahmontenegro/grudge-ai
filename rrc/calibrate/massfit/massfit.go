@@ -256,7 +256,7 @@ func Replay(ctx context.Context, corpus []*threadv1.Message, edges []*rrcv1.Edge
 		// from the same as-of corpus — the coverage-bias corrective.
 		contrastIDs := drawContrast(rng, asOfIDs, mass, len(massIDs))
 
-		local := rrc.SerializeLocalContext(coneMsgs, chunkCfg)
+		local := rrc.SerializeLocalContext(coneMsgs, "", chunkCfg)
 		if local == nil || len(local.Chunks) == 0 {
 			continue
 		}

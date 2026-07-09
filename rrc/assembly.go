@@ -24,8 +24,12 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	if len(req.LocalContext) == 0 {
 		return AssembleResult{}, fmt.Errorf("assemble: empty LocalContext")
 	}
-	if req.LocalContext[len(req.LocalContext)-1].Id != req.Anchor.Id {
-		return AssembleResult{}, fmt.Errorf("assemble: Anchor must end LocalContext")
+	// The Anchor is the current discourse focus: the last SEMANTIC message
+	// of the in-flight turn (of the whole span when no turn discriminates
+	// it). The window may legitimately END on a non-semantic message — a
+	// trailing tool result mid-turn — which is delivery order, not focus.
+	if last := lastSemantic(req.LocalContext, req.CurrentTurnID); last == nil || last.Id != req.Anchor.Id {
+		return AssembleResult{}, fmt.Errorf("assemble: Anchor must be the last semantic message of the current turn")
 	}
 
 	effectiveBudget := req.Budget
@@ -47,7 +51,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	}
 
 	local := deliveryRoots
-	pinned := pinnedLocalIDs(local)
+	pinned := pinnedLocalIDs(local, req.Anchor.Id)
 	var localGroups []DeliveryGroup
 	var localWire []*llmv1.LLMMessage
 	for {
@@ -73,7 +77,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 
 	serializedLocal := req.SerializedLocalContext
 	if serializedLocal == nil || !sameIDs(serializedLocal.MessageIDs, messageIDs(local)) {
-		serializedLocal = SerializeLocalContext(local, e.cfg.Chunk)
+		serializedLocal = SerializeLocalContext(local, req.CurrentTurnID, e.cfg.Chunk)
 	}
 
 	var (
@@ -288,6 +292,14 @@ type AssembleRequest struct {
 	FixedTokens            int
 	ExcludeIDs             []string
 
+	// CurrentTurnID discriminates the in-flight turn inside LocalContext
+	// (the window): query chunks and the Anchor invariant come from that
+	// turn alone, while the whole window is delivered, membership-listed,
+	// and walk-seeded. "" means the whole span is the discourse — the
+	// no-turn-identity recency fallback, tests, and benches — and
+	// reproduces the undiscriminated behavior byte-for-byte.
+	CurrentTurnID string
+
 	// TurnDelivery is the whole in-flight turn verbatim — tools included —
 	// guaranteeing the model sees its own turn on the wire. Local Context
 	// (the semantic discourse: the query and the anchor) and TurnDelivery
@@ -444,12 +456,17 @@ func unionByPosition(a, b []*threadv1.Message) []*threadv1.Message {
 	return out
 }
 
-func pinnedLocalIDs(local []*threadv1.Message) map[string]bool {
+// pinnedLocalIDs pins the Anchor (by id — under the window the last
+// element can be a trailing tool result, not the discourse focus) plus
+// the most recent semantic user and assistant messages, so the
+// absurd-overflow shed can never empty the query. Everything else —
+// the window-tail first, oldest-first — is shed-eligible.
+func pinnedLocalIDs(local []*threadv1.Message, anchorID string) map[string]bool {
 	pinned := make(map[string]bool)
 	if len(local) == 0 {
 		return pinned
 	}
-	pinned[local[len(local)-1].Id] = true
+	pinned[anchorID] = true
 	haveUser, haveAssistant := false, false
 	for i := len(local) - 1; i >= 0 && (!haveUser || !haveAssistant); i-- {
 		m := local[i]
@@ -464,6 +481,23 @@ func pinnedLocalIDs(local []*threadv1.Message) map[string]bool {
 		}
 	}
 	return pinned
+}
+
+// lastSemantic returns the last message in local carrying semantic
+// content that (when currentTurnID is set) belongs to the current turn —
+// the discourse focus the Anchor invariant pins. Returns nil when the
+// span holds no such message.
+func lastSemantic(local []*threadv1.Message, currentTurnID string) *threadv1.Message {
+	for i := len(local) - 1; i >= 0; i-- {
+		m := local[i]
+		if currentTurnID != "" && m.TurnId != currentTurnID {
+			continue
+		}
+		if hasSemanticBlock(m.Content) {
+			return m
+		}
+	}
+	return nil
 }
 
 func oldestUnpinned(local []*threadv1.Message, pinned map[string]bool) string {

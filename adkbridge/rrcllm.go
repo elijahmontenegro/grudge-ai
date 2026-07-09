@@ -178,7 +178,7 @@ func (r *RRCLLM) GenerateContent(ctx context.Context, req *model.LLMRequest, str
 		// delivered, tools included, so nothing delivered is re-retrieved.
 		var serializedLocal *rrc.SerializedLocalContext
 		if len(req.Contents) > 0 {
-			serializedLocal = rrc.SerializeLocalContext(turnRecord, cfg.Chunk)
+			serializedLocal = rrc.SerializeLocalContext(turnRecord, "", cfg.Chunk)
 		}
 
 		// Budget conversion: ContextBudgetTokens is model truth (the

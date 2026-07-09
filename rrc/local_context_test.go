@@ -49,7 +49,7 @@ func TestSerializedLocalContextIsSemanticOnlyAndKeepsFullMembership(t *testing.T
 		storedCall("c", "t1", "op-1", 2),
 		storedResult("r", "t1", "op-1", 3),
 	}
-	serialized := SerializeLocalContext(local, testChunkConfig())
+	serialized := SerializeLocalContext(local, "", testChunkConfig())
 	if serialized == nil {
 		t.Fatal("serialization is nil")
 	}
@@ -84,7 +84,7 @@ func TestSerializeLocalContext_PerMessageChunks(t *testing.T) {
 		localMessage("a", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("beta answer about boiling water")),
 		storedCall("c", "t1", "op-1", 2), // tool-only: membership, no chunk
 	}
-	serialized := SerializeLocalContext(local, testChunkConfig())
+	serialized := SerializeLocalContext(local, "", testChunkConfig())
 	if serialized == nil {
 		t.Fatal("serialization is nil")
 	}
@@ -123,7 +123,7 @@ func TestSerializeLocalContext_LongMessageSplitsWithGlobalIndices(t *testing.T) 
 		localMessage("big", threadv1.Role_ROLE_USER, 0, textBlock(long)),
 		localMessage("next", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("short reply")),
 	}
-	serialized := SerializeLocalContext(local, cfg)
+	serialized := SerializeLocalContext(local, "", cfg)
 	if serialized == nil {
 		t.Fatal("serialization is nil")
 	}
@@ -144,17 +144,60 @@ func TestSerializeLocalContext_LongMessageSplitsWithGlobalIndices(t *testing.T) 
 	}
 }
 
+// TestSerializeLocalContext_TurnDiscriminator pins A2-W2/W3: over a
+// window spanning the preceding turn and the current turn, MEMBERSHIP
+// keeps every id (delivered ⇒ excluded from re-retrieval, walk-seeded)
+// while the QUERY chunks come only from the current turn's semantic
+// messages — the window-tail's text in the query would be the reach-back
+// dilution reborn. "" reproduces the undiscriminated whole-span behavior.
+func TestSerializeLocalContext_TurnDiscriminator(t *testing.T) {
+	window := []*threadv1.Message{
+		withTurn(localMessage("prevU", threadv1.Role_ROLE_USER, 0, textBlock("boiling point question")), "turn-A"),
+		withTurn(localMessage("prevA", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("water boils at 100C")), "turn-A"),
+		withTurn(storedCall("prevC", "t1", "op-1", 2), "turn-A"),
+		withTurn(storedResult("prevR", "t1", "op-1", 3), "turn-A"),
+		withTurn(localMessage("curU", threadv1.Role_ROLE_USER, 4, textBlock("what was the password?")), "turn-B"),
+	}
+	s := SerializeLocalContext(window, "turn-B", testChunkConfig())
+	if s == nil {
+		t.Fatal("serialization is nil")
+	}
+	if !sameIDs(s.MessageIDs, []string{"prevU", "prevA", "prevC", "prevR", "curU"}) {
+		t.Fatalf("membership must cover the whole window, got %v", s.MessageIDs)
+	}
+	if len(s.Chunks) != 1 {
+		t.Fatalf("query must be the current turn's semantic messages only, got %d chunks: %+v", len(s.Chunks), s.Chunks)
+	}
+	if !contains(s.Chunks[0].Text, "what was the password?") {
+		t.Fatalf("query chunk missing the current turn's text:\n%s", s.Chunks[0].Text)
+	}
+	if contains(s.Chunks[0].Text, "100C") || contains(s.Chunks[0].Text, "boiling") {
+		t.Fatalf("window-tail text leaked into the query (dilution reborn):\n%s", s.Chunks[0].Text)
+	}
+
+	// "" = undiscriminated: every semantic message chunks (the recency
+	// fallback and every pre-A2 call site).
+	undiscriminated := SerializeLocalContext(window, "", testChunkConfig())
+	if len(undiscriminated.Chunks) != 3 {
+		t.Fatalf(`"" should chunk all 3 semantic messages, got %d`, len(undiscriminated.Chunks))
+	}
+	// The two forms are different selector inputs — fingerprints differ.
+	if s.Fingerprint == undiscriminated.Fingerprint {
+		t.Fatal("discriminated and undiscriminated serializations must not share a fingerprint")
+	}
+}
+
 func TestSerializedLocalContextFingerprintChangesWithOrderRoleAndContent(t *testing.T) {
 	a := localMessage("a", threadv1.Role_ROLE_USER, 0, textBlock("alpha"))
 	b := localMessage("b", threadv1.Role_ROLE_ASSISTANT, 1, textBlock("beta"))
-	base := SerializeLocalContext([]*threadv1.Message{a, b}, testChunkConfig()).Fingerprint
-	reordered := SerializeLocalContext([]*threadv1.Message{b, a}, testChunkConfig()).Fingerprint
+	base := SerializeLocalContext([]*threadv1.Message{a, b}, "", testChunkConfig()).Fingerprint
+	reordered := SerializeLocalContext([]*threadv1.Message{b, a}, "", testChunkConfig()).Fingerprint
 	roleChanged := SerializeLocalContext([]*threadv1.Message{
 		localMessage("a", threadv1.Role_ROLE_ASSISTANT, 0, textBlock("alpha")), b,
-	}, testChunkConfig()).Fingerprint
+	}, "", testChunkConfig()).Fingerprint
 	contentChanged := SerializeLocalContext([]*threadv1.Message{
 		localMessage("a", threadv1.Role_ROLE_USER, 0, textBlock("changed")), b,
-	}, testChunkConfig()).Fingerprint
+	}, "", testChunkConfig()).Fingerprint
 	if base == reordered || base == roleChanged || base == contentChanged {
 		t.Fatal("fingerprint must bind order, role, and exact serialized content")
 	}
