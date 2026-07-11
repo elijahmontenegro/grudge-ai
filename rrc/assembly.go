@@ -3,403 +3,604 @@ package rrc
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
+	"sort"
 	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc/chunk"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 )
 
-// Assemble produces a wire-ready prompt for the Query message under
-// the engine's protocol. Single-call entry point: OnMessage + Select
-// + MMR + Radius + rectification + budget shed in one library call.
-//
-// Inputs:
-//   - Query: the query message; must already exist in Corpus.
-//   - Corpus: scope-loaded message list (thread-only or all-threads).
-//   - ThreadCorpus: thread-only corpus used for the Radius slice; may
-//     equal Corpus when Scope is thread-scoped.
-//   - System: optional fixed-cost system prompt slot at wire head.
-//   - Resolver: rectification-rule pool. When nil, rules don't fire
-//     and the wire is sent as Selected+Radius only.
-//   - Rules: rectification rules to run with the resolver.
-//   - Budget / HeadroomPct / PerMsgDelim / FixedTokens: budget knobs.
-//     FixedTokens is a codec-specific overhead the consumer
-//     pre-computes (e.g. tool-schema JSON serialized to the provider
-//     wire format); kept opaque to the engine.
-//   - ExcludeIDs: pre-shed Selected ids the consumer wants suppressed
-//     from the start (typical use: provider rejected an earlier
-//     wire with context-window-exceeded; consumer adds the
-//     prior round's lowest-score to the exclude list and re-calls).
-//
-// Returns the wire (ready to forward to a Completer), the post-MMR
-// Selected list, the edges OnMessage emitted (consumer persists),
-// the ids shed during budget walk, and per-stage telemetry.
-//
-// The shed loop drops the lowest-scored Selected entry or
-// rectification insert until the wire fits the effective budget.
-// System and Radius are fixed cost; if they alone exceed budget,
-// Assemble returns the wire it built (overflowing) and the consumer
-// surfaces the provider's eventual error.
+// Assemble scores one bounded Local Context, selects deep-history
+// prerequisites, applies exact protocol closure, and emits a provider-ready
+// wire. Local Context and its required closure have priority over selected
+// history; selected roots and their closure are shed atomically.
 func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleResult, error) {
-	if req.Query == nil {
-		return AssembleResult{}, fmt.Errorf("assemble: nil Query")
+	if req.Anchor == nil {
+		return AssembleResult{}, fmt.Errorf("assemble: nil Anchor")
 	}
-
-	e.mu.Lock()
-	edges, onMsgTel, err := e.OnMessage(ctx, req.Query, req.Corpus)
-	if err != nil {
-		e.mu.Unlock()
-		return AssembleResult{}, fmt.Errorf("assemble OnMessage: %w", err)
+	if len(req.LocalContext) == 0 {
+		return AssembleResult{}, fmt.Errorf("assemble: empty LocalContext")
 	}
-	selectStart := time.Now()
-	selResult, err := e.Select(req.Query.Id, req.Scope, req.ThreadID)
-	if err != nil {
-		e.mu.Unlock()
-		return AssembleResult{}, fmt.Errorf("assemble Select: %w", err)
-	}
-	selectMs := time.Since(selectStart).Milliseconds()
-	cfg := e.cfg
-	var mmrMs int64
-	if cfg.DiversityLambda > 0 && cfg.DiversityLambda < 1 && len(selResult.Selected) > 1 {
-		mmrStart := time.Now()
-		mmrRanked, mmrErr := e.ApplyMMR(ctx, selResult.Selected, cfg.DiversityLambda)
-		mmrMs = time.Since(mmrStart).Milliseconds()
-		if mmrErr != nil {
-			log.Printf("RRC: MMR rerank skipped query=%s: %v", req.Query.Id, mmrErr)
-		} else {
-			selResult.Selected = mmrRanked
-		}
-	}
-	e.mu.Unlock()
-	shedStart := time.Now()
-
-	selectedScoreByID := make(map[string]float64, len(selResult.Selected))
-	for _, s := range selResult.Selected {
-		selectedScoreByID[s.MessageId] = float64(s.EffectiveScore)
-	}
-
-	dropped := make(map[string]bool, len(req.ExcludeIDs))
-	for _, id := range req.ExcludeIDs {
-		dropped[id] = true
+	// The Anchor is the current discourse focus: the last SEMANTIC message
+	// of the in-flight turn (of the whole span when no turn discriminates
+	// it). The window may legitimately END on a non-semantic message — a
+	// trailing tool result mid-turn — which is delivery order, not focus.
+	if last := lastSemantic(req.LocalContext, req.CurrentTurnID); last == nil || last.Id != req.Anchor.Id {
+		return AssembleResult{}, fmt.Errorf("assemble: Anchor must be the last semantic message of the current turn")
 	}
 
 	effectiveBudget := req.Budget
 	if req.HeadroomPct > 0 && req.HeadroomPct <= 1 {
 		effectiveBudget = int(float64(req.Budget) * req.HeadroomPct)
 	}
+	// Delivery roots = Local Context, THE window: the immediately preceding
+	// turn ∪ the current turn record, all block types. The whole window is
+	// delivered — the model is never blind to the exchange it is continuing
+	// — while the query stays the current turn's semantic projection
+	// (CurrentTurnID discriminates inside SerializeLocalContext).
+	deliveryRoots := append([]*threadv1.Message(nil), req.LocalContext...)
+	// Bounded protocol index for delivery closure: the delivery roots plus
+	// the messages sharing their turns, where any tool-call/result
+	// counterparts live.
+	protocolLocal, err := e.protocolScope(deliveryRoots, req.Store)
+	if err != nil {
+		return AssembleResult{}, fmt.Errorf("assemble: local protocol scope: %w", err)
+	}
 
-	var (
-		finalWire     []*pb.LLMMessage
-		finalSelected []*pb.LLMMessage
-		finalRadius   []*pb.LLMMessage
-		finalRectify  int
-		finalTotal    int
-	)
-
+	local := deliveryRoots
+	pinned := pinnedLocalIDs(local, req.Anchor.Id)
+	var localGroups []DeliveryGroup
+	var localWire []*llmv1.LLMMessage
 	for {
-		selectedIDs := make(map[string]bool)
-		for _, s := range selResult.Selected {
-			if !dropped[s.MessageId] {
-				selectedIDs[s.MessageId] = true
-			}
+		groups, err := closeRoots(protocolLocal, local, nil)
+		if err != nil {
+			return AssembleResult{}, err
 		}
-		var selectedMsgs []*pb.LLMMessage
-		var wireIDs []string
-		selectedPtrToID := make(map[*pb.LLMMessage]string)
-		for _, msg := range req.Corpus {
-			if selectedIDs[msg.Id] {
-				llm := messageToLLM(msg)
-				selectedMsgs = append(selectedMsgs, llm)
-				selectedPtrToID[llm] = msg.Id
-				wireIDs = append(wireIDs, msg.Id)
-			}
-		}
-
-		var radiusMsgs []*pb.LLMMessage
-		if cfg.RadiusSize > 0 && len(req.ThreadCorpus) > 0 {
-			radiusMsgs = buildRadiusSlice(req.ThreadCorpus, selectedIDs, cfg.RadiusSize, &wireIDs)
-		}
-
-		var llmMsgs []*pb.LLMMessage
-		if req.System != nil {
-			llmMsgs = append(llmMsgs, req.System)
-		}
-		llmMsgs = append(llmMsgs, selectedMsgs...)
-		llmMsgs = append(llmMsgs, radiusMsgs...)
-
-		insertScores := map[*pb.LLMMessage]float64{}
-		if req.Resolver != nil && len(req.Rules) > 0 {
-			req.Resolver.ExcludeIDs(wireIDs)
-			rectified, scores, aerr := Apply(llmMsgs, req.Resolver, req.Rules...)
-			if aerr != nil {
-				log.Printf("RRC: rectification failed query=%s: %v — pre-rectification wire", req.Query.Id, aerr)
-			} else {
-				llmMsgs = rectified
-				insertScores = scores
-			}
-		}
-
-		msgTokens := make([]int, len(llmMsgs))
-		total := 0
-		for i, m := range llmMsgs {
-			msgTokens[i] = chunk.EstimateTokens(TextFromBlocks(m.Content))
-			total += msgTokens[i]
-		}
-		total += req.FixedTokens
-		total += len(llmMsgs) * req.PerMsgDelim
-
+		wire := groupsToWire(groups, nil)
+		total := e.wireTokens(req.CountText, req.System, nil, wire, req.FixedTokens, req.PerMsgDelim)
 		if req.Budget <= 0 || total <= effectiveBudget {
-			finalWire = llmMsgs
-			finalSelected = selectedMsgs
-			finalRadius = radiusMsgs
-			finalRectify = len(insertScores)
-			finalTotal = total
+			localGroups, localWire = groups, wire
 			break
 		}
-
-		dropRectByPtr := make(map[*pb.LLMMessage]bool)
-		var dropSelectedID string
-		for total > effectiveBudget {
-			var bestPtr *pb.LLMMessage
-			bestScore := math.Inf(1)
-			bestIdx := -1
-			for i, m := range llmMsgs {
-				if dropRectByPtr[m] {
-					continue
-				}
-				var s float64
-				if rs, ok := insertScores[m]; ok {
-					s = rs
-				} else if id, ok := selectedPtrToID[m]; ok {
-					s = selectedScoreByID[id]
-				} else {
-					continue
-				}
-				if s < bestScore {
-					bestScore = s
-					bestPtr = m
-					bestIdx = i
-				}
-			}
-			if bestPtr == nil {
-				break
-			}
-			if id, ok := selectedPtrToID[bestPtr]; ok {
-				dropSelectedID = id
-				break
-			}
-			dropRectByPtr[bestPtr] = true
-			total -= msgTokens[bestIdx] + req.PerMsgDelim
+		drop := oldestUnpinned(local, pinned)
+		if drop == "" {
+			return AssembleResult{}, fmt.Errorf(
+				"assemble: pinned Local Context requires %d tokens, budget is %d",
+				total, effectiveBudget,
+			)
 		}
-
-		if dropSelectedID != "" {
-			log.Printf("RRC: shed selected msg=%s (score=%.3f)", dropSelectedID, selectedScoreByID[dropSelectedID])
-			dropped[dropSelectedID] = true
-			continue
-		}
-
-		if len(dropRectByPtr) > 0 {
-			log.Printf("RRC: shed %d rectification insert(s) to fit budget", len(dropRectByPtr))
-			filtered := make([]*pb.LLMMessage, 0, len(llmMsgs))
-			for _, m := range llmMsgs {
-				if dropRectByPtr[m] {
-					continue
-				}
-				filtered = append(filtered, m)
-			}
-			llmMsgs = filtered
-		}
-
-		finalWire = llmMsgs
-		finalSelected = selectedMsgs
-		finalRadius = radiusMsgs
-		finalRectify = len(insertScores) - len(dropRectByPtr)
-		finalTotal = total
-		break
+		local = removeMessage(local, drop)
 	}
+
+	serializedLocal := req.SerializedLocalContext
+	if serializedLocal == nil || !sameIDs(serializedLocal.MessageIDs, messageIDs(local)) {
+		serializedLocal = SerializeLocalContext(local, req.CurrentTurnID, e.cfg.Chunk)
+	}
+
+	var (
+		edges                 []*rrcv1.Edge
+		prerequisiteSelection PrerequisiteSelectionTelemetry
+		selected              *rrcv1.SelectionResult
+		selectMs              int64
+		mmrMs                 int64
+	)
+	switch {
+	case req.PriorSelection != nil:
+		// Overflow-retry reuse (A5): one outbound call owns one selector input
+		// and one selection event. A context-overflow retry must NOT re-run
+		// prerequisite selection — that would re-walk provenance, re-add DAG
+		// edges, and re-emit the selection event. Instead it reuses the prior
+		// selection verbatim and only re-runs shed-to-fit below with the
+		// accumulated ExcludeIDs, shedding whole delivery groups. Edges were
+		// already published on the first attempt, so PriorEdges is empty here.
+		selected = req.PriorSelection
+	case serializedLocal != nil:
+		e.mu.Lock()
+		var err error
+		var eventFloor []float64
+		edges, prerequisiteSelection, eventFloor, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Scope, req.ThreadID)
+		if err != nil {
+			e.mu.Unlock()
+			return AssembleResult{}, fmt.Errorf("assemble SelectPrerequisites: %w", err)
+		}
+		selectStart := time.Now()
+		selected, err = e.selectLocked(req.Anchor.Id, req.Scope, req.ThreadID, eventFloor)
+		selectMs = time.Since(selectStart).Milliseconds()
+		if err != nil {
+			e.mu.Unlock()
+			return AssembleResult{}, fmt.Errorf("assemble Select: %w", err)
+		}
+		selected.EventId = serializedLocal.EventID
+		selected.LocalContextFingerprint = serializedLocal.Fingerprint
+		selected.LocalContextMessageIds = append([]string(nil), serializedLocal.MessageIDs...)
+		selected.AnchorMessageId = req.Anchor.Id
+
+		if len(selected.Selected) > 1 {
+			mmrStart := time.Now()
+			ranked, mmrErr := e.ApplyMMR(ctx, selected.Selected, serializedLocal.MessageIDs)
+			mmrMs = time.Since(mmrStart).Milliseconds()
+			if mmrErr != nil {
+				e.logger.Warn("RRC: MMR rerank skipped", "localContext", serializedLocal.Fingerprint, "err", mmrErr)
+			} else {
+				selected.Selected = ranked
+			}
+		}
+		e.mu.Unlock()
+	default:
+		selected = &rrcv1.SelectionResult{
+			EventId:         "sel-" + req.Anchor.Id,
+			Scope:           req.Scope,
+			ThreadId:        req.ThreadID,
+			AnchorMessageId: req.Anchor.Id,
+		}
+	}
+
+	dropped := make(map[string]bool, len(req.ExcludeIDs))
+	for _, id := range req.ExcludeIDs {
+		dropped[id] = true
+	}
+	localIDs := make(map[string]bool)
+	for _, g := range localGroups {
+		for _, m := range g.Messages {
+			localIDs[m.Id] = true
+		}
+	}
+	// Selected content and protocol scope, both bounded: fetch the selected
+	// messages' content by id, and build a protocol index over them plus their
+	// turn peers (where the counterparts CloseGroup needs live).
+	selectedIDs := make([]string, 0, len(selected.Selected))
+	for _, s := range selected.Selected {
+		selectedIDs = append(selectedIDs, s.MessageId)
+	}
+	corpusByID, err := req.Store.Messages(selectedIDs)
+	if err != nil {
+		return AssembleResult{}, fmt.Errorf("assemble: fetch selected content: %w", err)
+	}
+	selectedMsgs := make([]*threadv1.Message, 0, len(corpusByID))
+	for _, m := range corpusByID {
+		selectedMsgs = append(selectedMsgs, m)
+	}
+	protocolSel, err := e.protocolScope(selectedMsgs, req.Store)
+	if err != nil {
+		return AssembleResult{}, fmt.Errorf("assemble: selected protocol scope: %w", err)
+	}
+
+	shedStart := time.Now()
+	var finalSelected []DeliveryGroup
+	var finalWire []*llmv1.LLMMessage
+	var total int
+	// The shed's currency is DENSITY — excess acceptance probability per
+	// wire token, the greedy knapsack ranking under a budget — and its
+	// equilibrium realizes the budget's shadow price μ: zero when the
+	// budget never bites (complementary slackness), else the marginal
+	// refused density. A value-ranked shed is the wrong currency: one
+	// marginally-better giant crowds out several cheap goods.
+	groupCost := make(map[string]int)
+	costOf := func(g DeliveryGroup) int {
+		if c, ok := groupCost[g.RootID]; ok {
+			return c
+		}
+		c := e.wireTokens(req.CountText, nil, groupsToWire([]DeliveryGroup{g}, localIDs), nil, 0, req.PerMsgDelim)
+		if c < 1 {
+			c = 1
+		}
+		groupCost[g.RootID] = c
+		return c
+	}
+	shedStance := stanceBits(e.cfg.LossRatio)
+	densityOf := func(g DeliveryGroup) float64 {
+		// Value is EVIDENCE: the group's detection confidence converted
+		// back to surprisal bits, less the stance's zero point, per wire
+		// token. μ realized off this equilibrium is therefore in
+		// bits/token — the same units the next selection charges.
+		return (bitsFromConfidence(g.Score) - shedStance) / float64(costOf(g))
+	}
+	realizedPrice := 0.0
+	for {
+		var groups []DeliveryGroup
+		for _, s := range selected.Selected {
+			if dropped[s.MessageId] || localIDs[s.MessageId] {
+				continue
+			}
+			root := corpusByID[s.MessageId]
+			if root == nil {
+				return AssembleResult{}, fmt.Errorf("assemble: selected message %s missing from corpus", s.MessageId)
+			}
+			group, err := protocolSel.CloseGroup(root, float64(s.EffectiveScore))
+			if err != nil {
+				return AssembleResult{}, err
+			}
+			if groupOverlaps(group, localIDs) {
+				continue
+			}
+			groups = append(groups, group)
+		}
+		groups = mergeDeliveryGroups(groups)
+		sort.SliceStable(groups, func(i, j int) bool {
+			return corpusByID[groups[i].RootID].Position < corpusByID[groups[j].RootID].Position
+		})
+
+		selectedWire := groupsToWire(groups, localIDs)
+		finalWire = make([]*llmv1.LLMMessage, 0, 1+len(selectedWire)+len(localWire))
+		if req.System != nil {
+			finalWire = append(finalWire, req.System)
+		}
+		finalWire = append(finalWire, selectedWire...)
+		finalWire = append(finalWire, localWire...)
+		total = e.wireTokens(req.CountText, nil, finalWire, nil, req.FixedTokens, req.PerMsgDelim)
+		if req.Budget <= 0 || total <= effectiveBudget {
+			finalSelected = groups
+			break
+		}
+		drop, ok := lowestDensityGroup(groups, densityOf)
+		if !ok {
+			return AssembleResult{}, fmt.Errorf(
+				"assemble: fixed system and Local Context require %d tokens, budget is %d",
+				total, effectiveBudget,
+			)
+		}
+		// Greedy sheds lowest-density first, so the LAST shed is the best
+		// density the budget refused — the marginal price.
+		if d := densityOf(drop); d > realizedPrice {
+			realizedPrice = d
+		}
+		for _, id := range drop.RootIDs {
+			dropped[id] = true
+		}
+	}
+	// Publish the realized shadow price for the thread's next selection —
+	// the warm-started dual. Zero is meaningful (slack) and is stored.
+	e.setPrice(req.ThreadID, realizedPrice)
 
 	shedIDs := make([]string, 0, len(dropped))
 	for id := range dropped {
 		shedIDs = append(shedIDs, id)
 	}
-
-	shedMs := time.Since(shedStart).Milliseconds()
+	sort.Strings(shedIDs)
 
 	return AssembleResult{
-		Wire:      finalWire,
-		Selection: selResult,
-		Edges:     edges,
-		Shed:      shedIDs,
+		Wire:                   finalWire,
+		Selection:              selected,
+		SerializedLocalContext: serializedLocal,
+		Edges:                  edges,
+		Shed:                   shedIDs,
+		Delivered:              finalSelected,
+		LocalGroups:            localGroups,
 		Telemetry: AssembleTelemetry{
-			SelectedCount:   len(finalSelected),
-			RadiusCount:     len(finalRadius),
-			RectifiedCount:  finalRectify,
-			SheddedCount:    len(shedIDs),
-			TotalTokens:     finalTotal,
-			EffectiveBudget: effectiveBudget,
-			OnMessage:       onMsgTel,
-			SelectMs:        selectMs,
-			MMRMs:           mmrMs,
-			ShedMs:          shedMs,
+			SelectedCount:         len(finalSelected),
+			LocalContextCount:     len(local),
+			ClosureCount:          closureCount(finalSelected) + closureCount(localGroups),
+			SheddedCount:          len(shedIDs),
+			TotalTokens:           total,
+			EffectiveBudget:       effectiveBudget,
+			RealizedPrice:         realizedPrice,
+			PrerequisiteSelection: prerequisiteSelection,
+			SelectMs:              selectMs,
+			MMRMs:                 mmrMs,
+			ShedMs:                time.Since(shedStart).Milliseconds(),
 		},
 	}, nil
 }
 
-// buildRadiusSlice produces the chronological Radius window with
-// dynamical-anchor reachback. Last N thread messages are taken; if
-// the most-recent user-text or assistant-text isn't in that window,
-// reach further back to anchor it. Selection-included ids are
-// skipped (Selection trumps Radius). Output preserves chronological
-// order. wireIDs is appended in-place so the caller can seed the
-// resolver with everything currently in the wire.
-func buildRadiusSlice(threadCorpus []*pb.Message, selectedIDs map[string]bool, radiusN int, wireIDs *[]string) []*pb.LLMMessage {
-	start := len(threadCorpus) - radiusN
-	if start < 0 {
-		start = 0
+// protocolScope builds a bounded ProtocolIndex over msgs plus every message
+// sharing a turn with them — the set where their tool-call/result counterparts
+// live — instead of indexing the whole corpus.
+func (e *Engine) protocolScope(msgs []*threadv1.Message, store CorpusStore) (*ProtocolIndex, error) {
+	if store == nil {
+		return NewProtocolIndex(msgs), nil
 	}
-	window := threadCorpus[start:]
-
-	haveUserText, haveAssistantText := false, false
-	for _, m := range window {
-		if !hasTextBlock(m.Content) {
-			continue
-		}
-		switch m.Role {
-		case pb.Role_ROLE_USER:
-			haveUserText = true
-		case pb.Role_ROLE_ASSISTANT:
-			haveAssistantText = true
-		}
+	peers, err := store.TurnPeers(msgs)
+	if err != nil {
+		return nil, err
 	}
+	all := make([]*threadv1.Message, 0, len(msgs)+len(peers))
+	all = append(all, msgs...)
+	all = append(all, peers...)
+	return NewProtocolIndex(all), nil
+}
 
-	var prepended []*pb.Message
-	if !haveUserText || !haveAssistantText {
-		for i := start - 1; i >= 0 && (!haveUserText || !haveAssistantText); i-- {
-			m := threadCorpus[i]
-			if !hasTextBlock(m.Content) {
+// CorpusStore gives Assemble bounded, on-demand access to message content,
+// replacing the full-corpus slice so per-step cost stops scaling with history.
+// The only reads Assemble needs are the selected set's content and the
+// protocol counterparts of the assembly set — both bounded.
+type CorpusStore interface {
+	// Messages returns the given messages by id (the selected set's content).
+	Messages(ids []string) (map[string]*threadv1.Message, error)
+	// TurnPeers returns every message sharing a (thread, turn) with any input
+	// message — the bounded superset containing their tool-call/result
+	// counterparts, since a call and its result share a turn.
+	TurnPeers(msgs []*threadv1.Message) ([]*threadv1.Message, error)
+}
+
+type AssembleRequest struct {
+	SerializedLocalContext *SerializedLocalContext
+	Anchor                 *threadv1.Message
+	Store                  CorpusStore
+	LocalContext           []*threadv1.Message
+	Scope                  threadv1.SelectionScope
+	ThreadID               string
+	System                 *llmv1.LLMMessage
+	Budget                 int
+	HeadroomPct            float64
+	PerMsgDelim            int
+	FixedTokens            int
+	ExcludeIDs             []string
+
+	// CurrentTurnID discriminates the in-flight turn inside LocalContext
+	// (the window): query chunks and the Anchor invariant come from that
+	// turn alone, while the whole window is delivered, membership-listed,
+	// and walk-seeded. "" means the whole span is the discourse — the
+	// no-turn-identity recency fallback, tests, and benches — and
+	// reproduces the undiscriminated behavior byte-for-byte.
+	CurrentTurnID string
+
+	// CountText overrides how a wire message's text is extracted for
+	// budget counting. Providers' codecs send different subsets of a
+	// message's content blocks (some drop thinking, some send text
+	// only), so the caller injects the projection matching what its
+	// adapter will actually put on the wire — counting content that
+	// is never sent systematically overstates the prompt and sheds
+	// context for nothing. Nil counts everything
+	// (pbtext.TextFromBlocks), which is exact only for adapters that
+	// resend all block types.
+	CountText func(*llmv1.LLMMessage) string
+
+	// PriorSelection, when set, makes Assemble reuse an earlier selection
+	// verbatim instead of re-running prerequisite selection — the overflow-
+	// retry reuse path (A5). One outbound model call owns one selector input
+	// and one selection event; a context-overflow retry only re-runs
+	// shed-to-fit (dropping whole delivery groups via ExcludeIDs), never
+	// re-selection. Leave nil for the first attempt.
+	PriorSelection *rrcv1.SelectionResult
+}
+
+type AssembleResult struct {
+	Wire                   []*llmv1.LLMMessage
+	Selection              *rrcv1.SelectionResult
+	SerializedLocalContext *SerializedLocalContext
+	Edges                  []*rrcv1.Edge
+	Shed                   []string
+	Telemetry              AssembleTelemetry
+
+	// Delivered holds the selected delivery groups that survived
+	// shed-to-fit — the structured form of what Wire flattened, so a
+	// consumer can see which group each wire message belongs to.
+	// LocalGroups holds the Local Context's protocol-closed groups.
+	Delivered   []DeliveryGroup
+	LocalGroups []DeliveryGroup
+}
+
+type AssembleTelemetry struct {
+	SelectedCount     int
+	LocalContextCount int
+	ClosureCount      int
+	SheddedCount      int
+	TotalTokens       int
+	EffectiveBudget   int
+	// RealizedPrice is the budget shadow price μ this assembly's shed
+	// equilibrium realized — zero on slack (complementary slackness),
+	// the marginal refused density when the budget bit. The economics
+	// are load-bearing state and must never be silent: this is how a
+	// binding deployment is observed.
+	RealizedPrice         float64
+	PrerequisiteSelection PrerequisiteSelectionTelemetry
+	SelectMs              int64
+	MMRMs                 int64
+	ShedMs                int64
+}
+
+func closeRoots(index *ProtocolIndex, roots []*threadv1.Message, scores map[string]float64) ([]DeliveryGroup, error) {
+	groups := make([]DeliveryGroup, 0, len(roots))
+	for _, root := range roots {
+		score := math.Inf(1)
+		if scores != nil {
+			score = scores[root.Id]
+		}
+		group, err := index.CloseGroup(root, score)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, group)
+	}
+	return mergeDeliveryGroups(groups), nil
+}
+
+func groupsToWire(groups []DeliveryGroup, already map[string]bool) []*llmv1.LLMMessage {
+	seen := make(map[string]bool)
+	for id := range already {
+		seen[id] = true
+	}
+	var messages []*threadv1.Message
+	for _, group := range groups {
+		for _, m := range group.Messages {
+			if seen[m.Id] {
 				continue
 			}
-			if m.Role == pb.Role_ROLE_USER && !haveUserText {
-				prepended = append([]*pb.Message{m}, prepended...)
-				haveUserText = true
-			} else if m.Role == pb.Role_ROLE_ASSISTANT && !haveAssistantText {
-				prepended = append([]*pb.Message{m}, prepended...)
-				haveAssistantText = true
-			}
+			seen[m.Id] = true
+			messages = append(messages, m)
 		}
 	}
-
-	if len(prepended) > 0 {
-		log.Printf("RRC: dynamical Radius reached back for %d semantic anchor(s) beyond the last %d",
-			len(prepended), radiusN)
-	}
-
-	var out []*pb.LLMMessage
-	emit := func(m *pb.Message) {
-		if selectedIDs[m.Id] {
-			return
+	sort.SliceStable(messages, func(i, j int) bool {
+		if messages[i].ThreadId != messages[j].ThreadId {
+			return messages[i].ThreadId < messages[j].ThreadId
 		}
+		if messages[i].Position != messages[j].Position {
+			return messages[i].Position < messages[j].Position
+		}
+		return messages[i].Id < messages[j].Id
+	})
+	out := make([]*llmv1.LLMMessage, 0, len(messages))
+	for _, m := range messages {
 		out = append(out, messageToLLM(m))
-		*wireIDs = append(*wireIDs, m.Id)
-	}
-	for _, m := range prepended {
-		emit(m)
-	}
-	for _, m := range window {
-		emit(m)
 	}
 	return out
 }
 
-// hasTextBlock reports whether a content-block list contains at
-// least one non-empty text block. Used by the Radius slice builder
-// to distinguish semantic-content messages (user prose, assistant
-// replies) from tool-plumbing messages (tool_call / tool_result /
-// thinking-only). Anchoring on text blocks keeps a deep tool loop
-// from hiding the most-recent real conversation turn.
-//
-// Thinking is excluded — the model's internal monologue is not a
-// conversational anchor.
-func hasTextBlock(blocks []*pb.ContentBlock) bool {
-	for _, b := range blocks {
-		if t := b.GetText(); t != nil && t.Text != "" {
+func (e *Engine) wireTokens(countText func(*llmv1.LLMMessage) string, system *llmv1.LLMMessage, head, tail []*llmv1.LLMMessage, fixed, delim int) int {
+	if countText == nil {
+		countText = func(m *llmv1.LLMMessage) string { return pbtext.TextFromBlocks(m.Content) }
+	}
+	total := fixed
+	if system != nil {
+		head = append([]*llmv1.LLMMessage{system}, head...)
+	}
+	for _, m := range append(head, tail...) {
+		total += e.cfg.Chunk.Estimate(countText(m)) + delim
+	}
+	return total
+}
+
+// pinnedLocalIDs pins the Anchor (by id — under the window the last
+// element can be a trailing tool result, not the discourse focus) plus
+// the most recent semantic user and assistant messages, so the
+// absurd-overflow shed can never empty the query. Everything else —
+// the window-tail first, oldest-first — is shed-eligible.
+func pinnedLocalIDs(local []*threadv1.Message, anchorID string) map[string]bool {
+	pinned := make(map[string]bool)
+	if len(local) == 0 {
+		return pinned
+	}
+	pinned[anchorID] = true
+	haveUser, haveAssistant := false, false
+	for i := len(local) - 1; i >= 0 && (!haveUser || !haveAssistant); i-- {
+		m := local[i]
+		if !hasSemanticBlock(m.Content) {
+			continue
+		}
+		if m.Role == threadv1.Role_ROLE_USER && !haveUser {
+			pinned[m.Id], haveUser = true, true
+		}
+		if m.Role == threadv1.Role_ROLE_ASSISTANT && !haveAssistant {
+			pinned[m.Id], haveAssistant = true, true
+		}
+	}
+	return pinned
+}
+
+// lastSemantic returns the last message in local carrying semantic
+// content that (when currentTurnID is set) belongs to the current turn —
+// the discourse focus the Anchor invariant pins. Returns nil when the
+// span holds no such message.
+func lastSemantic(local []*threadv1.Message, currentTurnID string) *threadv1.Message {
+	for i := len(local) - 1; i >= 0; i-- {
+		m := local[i]
+		if currentTurnID != "" && m.TurnId != currentTurnID {
+			continue
+		}
+		if hasSemanticBlock(m.Content) {
+			return m
+		}
+	}
+	return nil
+}
+
+func oldestUnpinned(local []*threadv1.Message, pinned map[string]bool) string {
+	for _, m := range local {
+		if !pinned[m.Id] {
+			return m.Id
+		}
+	}
+	return ""
+}
+
+func removeMessage(messages []*threadv1.Message, id string) []*threadv1.Message {
+	out := make([]*threadv1.Message, 0, len(messages)-1)
+	for _, m := range messages {
+		if m.Id != id {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// lowestDensityGroup returns the group with the lowest excess-value
+// density — the greedy knapsack's next casualty and, when it is the last
+// one shed, the realized shadow price's source.
+func lowestDensityGroup(groups []DeliveryGroup, density func(DeliveryGroup) float64) (DeliveryGroup, bool) {
+	var selected DeliveryGroup
+	found := false
+	lowest := math.Inf(1)
+	for _, g := range groups {
+		if d := density(g); d < lowest {
+			lowest, selected, found = d, g, true
+		}
+	}
+	return selected, found
+}
+
+func mergeDeliveryGroups(groups []DeliveryGroup) []DeliveryGroup {
+	byClosure := make(map[string]int, len(groups))
+	out := make([]DeliveryGroup, 0, len(groups))
+	for _, group := range groups {
+		key := closureKey(group.Messages)
+		if index, ok := byClosure[key]; ok {
+			out[index].RootIDs = append(out[index].RootIDs, group.RootIDs...)
+			if group.Score > out[index].Score {
+				out[index].RootID = group.RootID
+				out[index].Score = group.Score
+			}
+			continue
+		}
+		group.RootIDs = append([]string(nil), group.RootIDs...)
+		byClosure[key] = len(out)
+		out = append(out, group)
+	}
+	for i := range out {
+		sort.Strings(out[i].RootIDs)
+	}
+	return out
+}
+
+func closureKey(messages []*threadv1.Message) string {
+	var key string
+	for _, m := range messages {
+		key += m.ThreadId + "\x00" + m.Id + "\x00"
+	}
+	return key
+}
+
+func groupOverlaps(group DeliveryGroup, ids map[string]bool) bool {
+	for _, m := range group.Messages {
+		if ids[m.Id] {
 			return true
 		}
 	}
 	return false
 }
 
-// messageToLLM lifts a stored Message into the wire-format
-// LLMMessage. The role and content blocks pass through unchanged;
-// storage-only fields (id, position, threadId, timestamps) drop.
-func messageToLLM(msg *pb.Message) *pb.LLMMessage {
-	return &pb.LLMMessage{
-		Role:    msg.Role,
-		Content: msg.Content,
+func closureCount(groups []DeliveryGroup) int {
+	n := 0
+	for _, g := range groups {
+		if len(g.Messages) > 1 {
+			n += len(g.Messages) - 1
+		}
 	}
+	return n
 }
 
-// AssembleRequest carries inputs to Engine.Assemble. See Assemble
-// for field semantics.
-type AssembleRequest struct {
-	Query        *pb.Message
-	Corpus       []*pb.Message
-	ThreadCorpus []*pb.Message
-	Scope        pb.SelectionScope
-	ThreadID     string
-	System       *pb.LLMMessage
-	Resolver     excludingResolver
-	Rules        []Rule
-	Budget       int
-	HeadroomPct  float64
-	PerMsgDelim  int
-	FixedTokens int
-	ExcludeIDs   []string
+func messageIDs(messages []*threadv1.Message) []string {
+	ids := make([]string, len(messages))
+	for i, m := range messages {
+		ids[i] = m.Id
+	}
+	return ids
 }
 
-// AssembleResult carries outputs from Engine.Assemble. See Assemble
-// for field semantics. Selection carries the full Select() output
-// so the consumer can publish it for introspection (Selected +
-// Excluded + scope) — the engine's view of RRC's prerequisite
-// detection, distinct from the budget-driven shed list.
-type AssembleResult struct {
-	Wire      []*pb.LLMMessage
-	Selection *pb.SelectionResult
-	Edges     []*pb.Edge
-	Shed      []string
-	Telemetry AssembleTelemetry
+func sameIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
-// AssembleTelemetry reports the assembly's per-stage signals — both
-// the byte/count totals (selected, radius, rectified, shed) and the
-// per-stage wall-clock decomposition (OnMessage, Select, MMR, Shed).
-// Callers aggregating into higher-level profiling (per-tick traces,
-// structured logs) read the timing fields directly without
-// re-instrumenting the engine.
-type AssembleTelemetry struct {
-	SelectedCount   int
-	RadiusCount     int
-	RectifiedCount  int
-	SheddedCount    int
-	TotalTokens     int
-	EffectiveBudget int
-
-	// Per-stage timings (milliseconds). Sum across stages plus engine
-	// overhead approximates the wall-clock duration of Assemble.
-	OnMessage OnMessageTelemetry // includes DurationMs + per-call counters
-	SelectMs  int64              // graph walk + transitive reduction
-	MMRMs     int64              // diversity rerank (0 when DiversityLambda disables it)
-	ShedMs    int64              // budget shed loop + token estimation + radius build
-}
-
-// excludingResolver augments the rule-pipeline Resolver with an
-// ExcludeIDs seed call invoked by Assemble before each shed
-// iteration's rule pass. The seed prevents rules from re-fetching
-// any message already contributing to the wire under its original
-// id.
-type excludingResolver interface {
-	Resolver
-	ExcludeIDs(ids []string)
+func messageToLLM(msg *threadv1.Message) *llmv1.LLMMessage {
+	return &llmv1.LLMMessage{Role: msg.Role, Content: msg.Content}
 }

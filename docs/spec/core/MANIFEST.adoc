@@ -31,11 +31,10 @@ The core library is the foundational Go package. It defines the abstraction inte
 
 ==== In Scope
 
-- Proto truth types: Message, LLMMessage, ContentBlock (Text, Thinking, ToolCall, ToolResult, Image), Thread, Role, SelectionScope, Edge, QUD, QUDGraph, SelectionResult, CarryForwardInput, CompletionRequest/Response, StreamChunk, Usage
+- Proto truth types (three wire packages): Message, ContentBlock (Text, Thinking, ToolCall, ToolResult, Image, Attachment), Thread, Role, SelectionScope (grudge.thread.v1); LLMMessage, CompletionRequest/Response, StreamChunk, Usage, ToolDeclaration, ToolChoice (grudge.llm.v1); Edge, EdgeSource, SelectionResult, SelectedMessage, ExcludedMessage (grudge.rrc.v1)
 - Completer interface: completion, streaming completion
 - Embedder interface: dispatched embed (RoleQuery / RoleDocument)
 - Scorer interface: query-against-candidates relevance scoring (cross-encoder pattern -- one query, N candidates, returns aligned scores)
-- Codec interface: per-adapter proto ↔ wire-format conversion
 - Provider role interfaces: CompleterProvider, EmbedderProvider, ScorerProvider (interface-segregated; each adapter implements only the roles it supports)
 - Provider adapters: Ollama, Anthropic, OpenAI, Google AI, vLLM, any OpenAI-compatible endpoint
 - Embedder adapters: TEI, OpenAI embeddings
@@ -54,15 +53,17 @@ The core library is the foundational Go package. It defines the abstraction inte
 
 === Proto Truth Types
 
-Defined in `proto/grudge/v1/`. Generated Go types in `proto/gen/go/grudge/v1/`. Three files:
+Defined in `proto/grudge/{thread,llm,rrc}/v1/` — one wire package per
+stratum, generated into `proto/gen/go/grudge/{thread,llm,rrc}/v1/` as
+`threadv1`/`llmv1`/`rrcv1`:
 
-- **thread.proto** -- Message, Role, ContentBlock (TextContent, ThinkingContent, ToolCallContent, ToolResultContent, ImageContent), Thread, SelectionScope
-- **rrc.proto** -- Edge, EdgeSource, QUD, QUDStatus, QUDGraph, SelectedMessage, ExcludedMessage, ExclusionReason, SelectionResult
-- **llm.proto** -- LLMMessage, CompletionRequest, CompletionResponse, Usage, StreamChunk
+- **thread/v1/thread.proto** (leaf) -- Message, Role, ContentBlock (TextContent, ThinkingContent, ToolCallContent, ToolResultContent, ImageContent, AttachmentContent), Thread, SelectionScope
+- **rrc/v1/rrc.proto** (imports thread) -- Edge, EdgeSource, SelectedMessage, ExcludedMessage, ExclusionReason, SelectionResult
+- **llm/v1/llm.proto** (imports thread) -- LLMMessage, ToolDeclaration, ToolChoice, CompletionRequest, CompletionResponse, Usage, StreamChunk
 
 Scorer is a Go interface only -- (query, []candidates) -> []float64 -- and has no proto wire form. Per-adapter HTTP shapes (TEI's `/rerank`, vLLM's `/v1/chat/completions` with the zerank Yes-token logprob recipe) live in each adapter's package.
 
-Message is the corpus record (id, role, content blocks, position, thread_id, created_at). LLMMessage is the wire format (role, content blocks only). The service converts between them at the boundary. Thread is the organizational unit -- each thread is its own corpus with its own DAG, QUD graph, and carry-forward trajectory. SelectionScope controls per-prompt scoping (thread-scoped by default, all-threads as opt-in).
+Message is the corpus record (id, role, content blocks, position, thread_id, created_at). LLMMessage is the wire format (role, content blocks only). The service converts between them at the boundary. Thread is the organizational unit -- each thread is its own corpus with its own DAG and score cache. SelectionScope controls per-prompt scoping (thread-scoped by default, all-threads as opt-in).
 
 CompletionRequest includes `provider_options` (`google.protobuf.Struct`) as an escape hatch for provider-specific parameters the abstraction does not model explicitly.
 
@@ -185,18 +186,21 @@ core/
 ├── completer.go          # Completer interface
 ├── embedder.go           # Embedder interface + EmbedRole
 ├── scorer.go             # Scorer interface
-├── codec.go              # Codec interface (proto ↔ wire format)
 ├── provider.go           # CompleterProvider, EmbedderProvider, ScorerProvider
 ├── registry.go           # NewProvider factory + per-adapter registration
 ├── errors.go             # Sentinel errors (ErrUnsupported, ErrProviderUnavailable, ErrAuth)
 ├── adapter/
 │   ├── ollama/           # Completer, Embedder
 │   ├── anthropic/        # Completer
-│   ├── openai/           # Completer, Embedder (configurable base URL)
+│   ├── openai/           # Completer, Embedder (configurable base URL; covers OpenAI-compatible endpoints incl. vLLM)
 │   ├── googleai/         # Completer, Embedder
-│   ├── vllm/             # Completer
+│   ├── vertex/           # Completer, Embedder (genai SDK, ADC)
+│   ├── gcpranking/       # Scorer (Discovery Engine Ranking API)
 │   ├── tei/              # Embedder (/embed), Scorer (/rerank)
-│   └── zerank/           # Scorer (vLLM /v1/chat/completions; Yes-token logprob)
+│   ├── zerank/           # Scorer (vLLM /v1/chat/completions; Yes-token logprob)
+│   └── internal/         # gcpauth (ADC for raw-HTTP GCP adapters), util
+├── genaicodec/           # genai SDK <-> proto content mapping
+├── httpc/                # Public adapter transport kit (Client, StatusError)
 ├── httpc/retry/          # Shared retry policy
 └── internal/
     └── httpc/
@@ -307,9 +311,17 @@ Syntax: {proto-syntax}.
 [source,protobuf]
 ----
 syntax = "proto3";
-package grudge.v1;
-option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1";
+
+package grudge.thread.v1;
+
+option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1;threadv1";
+
 import "google/protobuf/timestamp.proto";
+
+// A thread is a corpus — an ordered sequence of immutable messages.
+// Each thread has its own DAG and score cache.
+// Threads are the organizational unit. Selection is thread-scoped by default
+// but can be widened to all threads per-prompt.
 
 enum Role {
   ROLE_UNSPECIFIED = 0;
@@ -318,6 +330,8 @@ enum Role {
   ROLE_SYSTEM = 3;
 }
 
+// Content block types. A message contains one or more of these.
+
 message ContentBlock {
   oneof block {
     TextContent text = 1;
@@ -325,14 +339,52 @@ message ContentBlock {
     ToolCallContent tool_call = 3;
     ToolResultContent tool_result = 4;
     ImageContent image = 5;
+    AttachmentContent attachment = 6;
   }
 }
 
-message TextContent { string text = 1; }
-message ThinkingContent { string text = 1; }
-message ToolCallContent { string id = 1; string name = 2; string arguments = 3; }
-message ToolResultContent { string tool_call_id = 1; string content = 2; bool is_error = 3; }
-message ImageContent { string media_type = 1; bytes data = 2; }
+message TextContent {
+  string text = 1;
+}
+
+message ThinkingContent {
+  string text = 1;
+}
+
+message ToolCallContent {
+  string id = 1;
+  string name = 2;
+  string arguments = 3; // JSON-encoded arguments
+}
+
+message ToolResultContent {
+  string tool_call_id = 1;
+  string content = 2;
+  bool is_error = 3;
+}
+
+message ImageContent {
+  string media_type = 1;
+  bytes data = 2;
+}
+
+// AttachmentContent: a file the user attached to the message, already
+// imported into the thread's workspace. `path` is the sandbox-relative
+// location the agent resolves via FileRead. `inlined_text` carries
+// extracted UTF-8 text for text-like MIME types so RRC can chunk and
+// score attachment content alongside prose; binary attachments leave
+// it empty and are referenced by path only.
+message AttachmentContent {
+  string id = 1;            // UUID, also the subdirectory name under _attachments/
+  string filename = 2;      // sanitized display name, also the basename on disk
+  string mime_type = 3;     // sniffed from actual content at upload time
+  int64 size_bytes = 4;
+  string path = 5;          // sandbox-relative, e.g. "/workspace/_attachments/{id}/{filename}"
+  string inlined_text = 6;  // populated for text/* MIME; capped at a reasonable size
+}
+
+// Corpus message. The persistent record in a thread.
+// Has identity and position metadata beyond what the LLM sees.
 
 message Message {
   string id = 1;
@@ -341,23 +393,31 @@ message Message {
   int64 position = 4;
   string thread_id = 5;
   google.protobuf.Timestamp created_at = 6;
+  // Active-discourse identity. Messages produced within one outbound
+  // model call (the triggering event plus the model/tool events it
+  // spawns) share a turn_id, so the in-flight local discourse can be
+  // recovered without falling back to fixed last-N recency. Empty on
+  // messages stored before this field existed / outside a turn.
+  string turn_id = 7;
 }
 
 message Thread {
   string id = 1;
   string name = 2;
-  repeated string working_dirs = 3;
-  bool sandboxed = 4;
+  repeated string working_dirs = 3;  // Mounted directories. Mutable — add/remove over thread lifetime.
+  bool sandboxed = 4;                // Whether tool execution runs in Docker Sandbox (default: true)
   google.protobuf.Timestamp created_at = 5;
-  optional string parent_thread_id = 6;
-  optional int64 branch_point_position = 7;
-  optional google.protobuf.Timestamp archived_at = 8;
+  optional string parent_thread_id = 6;      // NULL for root threads, set for branches
+  optional int64 branch_point_position = 7;  // Message position where this branch diverged
+  optional google.protobuf.Timestamp archived_at = 8;  // NULL = active, set = archived
 }
+
+// Selection scope. Passed per-prompt to control where the RRC engine looks.
 
 enum SelectionScope {
   SELECTION_SCOPE_UNSPECIFIED = 0;
-  SELECTION_SCOPE_THREAD = 1;
-  SELECTION_SCOPE_ALL_THREADS = 2;
+  SELECTION_SCOPE_THREAD = 1;      // Default: select from this thread only
+  SELECTION_SCOPE_ALL_THREADS = 2; // Widen: select from all threads
 }
 ----
 
@@ -366,16 +426,28 @@ enum SelectionScope {
 [source,protobuf]
 ----
 syntax = "proto3";
-package grudge.v1;
-option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1";
+
+package grudge.rrc.v1;
+
+option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1;rrcv1";
+
 import "google/protobuf/timestamp.proto";
-import "grudge/v1/thread.proto";
+import "grudge/thread/v1/thread.proto";
+
+// Prerequisite DAG edge. Produced by cross-encoder scoring or recorded
+// as generation provenance.
 
 enum EdgeSource {
   EDGE_SOURCE_UNSPECIFIED = 0;
   EDGE_SOURCE_CROSS_ENCODER = 1;
-  EDGE_SOURCE_QUD = 2;
-  EDGE_SOURCE_BOTH = 3;
+  // Recorded at generation time: "the turn at to_message_id was generated
+  // from from_message_id." Not similarity-scored — it is a fact about what
+  // fed the turn, legible even where semantic similarity is near zero. Its
+  // `score` field carries the contribution weight (was the source
+  // load-bearing for the turn, not merely present). Provenance edges are
+  // the structural signal that lifts required-but-weakly-connected
+  // prerequisites — roots above all — over calibrated acceptance.
+  EDGE_SOURCE_PROVENANCE = 4;
 }
 
 message Edge {
@@ -384,48 +456,27 @@ message Edge {
   float score = 3;
   EdgeSource source = 4;
   float cross_encoder_score = 5;
-  float qud_weight = 6;
-  float temporal_proximity = 7;
   google.protobuf.Timestamp detected_at = 8;
-  string from_thread_id = 9;
+  string from_thread_id = 9;  // Thread origin of the source message. Visible in citations when cross-thread.
   string to_thread_id = 10;
 }
 
-enum QUDStatus {
-  QUD_STATUS_UNSPECIFIED = 0;
-  QUD_STATUS_OPEN = 1;
-  QUD_STATUS_PARTIALLY_ADDRESSED = 2;
-  QUD_STATUS_RESOLVED = 3;
-}
-
-message QUD {
-  string id = 1;
-  string question = 2;
-  string established_by = 3;
-  string parent_qud_id = 4;
-  QUDStatus status = 5;
-  repeated string addressed_by = 6;
-}
-
-message QUDGraph {
-  repeated QUD quds = 1;
-  repeated string active_stack = 2;
-}
+// Selection result. Returned by the RRC engine. Drives citations in the UI.
 
 message SelectedMessage {
   string message_id = 1;
   float effective_score = 2;
   int32 hop_depth = 3;
   repeated Edge via_edges = 4;
-  string thread_id = 5;
-  bool cross_thread = 6;
+  string thread_id = 5;       // Thread the selected message belongs to
+  bool cross_thread = 6;      // True if selected from a different thread than the prompt
 }
 
 enum ExclusionReason {
-  EXCLUSION_UNSPECIFIED = 0;
-  EXCLUSION_BELOW_THRESHOLD = 1;
-  EXCLUSION_TRANSITIVE_REDUCTION = 2;
-  EXCLUSION_DEPTH_LIMIT = 3;
+  EXCLUSION_REASON_UNSPECIFIED = 0;
+  EXCLUSION_REASON_BELOW_THRESHOLD = 1;
+  EXCLUSION_REASON_TRANSITIVE_REDUCTION = 2;
+  EXCLUSION_REASON_DEPTH_LIMIT = 3;
 }
 
 message ExcludedMessage {
@@ -435,17 +486,14 @@ message ExcludedMessage {
 }
 
 message SelectionResult {
-  string event_id = 1;
-  SelectionScope scope = 2;
-  string thread_id = 3;
+  string event_id = 1;                // Unique ID for this RRC selection event
+  grudge.thread.v1.SelectionScope scope = 2;           // Thread-scoped or all-threads
+  string thread_id = 3;               // Thread where the prompt originated
   repeated SelectedMessage selected = 4;
   repeated ExcludedMessage excluded = 5;
-}
-
-message CarryForwardInput {
-  string event_id = 1;
-  string thread_id = 2;
-  repeated ThinkingContent thinking_blocks = 3;
+  string local_context_fingerprint = 6;       // Exact bounded Local Context serialization
+  repeated string local_context_message_ids = 7;
+  string anchor_message_id = 8;       // Latest stored event receiving DAG edges
 }
 ----
 
@@ -454,14 +502,47 @@ message CarryForwardInput {
 [source,protobuf]
 ----
 syntax = "proto3";
-package grudge.v1;
-option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1";
-import "google/protobuf/struct.proto";
-import "grudge/v1/thread.proto";
+
+package grudge.llm.v1;
+
+option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1;llmv1";
+
+import "grudge/thread/v1/thread.proto";
+
+// LLM interface types. Provider-agnostic completion.
+//
+// LLMMessage is the wire format — role + content blocks, no corpus metadata.
+// The service converts between corpus Message and LLMMessage at the boundary.
 
 message LLMMessage {
-  Role role = 1;
-  repeated ContentBlock content = 2;
+  grudge.thread.v1.Role role = 1;
+  repeated grudge.thread.v1.ContentBlock content = 2;
+}
+
+// ToolDeclaration describes a tool the model can call.
+message ToolDeclaration {
+  string name = 1;
+  string description = 2;
+  // JSON Schema for the tool's parameters, as a JSON string.
+  string parameters_json = 3;
+}
+
+// ToolChoiceMode controls whether and which tool the model is
+// expected to invoke. Default (UNSPECIFIED) maps to AUTO. Each
+// adapter translates to its provider's wire vocabulary.
+enum ToolChoiceMode {
+  TOOL_CHOICE_MODE_UNSPECIFIED = 0;
+  TOOL_CHOICE_MODE_AUTO = 1;     // model chooses freely
+  TOOL_CHOICE_MODE_NONE = 2;     // disallow tool calls
+  TOOL_CHOICE_MODE_REQUIRED = 3; // require any tool call
+  TOOL_CHOICE_MODE_NAMED = 4;    // require the named tool
+}
+
+// ToolChoice constrains the model's tool invocation. named_tool is
+// only consulted when mode == TOOL_CHOICE_MODE_NAMED.
+message ToolChoice {
+  ToolChoiceMode mode = 1;
+  string named_tool = 2;
 }
 
 message CompletionRequest {
@@ -472,7 +553,10 @@ message CompletionRequest {
   optional float top_p = 5;
   repeated string stop = 6;
   bool stream = 7;
-  google.protobuf.Struct provider_options = 8;
+  // Tool declarations — functions the model can call.
+  repeated ToolDeclaration tools = 9;
+  // Tool-choice constraint. Optional — unset means model decides.
+  ToolChoice tool_choice = 10;
 }
 
 message CompletionResponse {
@@ -480,19 +564,37 @@ message CompletionResponse {
   LLMMessage message = 2;
   Usage usage = 3;
   string model = 4;
+  // Why generation stopped. Provider-specific strings, normalized
+  // by the adapter to: "stop", "length", "tool_calls",
+  // "content_filter", or empty.
+  string finish_reason = 5;
 }
 
-message Usage { int32 prompt_tokens = 1; int32 completion_tokens = 2; }
+message Usage {
+  int32 prompt_tokens = 1;
+  int32 completion_tokens = 2;
+}
+
+// Streaming. Each chunk carries a content block delta.
 
 message StreamChunk {
   oneof delta {
-    TextContent text = 1;
-    ThinkingContent thinking = 2;
-    ToolCallContent tool_call = 3;
+    grudge.thread.v1.TextContent text = 1;
+    grudge.thread.v1.ThinkingContent thinking = 2;
+    grudge.thread.v1.ToolCallContent tool_call = 3;
+    grudge.thread.v1.ToolResultContent tool_result = 7;
   }
   bool done = 4;
   optional Usage usage = 5;
   optional string error = 6;  // Set on stream failure (done=true + error = failure)
+  // Provider-specific finish reason on the final chunk. Empty when
+  // generation has not stopped (intermediate chunks) or the
+  // provider didn't supply one.
+  string finish_reason = 8;
+  // Choice index for providers that emit multiple parallel
+  // completions (OpenAI's `n` parameter). Default 0 — single-choice
+  // path.
+  int32 choice_index = 9;
 }
 ----
 

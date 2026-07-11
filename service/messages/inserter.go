@@ -5,7 +5,7 @@
 // post-insert embed enqueue happen in exactly one place.
 //
 // Pre-Part-B both sides duplicated a chunksFor helper that converted
-// (*pb.Message, chunk.Config) to []storage.Chunk via
+// (*threadv1.Message, chunk.Config) to []storage.Chunk via
 // rrc.TextFromBlocks + chunk.Split. The duplication grew naturally
 // because each layer had its own entry into the insert path. The
 // helper is now a private function in this package; both layers call
@@ -13,7 +13,7 @@
 package messages
 
 import (
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/service/storage"
@@ -24,9 +24,8 @@ import (
 // supplied accessor so the inserter sees current engine config
 // across atomic substrate swaps without holding a captured reference.
 //
-// EmbedEnqueue is best-effort: a nil enqueuer (or a no-op closure)
-// is permitted for tests and for boot-time inserts that should fall
-// back to the startup backfill goroutine.
+// EmbedEnqueue may be nil in isolated tests. A configured runtime
+// supplies it before accepting message inserts.
 type Inserter struct {
 	db          *storage.DB
 	chunkConfig func() chunk.Config
@@ -41,12 +40,10 @@ func New(db *storage.DB, chunkConfig func() chunk.Config, embedEnq func(messageI
 }
 
 // Insert persists msg with its derived chunks, then enqueues an
-// embed for the message id. Chunk derivation is silent on empty /
-// non-text messages — they store with zero chunks, which is the
-// correct shape for tool-only or empty-content turns. The embed
-// enqueue is skipped when chunks are empty since there's nothing
-// for the embedder to embed.
-func (i *Inserter) Insert(msg *pb.Message) error {
+// embed for the message id. Every message receives a role-aware,
+// block-aware scoring serialization, including tool, image, and
+// empty-content messages.
+func (i *Inserter) Insert(msg *threadv1.Message) error {
 	chunks := chunksFor(msg, i.chunkConfig())
 	if err := i.db.InsertMessage(msg, chunks); err != nil {
 		return err
@@ -57,14 +54,33 @@ func (i *Inserter) Insert(msg *pb.Message) error {
 	return nil
 }
 
-// chunksFor splits a message's text into storage-shaped chunk rows.
-// Returns nil when the message has no text content (system messages,
-// empty-content turns) — InsertMessage tolerates a nil chunks slice.
-func chunksFor(msg *pb.Message, cfg chunk.Config) []storage.Chunk {
-	text := rrc.TextFromBlocks(msg.Content)
-	if text == "" {
-		return nil
+// InsertPair persists a tool_call and its tool_result atomically (one
+// transaction) and enqueues an embed for whichever produced chunks. The
+// runner uses this so a tool_call never reaches the corpus without its
+// result — a lone call bricks RRC's protocol closure. Chunk derivation
+// and the embed enqueue stay centralized here, exactly like Insert.
+func (i *Inserter) InsertPair(call, result *threadv1.Message) error {
+	cfg := i.chunkConfig()
+	callChunks := chunksFor(call, cfg)
+	resultChunks := chunksFor(result, cfg)
+	if err := i.db.InsertToolCallPair(call, callChunks, result, resultChunks); err != nil {
+		return err
 	}
+	if i.embedEnq != nil {
+		if len(callChunks) > 0 {
+			i.embedEnq(call.Id)
+		}
+		if len(resultChunks) > 0 {
+			i.embedEnq(result.Id)
+		}
+	}
+	return nil
+}
+
+// chunksFor splits the message's scoring serialization into
+// storage-shaped chunk rows. Raw message content is stored unchanged.
+func chunksFor(msg *threadv1.Message, cfg chunk.Config) []storage.Chunk {
+	text := rrc.SerializeMessageForScoring(msg)
 	rcs := chunk.Split(text, cfg)
 	if len(rcs) == 0 {
 		return nil

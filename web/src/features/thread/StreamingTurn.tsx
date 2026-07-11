@@ -1,15 +1,34 @@
 import type { StreamState } from '@/hooks/useSendAndStream'
 import type { LiveSubagent } from '@/hooks/useSubagentProgress'
-import type { LiveToolCall } from '@/state/toolExecutions'
+import type { LiveToolCall, PendingToolCall } from '@/state/toolExecutions'
 import { ToolCall } from '@/features/thread/ToolCall'
+import { ToolApprovalSlot } from '@/features/thread/ToolApprovalSlot'
 
 interface StreamingTurnProps {
   stream: StreamState
   subagents?: LiveSubagent[]
   liveTools?: LiveToolCall[]
+  // Tool approvals (e.g. Bash) fire mid-stream, before the call is persisted
+  // into the corpus — so the approve/deny surface must live here, not only on
+  // the completed <Turn>. Without it the call hangs at "pending" (a spinner)
+  // and the only exit is Stop.
+  pendingApprovals?: PendingToolCall[]
+  onApproveTool?: (callId: string) => void
+  onDenyTool?: (callId: string, reason?: string) => void
+  approvalsBusy?: boolean
 }
 
-export function StreamingTurn({ stream, subagents = [], liveTools = [] }: StreamingTurnProps) {
+export function StreamingTurn({
+  stream,
+  subagents = [],
+  liveTools = [],
+  pendingApprovals = [],
+  onApproveTool,
+  onDenyTool,
+  approvalsBusy,
+}: StreamingTurnProps) {
+  const pendingApprovalByCallId = new Map<string, PendingToolCall>()
+  for (const p of pendingApprovals) pendingApprovalByCallId.set(p.callId, p)
   // ToolExecution subscription is the only source of tool calls during
   // streaming — they don't appear on the StreamEvent (ADK emits
   // FunctionCall as a discrete event, not a streamable delta, so a
@@ -69,6 +88,16 @@ export function StreamingTurn({ stream, subagents = [], liveTools = [] }: Stream
                 : t.isError || t.status === 'error'
                   ? 'error'
                   : 'running'
+            const pendingApproval = pendingApprovalByCallId.get(t.callId)
+            const extras =
+              pendingApproval && onApproveTool && onDenyTool ? (
+                <ToolApprovalSlot
+                  pending={pendingApproval}
+                  busy={!!approvalsBusy}
+                  onApprove={onApproveTool}
+                  onDeny={onDenyTool}
+                />
+              ) : undefined
             return (
               <ToolCall
                 key={`tool-${t.callId}`}
@@ -78,6 +107,8 @@ export function StreamingTurn({ stream, subagents = [], liveTools = [] }: Stream
                   result: t.result ?? '',
                   status,
                 }}
+                extras={extras}
+                forceOpen={!!pendingApproval}
               />
             )
           })}

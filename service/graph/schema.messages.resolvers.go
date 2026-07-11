@@ -7,28 +7,30 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc"
-	"github.com/elijahmontenegro/grudge/service/internal/adoc"
+	"github.com/elijahmontenegro/grudge/adoc"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
+	"github.com/elijahmontenegro/grudge/service/agent"
 	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Role is the resolver for the role field.
-func (r *messageResolver) Role(ctx context.Context, obj *v1.Message) (string, error) {
+func (r *messageResolver) Role(ctx context.Context, obj *threadv1.Message) (string, error) {
 	return protoRoleToDisplay(obj.Role), nil
 }
 
 // Content is the resolver for the content field.
-func (r *messageResolver) Content(ctx context.Context, obj *v1.Message) (string, error) {
+func (r *messageResolver) Content(ctx context.Context, obj *threadv1.Message) (string, error) {
 	return protoContentToDisplay(obj.Content), nil
 }
 
 // Thinking is the resolver for the thinking field.
-func (r *messageResolver) Thinking(ctx context.Context, obj *v1.Message) (*string, error) {
+func (r *messageResolver) Thinking(ctx context.Context, obj *threadv1.Message) (*string, error) {
 	thinking := protoThinkingContent(obj.Content)
 	if thinking == "" {
 		return nil, nil
@@ -37,7 +39,7 @@ func (r *messageResolver) Thinking(ctx context.Context, obj *v1.Message) (*strin
 }
 
 // ToolCalls is the resolver for the toolCalls field.
-func (r *messageResolver) ToolCalls(ctx context.Context, obj *v1.Message) ([]*ToolCallBlock, error) {
+func (r *messageResolver) ToolCalls(ctx context.Context, obj *threadv1.Message) ([]*ToolCallBlock, error) {
 	calls := protoToolCalls(obj.Content)
 	result := make([]*ToolCallBlock, len(calls))
 	for i, tc := range calls {
@@ -47,7 +49,7 @@ func (r *messageResolver) ToolCalls(ctx context.Context, obj *v1.Message) ([]*To
 }
 
 // ToolResults is the resolver for the toolResults field.
-func (r *messageResolver) ToolResults(ctx context.Context, obj *v1.Message) ([]*ToolResultBlock, error) {
+func (r *messageResolver) ToolResults(ctx context.Context, obj *threadv1.Message) ([]*ToolResultBlock, error) {
 	results := protoToolResults(obj.Content)
 	out := make([]*ToolResultBlock, len(results))
 	for i, tr := range results {
@@ -60,7 +62,7 @@ func (r *messageResolver) ToolResults(ctx context.Context, obj *v1.Message) ([]*
 // message's content blocks and surfaces any AttachmentContent as
 // metadata-only blocks (the actual file bytes stay in the workspace;
 // GraphQL returns references, clients fetch via the HTTP endpoint).
-func (r *messageResolver) Attachments(ctx context.Context, obj *v1.Message) ([]*AttachmentBlock, error) {
+func (r *messageResolver) Attachments(ctx context.Context, obj *threadv1.Message) ([]*AttachmentBlock, error) {
 	var out []*AttachmentBlock
 	for _, b := range obj.Content {
 		if a := b.GetAttachment(); a != nil {
@@ -77,7 +79,7 @@ func (r *messageResolver) Attachments(ctx context.Context, obj *v1.Message) ([]*
 }
 
 // CreatedAt is the resolver for the createdAt field.
-func (r *messageResolver) CreatedAt(ctx context.Context, obj *v1.Message) (*time.Time, error) {
+func (r *messageResolver) CreatedAt(ctx context.Context, obj *threadv1.Message) (*time.Time, error) {
 	if obj.CreatedAt != nil {
 		t := obj.CreatedAt.AsTime()
 		return &t, nil
@@ -86,19 +88,28 @@ func (r *messageResolver) CreatedAt(ctx context.Context, obj *v1.Message) (*time
 }
 
 // CitedByCount is the resolver for the citedByCount field.
-func (r *messageResolver) CitedByCount(ctx context.Context, obj *v1.Message) (int, error) {
+func (r *messageResolver) CitedByCount(ctx context.Context, obj *threadv1.Message) (int, error) {
 	return r.selections.CitationCount(obj.Id), nil
 }
 
 // EditMessage is the resolver for the editMessage field.
-func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*v1.Thread, error) {
+func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*threadv1.Thread, error) {
 	parentThread, err := r.db.GetThread(threadID)
 	if err != nil {
 		return nil, err
 	}
 
-	branchPos := int64(messagePosition)
-	newThread := &v1.Thread{
+	// Snap the branch point to a whole-turn boundary. A branch prefix is
+	// "parent messages with position < branchPos"; a raw position landing
+	// inside a tool turn would include a tool_call while excluding its
+	// tool_result, orphaning the call so the branch bricks on its first
+	// assembly. Snapping keeps whole turns intact by construction. For the
+	// common case (editing a turn-starting user message) this is a no-op.
+	branchPos, err := r.db.TurnStartPosition(threadID, int64(messagePosition))
+	if err != nil {
+		return nil, err
+	}
+	newThread := &threadv1.Thread{
 		Id:                  fmt.Sprintf("thread-%d", time.Now().UnixNano()),
 		Name:                parentThread.Name + " (branch)",
 		WorkingDirs:         parentThread.WorkingDirs,
@@ -111,18 +122,21 @@ func (r *mutationResolver) EditMessage(ctx context.Context, threadID string, mes
 		return nil, err
 	}
 
-	// No Engine.Fork needed — the global engine has the parent's edges and scores.
-	// ThreadCorpus for the branch includes the parent's messages up to the branch point
-	// (referenced, not copied). OnMessage will score the new message against the full
-	// inherited corpus. Edges for the parent's messages are already in the DAG.
+	// No Engine.Fork is needed: the global engine has the parent's edges and
+	// query scores. The branch corpus references the parent's messages through
+	// the branch point, and later Selection Queries can retrieve from that
+	// inherited corpus.
 
-	// Insert the edited message at the branch point
-	msg := &v1.Message{
+	// Insert the edited message at the branch point. It is its own turn:
+	// without turn identity the branch seed is invisible to TurnMessages
+	// and to the branch's own Local Context window on its first send.
+	msg := &threadv1.Message{
 		Id:       fmt.Sprintf("msg-%s-0", newThread.Id),
-		Role:     v1.Role_ROLE_USER,
-		Content:  rrc.BlocksFromText(newContent),
-		Position: int64(messagePosition),
+		Role:     threadv1.Role_ROLE_USER,
+		Content:  pbtext.BlocksFromText(newContent),
+		Position: branchPos,
 		ThreadId: newThread.Id,
+		TurnId:   fmt.Sprintf("turn-%s-%d", newThread.Id, time.Now().UnixNano()),
 	}
 	if err := r.storeMessage(msg, newContent); err != nil {
 		return nil, err
@@ -137,7 +151,7 @@ func (r *mutationResolver) CompileAdoc(ctx context.Context, path string) (string
 }
 
 // SendMessage is the resolver for the sendMessage field.
-func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope, attachments []*AttachmentInput) (*v1.Message, error) {
+func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope, attachments []*AttachmentInput) (*threadv1.Message, error) {
 	// Auto-name thread from first user message
 	corpus, err := r.db.ThreadCorpus(threadID)
 	if err != nil {
@@ -158,9 +172,9 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 	// relevant. Thread-only is the opt-out, not the default — the old
 	// default made the agent look amnesiac ("I don't retain info across
 	// chats") because it literally had no cross-thread context to pull.
-	pbScope := v1.SelectionScope_SELECTION_SCOPE_ALL_THREADS
+	pbScope := threadv1.SelectionScope_SELECTION_SCOPE_ALL_THREADS
 	if scope != nil && *scope == SelectionScopeThread {
-		pbScope = v1.SelectionScope_SELECTION_SCOPE_THREAD
+		pbScope = threadv1.SelectionScope_SELECTION_SCOPE_THREAD
 	}
 
 	// Defer a publish of Status=Idle so the UI doesn't get stuck showing
@@ -207,13 +221,18 @@ func (r *mutationResolver) SendMessage(ctx context.Context, threadID string, con
 
 	resp, err := runner.SendMessage(ctx, content, pbScope, attachBlocks...)
 	if err != nil {
+		// A user stop (StopAgent) is a clean cancellation, not a request
+		// failure — don't surface it as a GraphQL error.
+		if errors.Is(err, agent.ErrStopped) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("send message: %w", err)
 	}
 	return resp, nil
 }
 
 // Messages is the resolver for the messages field.
-func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*v1.Message, error) {
+func (r *queryResolver) Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*threadv1.Message, error) {
 	lim, off := 0, 0
 	if limit != nil {
 		lim = *limit

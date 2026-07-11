@@ -1,25 +1,27 @@
 package rrc
 
-import pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+import (
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+)
 
 // dag is the prerequisite DAG. Dual adjacency list — two indexes over the same
 // edge set. Backward: message → its prerequisites. Forward: message → its dependents.
 // Global across all threads.
 type dag struct {
-	backward map[string][]*pb.Edge // message ID -> its prerequisites
-	forward  map[string][]*pb.Edge // message ID -> its dependents
+	backward map[string][]*rrcv1.Edge // message ID -> its prerequisites
+	forward  map[string][]*rrcv1.Edge // message ID -> its dependents
 }
 
 func newDAG() *dag {
 	return &dag{
-		backward: make(map[string][]*pb.Edge),
-		forward:  make(map[string][]*pb.Edge),
+		backward: make(map[string][]*rrcv1.Edge),
+		forward:  make(map[string][]*rrcv1.Edge),
 	}
 }
 
 // AddEdge inserts an edge into both adjacency lists. The edge goes from
 // (earlier message) to (later message): "to depends on from."
-func (d *dag) AddEdge(edge *pb.Edge) {
+func (d *dag) AddEdge(edge *rrcv1.Edge) {
 	to := edge.ToMessageId
 	from := edge.FromMessageId
 	d.backward[to] = append(d.backward[to], edge)
@@ -27,12 +29,12 @@ func (d *dag) AddEdge(edge *pb.Edge) {
 }
 
 // Prerequisites returns all edges pointing into messageID (its prerequisites).
-func (d *dag) Prerequisites(messageID string) []*pb.Edge {
+func (d *dag) Prerequisites(messageID string) []*rrcv1.Edge {
 	return d.backward[messageID]
 }
 
 // Dependents returns all edges pointing out of messageID (messages that depend on it).
-func (d *dag) Dependents(messageID string) []*pb.Edge {
+func (d *dag) Dependents(messageID string) []*rrcv1.Edge {
 	return d.forward[messageID]
 }
 
@@ -44,8 +46,8 @@ func (d *dag) HasMessage(messageID string) bool {
 }
 
 // AllEdges returns every edge in the DAG (deduplicated via backward index).
-func (d *dag) AllEdges() []*pb.Edge {
-	var edges []*pb.Edge
+func (d *dag) AllEdges() []*rrcv1.Edge {
+	var edges []*rrcv1.Edge
 	for _, es := range d.backward {
 		edges = append(edges, es...)
 	}
@@ -53,8 +55,8 @@ func (d *dag) AllEdges() []*pb.Edge {
 }
 
 // ThreadEdges returns edges where both endpoints belong to the given thread.
-func (d *dag) ThreadEdges(threadID string) []*pb.Edge {
-	var edges []*pb.Edge
+func (d *dag) ThreadEdges(threadID string) []*rrcv1.Edge {
+	var edges []*rrcv1.Edge
 	for _, es := range d.backward {
 		for _, e := range es {
 			if e.FromThreadId == threadID && e.ToThreadId == threadID {

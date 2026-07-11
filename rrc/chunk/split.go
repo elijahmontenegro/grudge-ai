@@ -28,7 +28,7 @@ func Split(text string, cfg Config) []Chunk {
 			Text:      text,
 			ByteStart: 0,
 			ByteEnd:   len(text),
-			TokenEst:  estimateTokens(text),
+			TokenEst:  cfg.Estimate(text),
 		}}
 	}
 
@@ -51,7 +51,7 @@ func Split(text string, cfg Config) []Chunk {
 				Text:      piece,
 				ByteStart: i,
 				ByteEnd:   end,
-				TokenEst:  estimateTokens(piece),
+				TokenEst:  cfg.Estimate(piece),
 			})
 		}
 		if end >= len(text) {

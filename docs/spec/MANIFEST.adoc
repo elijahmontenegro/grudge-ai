@@ -88,60 +88,60 @@ The development environment uses {dev-lm-runtime} for local language model servi
 === Repository Structure
 
 ----
-grudge/
-├── proto/                     # Truth types + generated output
-│   ├── grudge/v1/            #   Canonical .proto sources
-│   │   ├── thread.proto      #     Message, Role, ContentBlock, Thread, SelectionScope
-│   │   ├── rrc.proto         #     Edge, QUD, QUDGraph, SelectionResult
-│   │   ├── (removed — Scorer is Go-only)
-│   │   └── llm.proto         #     LLMMessage, CompletionRequest/Response, StreamChunk
-│   └── gen/go/grudge/v1/     #   Generated Go types (checked in)
-├── core/                      # Provider-agnostic interfaces + adapters
-│   ├── completer.go          #   Completer interface
-│   ├── embedder.go           #   Embedder interface
-│   ├── scorer.go               #   Scorer interface
-│   ├── provider.go           #   Provider interfaces + registry
-│   ├── codec.go              #   Codec interface (proto ↔ provider wire format)
-│   ├── errors.go             #   Sentinel errors
-│   ├── adapter/              #   Provider adapters (one package per provider)
-│   │   ├── ollama/, anthropic/, openai/, googleai/
-│   │   ├── vllm/, tei/, zerank/
-│   └── httpc/                 #   Retry policy + shared HTTP client
-├── rrc/                       # RRC engine (depends on proto/gen/go only, not core)
-│   ├── engine.go             #   Public API: NewEngine, OnMessage, Assemble, Fork, Merge
-│   ├── interfaces.go         #   Consumer-defined interfaces: Reranker, ChunkOracle
-│   ├── selection.go          #   Selection algorithm + DAG + MMR
-│   ├── score_cache.go        #   Score cache + Scorer composition
-│   ├── predicate.go          #   Reachability predicate
-│   ├── config.go, errors.go
-│   ├── chunk/                 #   Chunking + token estimator
-│   └── tiktoken/              #   Tokenizer (opt-in subpackage)
-├── service/                   # Application binary
-│   ├── cmd/{grudge,tickstat}/ #   Shipped binaries
-│   ├── agent/                 #   ADK runner, RRC-as-LLM adapter, tools, autonomous
-│   ├── storage/               #   SQLite: threads, messages, edges, scores, paths.go
-│   ├── kernel/                #   Bootstrap + runtime state (split across kernel/plans/selections/approvals/embed.go)
+grudge/                        # Go workspace (go.work): six modules
+├── proto/                     # MODULE: truth types (deps: protobuf only)
+│   ├── grudge/thread/v1/     #   Leaf wire pkg: Message, Role, ContentBlock (+leaves), Thread, SelectionScope
+│   ├── grudge/llm/v1/        #   Completion wire pkg: LLMMessage, CompletionRequest/Response, StreamChunk, ToolDeclaration
+│   ├── grudge/rrc/v1/        #   Engine wire pkg: Edge, EdgeSource, SelectionResult, Selected/ExcludedMessage
+│   ├── gen/go/grudge/…       #   Generated Go types (checked in; threadv1/llmv1/rrcv1)
+│   └── pbtext/               #   Generic pb.ContentBlock <-> plain-text helpers
+├── rrc/                       # MODULE: RRC engine (deps: proto, protobuf; tiktoken via opt-in)
+│   ├── engine.go             #   Engine, Options (oracle/edge-filter/logger), Select, ApplyMMR, Fork/Merge, AddEdges
+│   ├── prerequisite_selection.go  # KNN + rerank + provenance-recall edge formation
+│   ├── selection.go          #   Best-first calibrated DAG walk
+│   ├── assembly.go           #   Protocol closure + budget-shed wire assembly
+│   ├── local_context.go      #   Active-discourse Local Context + serialization
+│   ├── provenance.go         #   Provenance recording + mass-ranked reach
+│   ├── acceptance.go         #   E[value] >= mu*tokens acceptance test
+│   ├── predicate.go          #   Predicate algebra + canonical EvalPredicate
+│   ├── protocol.go, dag.go, score_cache.go, scorer.go, config.go, errors.go
+│   ├── calibrate/            #   Calibrator math + store; seed/ (embedded pairs), seedfit/, regenjudge/
+│   ├── chunk/                 #   Chunking; TokenEstimator lives on chunk.Config
+│   └── tiktoken/              #   Tokenizer (opt-in subpackage; carries tiktoken-go)
+├── core/                      # MODULE: provider adapters (deps: proto, genai, oauth2)
+│   ├── completer.go, embedder.go, scorer.go, provider.go, registry.go, errors.go
+│   ├── adapter/              #   ollama, anthropic, openai, googleai, tei, zerank, vertex, gcpranking
+│   │   └── internal/         #   gcpauth (ADC for raw-HTTP GCP), util
+│   ├── genaicodec/           #   genai SDK <-> proto content mapping (vertex + adkbridge)
+│   └── httpc/                 #   Public adapter transport kit (client, StatusError); retry/ subpackage
+├── adoc/                      # MODULE: AsciiDoc include/attribute compiler (stdlib-only)
+├── sandbox/                   # MODULE: docker-exec sandbox runner (stdlib-only)
+├── adkbridge/                 # ADK-speaks-RRC bridge (CorpusStore consumer interface)
+├── service/                   # Application (root module)
+│   ├── cmd/{grudge,tickstat,promptdump}/  # Binaries; grudge embeds web dist
+│   ├── agent/                 #   ADK runner, tools, autonomous
+│   ├── storage/               #   SQLite (pure leaf: threads, messages, edges, chunks, scores, selections)
+│   ├── datadir/               #   Single owner of the data-dir layout + thread-ID validation
+│   ├── substrate/             #   Build/Holder: providers + engine + oracle wiring, self-calibration
+│   ├── oracle/                #   Storage-backed rrc.ChunkOracle
+│   ├── search/                #   User-facing semantic search + embed queue
+│   ├── attachments/           #   Upload/download HTTP + MIME sniff + text extraction
+│   ├── mcp/                   #   MCP server provisioning (owns ServerConfig)
+│   ├── hooks/                 #   Lifecycle hooks (owns HookConfig)
 │   ├── runtime/               #   Per-thread runner factory + registry
-│   ├── prompt/                #   Template assembly (templates/ embedded via //go:embed)
-│   ├── graph/                 #   GraphQL schema + resolvers + attachments.go
-│   ├── search/, sandbox/, config/, hooks/, secrets/, skills/, substrate/, pubsub/, tray/
-│   └── internal/adoc/         #   AsciiDoc include-resolver (internal-only)
+│   ├── graph/                 #   GraphQL schema + resolvers (gqlgen)
+│   ├── prompt/, config/, secrets/, skills/, selections/, messages/, plans/, approvals/, tray/
+├── internal/                  # Repo tooling (root module)
+│   ├── verifydeps/           #   Import-boundary invariants as executable checks
+│   └── tools/                #   gqlgen dependency pin
 ├── web/                       # React 19 + Apollo Client UI
-│   ├── package.json, vite.config.ts, codegen.ts
-│   ├── src/{domain,features,primitives,state,graphql,hooks,lib,data,test}/
-│   └── dist/                  #   Build output (embedded into service via //go:embed)
-├── containers/                # Container build inputs
-│   ├── sandbox/Dockerfile     #   Agent tool-execution sandbox
-│   ├── vllm/Dockerfile, README.md
-│   └── searxng/settings.yml
-├── tools/                     # Dev-only entry points (calibrate, smoke)
-├── internal/verifydeps/       # Module-private import-boundary linter
-├── docs/                      # Written-word artifacts
-│   ├── spec/                  #   CCA specifications (this file lives here)
-│   └── eval-reports/          #   Substrate eval methodology + results
-├── eval/                      # Python eval harness (curated)
-├── go.mod                     # Single Go module rooted at the repo
-└── buf.yaml                   # Protobuf build config (buf v1.67.0)
+│   ├── package.json, vite.config.ts (builds into service/cmd/grudge/dist), codegen.ts
+│   └── src/…
+├── containers/                # Container build inputs (sandbox, vllm, searxng)
+├── docs/                      # Written-word artifacts (spec/, eval-reports/, plan-iterations/)
+├── eval/                      # Python eval harness (reads rrc/calibrate/seed/pairs.json)
+├── go.work                    # Workspace: ., proto, rrc, core, adoc, sandbox
+└── buf.yaml                   # Protobuf build config
 ----
 
 === Scope

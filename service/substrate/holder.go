@@ -9,6 +9,7 @@ import (
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/service/config"
 	"github.com/elijahmontenegro/grudge/service/search"
 	"github.com/elijahmontenegro/grudge/service/storage"
@@ -25,9 +26,10 @@ import (
 // runners.StopAll so existing runners (which captured the old engine
 // pointer at construction) get rebuilt on the next request.
 type Holder struct {
-	cfg      *config.Config
-	db       *storage.DB
-	onReload func()
+	cfg       *config.Config
+	db        *storage.DB
+	estimator chunk.TokenEstimator
+	onReload  func()
 
 	current atomic.Pointer[Substrate]
 	embeds  atomic.Pointer[search.EmbedQueue]
@@ -38,10 +40,12 @@ type Holder struct {
 // NewHolder constructs an empty Holder. Bootstrap must be called
 // before any read of Engine / EmbedQueue / Main / Scorer / Searcher.
 //
-// onReload is invoked after each successful ReloadProviders /
+// estimator is the token estimator every substrate this holder builds
+// runs on (chunking, budget sizing) — a construction dependency, not a
+// setting. onReload is invoked after each successful ReloadProviders /
 // UpdateEngineConfig swap; pass nil if you don't need the hook.
-func NewHolder(cfg *config.Config, db *storage.DB, onReload func()) *Holder {
-	return &Holder{cfg: cfg, db: db, onReload: onReload}
+func NewHolder(cfg *config.Config, db *storage.DB, estimator chunk.TokenEstimator, onReload func()) *Holder {
+	return &Holder{cfg: cfg, db: db, estimator: estimator, onReload: onReload}
 }
 
 // Bootstrap builds the initial Substrate from cfg + db and stores
@@ -100,8 +104,8 @@ func (h *Holder) Searcher() *search.Searcher {
 
 // EmbedQueue returns the bounded fan-out pool for post-insert
 // embedding work. Nil when no embedder is configured or after a
-// reload cleared it. Hot callers (Inserter, OnMessageStored)
-// tolerate nil — the startup backfill goroutine catches up later.
+// reload cleared it. Hot callers tolerate nil when embedding is not
+// configured; a configured runtime creates the queue before serving.
 func (h *Holder) EmbedQueue() *search.EmbedQueue { return h.embeds.Load() }
 
 // Enqueue routes a message id into the bounded embed queue. Tolerates
@@ -131,8 +135,8 @@ func (h *Holder) ReloadProviders(ctx context.Context, opts ...Option) error {
 
 // UpdateEngineConfig swaps in a fresh engine that reuses the current
 // providers but with a different EngineConfig. Path for settings-
-// only edits that don't touch provider URLs / models (threshold
-// tweak, MMR lambda, radius size).
+// only edits that don't touch provider URLs / models (loss-ratio
+// stance, MMR lambda, Local Context size).
 //
 // Same swap semantics as ReloadProviders: writes the new config into
 // cfg.Settings.Engine, rebuilds the substrate, atomic stores the
@@ -144,18 +148,7 @@ func (h *Holder) UpdateEngineConfig(ctx context.Context, ec rrc.EngineConfig, op
 	defer h.mu.Unlock()
 
 	old := h.cfg.Settings.Engine
-	h.cfg.Settings.Engine = config.EngineConfig{
-		EdgeThreshold:         ec.EdgeThreshold,
-		ScoreFloor:            ec.ScoreFloor,
-		ZScoreThreshold:       ec.ZScoreThreshold,
-		MinBatchStdDev:        ec.MinBatchStdDev,
-		RadiusSize:            ec.RadiusSize,
-		RerankTopK:            ec.RerankTopK,
-		ContextBudgetTokens:   ec.ContextBudgetTokens,
-		DiversityLambda:       ec.DiversityLambda,
-		BudgetHeadroomPct:     ec.BudgetHeadroomPct,
-		PerMsgDelimiterTokens: ec.PerMsgDelimiterTokens,
-	}
+	h.cfg.Settings.Engine = config.EngineConfigFromRRC(ec)
 	if err := h.buildAndSwap(ctx, opts...); err != nil {
 		h.cfg.Settings.Engine = old
 		return err
@@ -163,11 +156,29 @@ func (h *Holder) UpdateEngineConfig(ctx context.Context, ec rrc.EngineConfig, op
 	return nil
 }
 
+// MutateSettings applies a settings mutation, persists it, and rebuilds
+// the substrate — all under the holder's lock. This is the ONLY safe
+// way to write cfg.Settings after boot: background calibration stages
+// re-enter Build at arbitrary moments (up to their context lifetime
+// after the triggering reload) and read cfg.Settings under h.mu, so an
+// unlocked writer is a data race against them.
+func (h *Holder) MutateSettings(ctx context.Context, mutate func(*config.Settings) error) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := mutate(&h.cfg.Settings); err != nil {
+		return err
+	}
+	if err := h.cfg.Save(); err != nil {
+		return err
+	}
+	return h.buildAndSwap(ctx)
+}
+
 // buildAndSwap is the inner reload sequence. Caller holds h.mu.
 // On success: stores the new Substrate atomically, rotates the
 // embed queue, fires onReload. On error: leaves prior state intact.
 func (h *Holder) buildAndSwap(ctx context.Context, opts ...Option) error {
-	subs, err := Build(ctx, h.cfg, h.db, opts...)
+	subs, err := Build(ctx, h.cfg, h.db, append([]Option{WithTokenEstimator(h.estimator)}, opts...)...)
 	if err != nil {
 		return fmt.Errorf("rebuild substrate: %w", err)
 	}
@@ -190,5 +201,6 @@ func (h *Holder) buildAndSwap(ctx context.Context, opts ...Option) error {
 	if h.onReload != nil {
 		h.onReload()
 	}
+
 	return nil
 }

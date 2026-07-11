@@ -2,7 +2,7 @@ package runtime
 
 import (
 	"github.com/elijahmontenegro/grudge/core/httpc/retry"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 )
 
 // Pubsub fans out runtime events to UI subscribers. The factory
@@ -49,7 +49,7 @@ type PlanStore interface {
 // implementation owns whatever indexes it needs to answer
 // SelectionResult queries.
 type Selections interface {
-	Record(threadID string, result *pb.SelectionResult)
+	Record(result *rrcv1.SelectionResult)
 }
 
 // EmbedEnqueuer enqueues a message ID for post-insert chunk

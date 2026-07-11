@@ -4,33 +4,34 @@ import (
 	"encoding/json"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // --- Helpers ---
 
-func textBlock(text string) *pb.ContentBlock {
-	return &pb.ContentBlock{Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: text}}}
+func textBlock(text string) *threadv1.ContentBlock {
+	return &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: text}}}
 }
 
-func thinkingBlock(text string) *pb.ContentBlock {
-	return &pb.ContentBlock{Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: text}}}
+func thinkingBlock(text string) *threadv1.ContentBlock {
+	return &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: text}}}
 }
 
-func toolCallBlock(id, name, args string) *pb.ContentBlock {
-	return &pb.ContentBlock{Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallContent{
+func toolCallBlock(id, name, args string) *threadv1.ContentBlock {
+	return &threadv1.ContentBlock{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{
 		Id: id, Name: name, Arguments: args,
 	}}}
 }
 
-func toolResultBlock(callID, content string) *pb.ContentBlock {
-	return &pb.ContentBlock{Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultContent{
+func toolResultBlock(callID, content string) *threadv1.ContentBlock {
+	return &threadv1.ContentBlock{Block: &threadv1.ContentBlock_ToolResult{ToolResult: &threadv1.ToolResultContent{
 		ToolCallId: callID, Content: content,
 	}}}
 }
 
-func msg(role pb.Role, blocks ...*pb.ContentBlock) *pb.LLMMessage {
-	return &pb.LLMMessage{Role: role, Content: blocks}
+func msg(role threadv1.Role, blocks ...*threadv1.ContentBlock) *llmv1.LLMMessage {
+	return &llmv1.LLMMessage{Role: role, Content: blocks}
 }
 
 // --- Tests ---
@@ -40,9 +41,9 @@ func TestToLlamaMsgs_PairedToolCallAndResult(t *testing.T) {
 	// continues. Expected wire shape: assistant message carrying the
 	// tool_calls array, followed by a role=tool message keyed to the
 	// call id.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Bash", `{"cmd":"ls"}`)),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c1", "a.txt\nb.txt")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Bash", `{"cmd":"ls"}`)),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c1", "a.txt\nb.txt")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 2 {
@@ -62,8 +63,8 @@ func TestToLlamaMsgs_PairedToolCallAndResult(t *testing.T) {
 func TestToLlamaMsgs_OrphanToolCallDropped(t *testing.T) {
 	// tool_call without a matching tool_result atom — the provider
 	// would reject this as protocol-malformed. Drop it.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Bash", `{}`)),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Bash", `{}`)),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 0 {
@@ -72,8 +73,8 @@ func TestToLlamaMsgs_OrphanToolCallDropped(t *testing.T) {
 }
 
 func TestToLlamaMsgs_OrphanToolResultDropped(t *testing.T) {
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c1", "orphan")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c1", "orphan")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 0 {
@@ -83,13 +84,13 @@ func TestToLlamaMsgs_OrphanToolResultDropped(t *testing.T) {
 
 func TestToLlamaMsgs_ConsecutiveToolCallsMerged(t *testing.T) {
 	// ADK splits parallel tool calls into separate events; our
-	// storage captures each as its own pb.LLMMessage. The wire needs
+	// storage captures each as its own llmv1.LLMMessage. The wire needs
 	// them grouped into one assistant{tool_calls:[...]} entry.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Bash", `{}`)),
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c2", "Grep", `{}`)),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c1", "out1")),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c2", "out2")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Bash", `{}`)),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c2", "Grep", `{}`)),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c1", "out1")),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c2", "out2")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 3 {
@@ -111,10 +112,10 @@ func TestToLlamaMsgs_ThinkingOnlyMergedIntoNextAction(t *testing.T) {
 	// protocol (assistant must have content or tool_calls). The
 	// canonicalizer buffers it and merges into the next actionable
 	// assistant message.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT, thinkingBlock("I should search for the file")),
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Grep", `{}`)),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c1", "found")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT, thinkingBlock("I should search for the file")),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Grep", `{}`)),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c1", "found")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 2 {
@@ -132,9 +133,9 @@ func TestToLlamaMsgs_TrailingThinkingDropped(t *testing.T) {
 	// Thinking atom with no subsequent action gets dropped — emitting
 	// a trailing thinking-only assistant would be the exact protocol
 	// violation the canonicalizer exists to prevent.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_USER, textBlock("hi")),
-		msg(pb.Role_ROLE_ASSISTANT, thinkingBlock("about to think...")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_USER, textBlock("hi")),
+		msg(threadv1.Role_ROLE_ASSISTANT, thinkingBlock("about to think...")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 1 {
@@ -146,10 +147,10 @@ func TestToLlamaMsgs_TrailingThinkingDropped(t *testing.T) {
 }
 
 func TestToLlamaMsgs_TextWithThinkingPreservesBoth(t *testing.T) {
-	// When thinking and text coexist in a single pb.LLMMessage, both
+	// When thinking and text coexist in a single llmv1.LLMMessage, both
 	// land on the same emitted chatMessage.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT, thinkingBlock("reasoning"), textBlock("response")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT, thinkingBlock("reasoning"), textBlock("response")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 1 {
@@ -161,16 +162,16 @@ func TestToLlamaMsgs_TextWithThinkingPreservesBoth(t *testing.T) {
 }
 
 func TestToLlamaMsgs_ParallelToolCallsInSameMessage(t *testing.T) {
-	// A single pb.LLMMessage carrying multiple tool_call blocks
+	// A single llmv1.LLMMessage carrying multiple tool_call blocks
 	// (parallel invocation in one ADK event) becomes one emitted
 	// assistant with both calls in the tool_calls array.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT,
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT,
 			toolCallBlock("c1", "A", `{}`),
 			toolCallBlock("c2", "B", `{}`),
 		),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c1", "a")),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c2", "b")),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c1", "a")),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c2", "b")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 3 {
@@ -182,11 +183,11 @@ func TestToLlamaMsgs_ParallelToolCallsInSameMessage(t *testing.T) {
 }
 
 func TestToLlamaMsgs_EmptyTextAndThinkingAtomDropped(t *testing.T) {
-	// A pb.LLMMessage with only a text block whose Text is "" produces
+	// A llmv1.LLMMessage with only a text block whose Text is "" produces
 	// an atom with text="" and thinking="". Dropped silently.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_USER, textBlock("real")),
-		msg(pb.Role_ROLE_ASSISTANT, textBlock("")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_USER, textBlock("real")),
+		msg(threadv1.Role_ROLE_ASSISTANT, textBlock("")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 1 {
@@ -198,9 +199,9 @@ func TestToLlamaMsgs_EmptyTextAndThinkingAtomDropped(t *testing.T) {
 }
 
 func TestToLlamaMsgs_SystemPassthrough(t *testing.T) {
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_SYSTEM, textBlock("You are a helpful assistant.")),
-		msg(pb.Role_ROLE_USER, textBlock("hi")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_SYSTEM, textBlock("You are a helpful assistant.")),
+		msg(threadv1.Role_ROLE_USER, textBlock("hi")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 2 {
@@ -220,12 +221,12 @@ func TestToLlamaMsgs_OrphanCallMixedWithPaired(t *testing.T) {
 	// and the stray result (for a call that was never kept) is
 	// dropped too. Regression guard for the "assistant with all-orphan
 	// tool_calls" protocol violation.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c1", "A", `{}`)),
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c2", "B", `{}`)),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c1", "out1")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c1", "A", `{}`)),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c2", "B", `{}`)),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c1", "out1")),
 		// c3 has no preceding call — orphan result
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c3", "out3")),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c3", "out3")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 2 {
@@ -240,16 +241,16 @@ func TestToLlamaMsgs_OrphanCallMixedWithPaired(t *testing.T) {
 }
 
 func TestToLlamaMsgs_TextAndToolCallInSameMessage(t *testing.T) {
-	// A pb.LLMMessage with text + tool_call produces two atoms
+	// A llmv1.LLMMessage with text + tool_call produces two atoms
 	// (text first, then toolcall). Both emit as separate wire
 	// messages: the text as a role=assistant content message, then
 	// the tool_call group as its own assistant message.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT,
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT,
 			textBlock("let me check"),
 			toolCallBlock("c1", "Grep", `{}`),
 		),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c1", "out")),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c1", "out")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 3 {
@@ -270,12 +271,12 @@ func TestToLlamaMsgs_ThinkingBetweenTwoToolCallGroups(t *testing.T) {
 	// Two tool_call groups separated by a thinking-only atom. The
 	// thinking should merge into the SECOND group's assistant message
 	// (the next actionable after the thinking), not the first.
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c1", "A", `{}`)),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c1", "a")),
-		msg(pb.Role_ROLE_ASSISTANT, thinkingBlock("let me try B")),
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c2", "B", `{}`)),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c2", "b")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c1", "A", `{}`)),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c1", "a")),
+		msg(threadv1.Role_ROLE_ASSISTANT, thinkingBlock("let me try B")),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c2", "B", `{}`)),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c2", "b")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 4 {
@@ -296,9 +297,9 @@ func TestToLlamaMsgs_ArgumentsPreserveRawJSON(t *testing.T) {
 	// through as json.RawMessage so the wire encodes them as a JSON
 	// object, not a double-encoded string.
 	argsJSON := `{"pattern":"*.go","path":"/workspace"}`
-	in := []*pb.LLMMessage{
-		msg(pb.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Glob", argsJSON)),
-		msg(pb.Role_ROLE_ASSISTANT, toolResultBlock("c1", "out")),
+	in := []*llmv1.LLMMessage{
+		msg(threadv1.Role_ROLE_ASSISTANT, toolCallBlock("c1", "Glob", argsJSON)),
+		msg(threadv1.Role_ROLE_ASSISTANT, toolResultBlock("c1", "out")),
 	}
 	out := toLlamaMsgs(in)
 	if len(out) != 2 {

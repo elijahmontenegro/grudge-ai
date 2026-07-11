@@ -20,18 +20,14 @@ models:
     model:
       - github.com/99designs/gqlgen/graphql.Time
   Thread:
-    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1.Thread
+    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1.Thread
   Message:
-    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1.Message
+    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1.Message
   Edge:
-    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1.Edge
+    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1.Edge
   SelectedMessage:
-    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1.SelectedMessage
+    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1.SelectedMessage
   ExcludedMessage:
-    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1.ExcludedMessage
+    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1.ExcludedMessage
   SelectionResult:
-    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1.SelectionResult
-  QUD:
-    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1.QUD
-  QUDGraph:
-    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1.QUDGraph
+    model: github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1.SelectionResult

@@ -147,13 +147,23 @@ type QUDGraph struct {
 [source,go]
 ----
 type EngineConfig struct {
-    EdgeThreshold float64 // Edge creation threshold (default: 0.5)
-    WeightCE      float64 // Cross-encoder weight (default: 0.7)
-    WeightQUD     float64 // QUD weight (default: 0.2)
-    WeightTemp    float64 // Temporal proximity weight (default: 0.1)
-    ScoreFloor    float64 // Traversal cutoff (default: 0.01)
+    Calibrator calibrate.Calibrator // P(prereq|sim,mass) — fitted per scorer
+    LossRatio  float64              // acceptance stance (default: 0.5)
+
+    MinBatchStdDev        float64 // flat-spread guard (default: 0.05)
+    RerankTopK            int
+    LocalContextSize      int
+    Chunk                 chunk.Config
+    ContextBudgetTokens   int
+    DiversityLambda       float64
+    BudgetHeadroomPct     float64
+    PerMsgDelimiterTokens int
 }
 ----
+
+Acceptance is calibrated expected value against `LossRatio` (plus the
+budget's marginal token price); there is no flat edge threshold or
+traversal floor.
 
 ==== SelectionEntry (internal)
 
@@ -239,6 +249,106 @@ The service uses RWMutex on the global DAG and score cache for concurrent select
 
 Performance optimization is explicitly deferred. Correctness and completeness are the targets. O(N) pairwise scoring per message arrival is the accepted cost of prerequisite detection accuracy. The system may be slow; it must not be wrong.
 
+=== Local Context (the In-Flight Window)
+
+Added 2026-07-08, amended same day (A2) after live verification; see
+docs/plan-iterations/2026-07-08-rrc-local-context-remediation.md. This section is
+normative: the earlier absence of a Local Context definition is the vacuum the
+implementation drifted into (backward anchor-reach, text-only anchoring, blob
+chunking, turn-only delivery -- all removed).
+
+Local Context is the in-flight WINDOW: the immediately preceding turn UNION the
+current turn record, each turn-complete, all block types. It serves BOTH consumers.
+The network sees the window whole -- tools included, through exact protocol closure
+-- so the model is never blind to the exchange it is continuing (measured failure of
+turn-only delivery: asked "what was the output of that command you just ran?", the
+model received none of the preceding exchange and confabulated). The RRC engine takes
+membership, exclusion, and mass-walk seeding from the window, while the QUERY is the
+CURRENT turn's *semantic* projection: user text, assistant text, and thinking --
+co-equal, uniformly treated. Thinking is the primary disambiguation signal (the model
+is the best QUD analyzer in the system); no code path may privilege one semantic
+block type over another. Images, attachments, and tool calls/results are NOT
+semantic; whatever matters about them re-enters the discourse through the model's
+thinking and response.
+
+Four distinct roles, one shared object:
+
+[cols="1,1,2"]
+|===
+| Role | Owner | Content
+
+| Scoring query (disambiguation)
+| serialized Local Context chunks (turn-discriminated)
+| the CURRENT turn's semantic messages, ONE QUERY UNIT PER MESSAGE -- a chunk never
+  spans two messages; the selection aggregator max-merges per candidate over units,
+  so the message that bears the query dominates instead of being blended with
+  neighbors. The window-tail contributes NO query text -- prior turns already spent
+  their selections.
+
+| Membership (exclusion, audit)
+| serialized Local Context message ids
+| every window id, tools and tail included -- nothing delivered is ever re-retrieved
+
+| Wire delivery (native restoration)
+| the window
+| the preceding turn and the current turn verbatim, through exact protocol closure
+
+| Graph-walk entry (mass recall)
+| the window's membership, as walk seeds
+| the delivered set seeds the provenance walk; the TAIL is the graph's entry point
+  for a fresh turn (its own messages have no incoming provenance edges until it
+  generates). Delivered never surfaces from the walk -- its yield is the window's
+  undelivered ancestry, at banked mass.
+|===
+
+The QUERY is bounded by the turn, built FORWARD: the trigger queries at its call, the
+flushed thinking queries at the next call (disambiguation compounds across calls via
+carry-forward), the response concludes the record. A lone user question is a complete,
+valid query. The anchor is the last SEMANTIC message of the current turn -- the
+discourse focus -- never a trailing tool block.
+
+*Inferences are perishable; observations keep* -- the anti-laundering invariant. A
+derived value (calibrated P, effective score, MMR rewrite) may be consumed only
+within the selection event that produced it; anything consumed later must be an
+OBSERVATION (raw sim, raw evidence weight) interpreted by the CURRENT instrument.
+Two instances are load-bearing. Provenance weights record raw evidence only: a
+turn's own record banks at 1.0; a selected prerequisite banks the product of raw
+cross-encoder scores along its via-path -- never the calibrated, mass-lifted, or
+MMR-rewritten effective score (banking the lift fed it back into the next turn's
+mass: a measured self-reinforcing echo). And DAG traversal beyond hop 1 derives
+dependency strength from the recorded observation under the current calibrator at
+mass zero -- consuming the stored formation verdict fossilized old circumstance
+(the mass that justified delivery into THAT turn) and old coefficients into the
+transitive pull; deriving at read time makes calibration genuinely retroactive (a
+curve refit re-gates all history with no rewrite). Hop-1 seed edges are this
+event's own fresh verdicts -- circumstance prices entry into the present turn
+exactly once. The window-tail banks NOTHING: an edge that would exist for every
+turn regardless of content encodes zero information.
+
+Rejected anti-patterns (each was implemented once and measurably harmful; do not
+reintroduce):
+
+- **Backward positional reach into the QUERY** (grabbing a prior turn's message to
+  "complete" it): pasted an off-topic neighbor into a recall query and suppressed the
+  true prerequisite below the acceptance floor (0.84 solo -> 0.46 blended). It was
+  also, covertly, the only delivery of the preceding exchange -- delivery belongs to
+  the window, in the network layer, not inside the query object.
+- **Turn-only delivery** (pruning the window to the current turn): blinds the model
+  at every turn seam; the deictic follow-up cannot be answered by retrieval because
+  deixis shares no content with its referent.
+- **Blob chunking** (concatenate the span, slice by size): fuses messages and defeats
+  the max-merge.
+- **Text-over-thinking anchoring**: thinking is a full semantic anchor.
+- **Recorded lineage edges into a trigger, and window-tail contributor edges**:
+  nothing generated the trigger, and adjacency holds for every turn regardless of
+  content -- temporal succession must never become scored graph weight. The tail is
+  a walk seed, never a recorded edge.
+- **Consuming stored inferences as evidence** (banking effective scores as
+  provenance weight; chaining formation-time verdicts in traversal): the lift
+  launders into the record or into the transitive pull and self-reinforces or
+  fossilizes; after its own event, only a raw observation may be consumed, and
+  always under the current calibrator.
+
 === Prerequisite Detection
 
 ==== Cross-Encoder Pairwise Dependency Classification
@@ -321,27 +431,81 @@ The engine does not know about "subagents." It operates on threads — fork is a
 
 === Selection Scoring
 
-==== Score Fusion
+==== Calibrated Acceptance and the Budget-Price Law
 
-Each prerequisite edge carries scores from the signals that produced it:
+(Replaced 2026-07-09. The prior Score Fusion section documented the retired
+pre-A4 mechanism -- NLI entailment scores, hand-set fusion weights
+(w1/w2/w3), a temporal-proximity term, a flat edge threshold. NLI was found
+insufficient and removed; temporal-as-edge-signal was rejected as
+duplicating Local Context's job; hand weights and flat thresholds are rules
+where laws belong.)
 
-- **Cross-encoder dependency score** -- Entailment probability from the NLI cross-encoder. Range 0-1. Edge creation threshold: 0.5 (configurable). Below threshold, no edge is created. Derivation: 0.5 is the Bayesian decision boundary for probability outputs -- entailment is more likely than not. Below 0.5, the combined probability of contradiction+neutral exceeds entailment. Starting point; tunable.
-- **QUD edge weight** -- Binary: 1 if a QUD edge exists (carry-forward discovered a connection), 0 if not. A QUD edge either exists or it doesn't.
-- **Temporal proximity** -- `1 / (1 + distance)` where distance is message position difference. Adjacent messages ~0.5, 9 apart ~0.1, 99 apart ~0.01.
+Acceptance is one law: DETECTION against a noise floor the selection
+event measures about itself, priced by the budget. No fitted
+coefficients, no shipped labels, no persistent acceptance state of any
+kind exists anywhere in the substrate.
 
-Score fusion formula:
+- **The semantic detector**: each selection event draws R = 16 reference
+  chunks from the searchable corpus (deterministically seeded by the
+  query fingerprint, filtered by the same scope/exclusion predicate as
+  candidates), scores them against the same query with the same
+  max-merge, and accepts a candidate when it beats the WHOLE sample. The
+  null probability is exact and distribution-free: under exchangeability
+  a background chunk outranks R references with probability 1/(R+1) — in
+  any scorer's units, which is what makes acceptance scorer-agnostic
+  with no calibration step: swap the scorer and the bar is correct at
+  the next event, because the bar is re-measured at every event. R is a
+  resource constant (sample size for floor estimation), not a truth
+  knob. A flat reference sample (zero spread) means the scoring
+  instrument is not discriminating — the event fails loudly: the
+  event-local, label-free scorer health check. Cold start (corpus
+  smaller than the minimum sample) runs ungated; the budget alone
+  arbitrates.
+- **The structural detector (mass), independent**: a candidate's mass
+  RANK within the walk's reached set (this turn's recorded ancestry,
+  bounded by the compute cap) gives the same exact rank statistics, so a
+  heavy hitter surfaces on structural evidence alone — junk similarity
+  included: the dropped-then-recalled regime the lift exists for. The
+  channels are NEVER summed: no exchange rate between similarity and
+  history exists anywhere. A candidate detected in both channels adds
+  its bits (the channels are measured independent).
+- **Value is surprisal**: bits = -log2(p), evidence against noise — the
+  one lawful common currency across channels. Stored/displayed
+  confidence is 1 - p (the formation-time audit on the edge); the raw
+  observation (CrossEncoderScore) is kept beside it, never overwritten.
+- **LossRatio** is the single hand-set scalar — V_harm/(V_gain+V_harm),
+  a value judgment — expressed as the stance s0 = -log2(1 - LossRatio)
+  bits: the minimum evidence to act on and the shed density's zero
+  point. The full gate: bits >= s0 + mu*tokens.
+- **mu** is the token budget's shadow price in bits per wire token, READ
+  OFF the assembly shed equilibrium, never set: exactly zero under slack
+  (complementary slackness), the marginal refused evidence-density when
+  the budget binds. The shed ranks by excess-evidence density (bits
+  above the stance per wire token); the thread's next selection charges
+  each candidate mu times its delivery-cost lower bound. Selection is
+  the price filter; the shed is the hard enforcer. Warm-started dual
+  feedback: no fixpoint, no knob.
+- **Diversity is not a knob**: a candidate's effective value is its
+  NOVEL FRACTION — value * (1 - max similarity to the kept set), and the
+  kept set is seeded with the QUERY itself, so a restatement of the
+  question (a question echo) discounts to ~0 and can neither lead the
+  ranking nor crowd the answer out under budget pressure.
+- **Traversal obeys the same law**: hop-1 edges carry this event's own
+  verdicts; hop>=2 edges are stored OBSERVATIONS interpreted by this
+  event's measured floor — detected or background, re-gated per event
+  with no rewrite. The perishable-inference law holds by construction:
+  every statistic is computed inside the event that consumes it and
+  discarded.
 
-----
-score = w1 * cross_encoder_score + w2 * qud_weight + w3 * temporal_proximity
-----
-
-Starting weights: `w1=0.7, w2=0.2, w3=0.1`. Cross-encoder (0.7) dominates -- the only signal from message 1, present for all edges, trained on entailment. QUD (0.2) is a binary boost -- meaningful promotion for carry-forward-discovered edges. Temporal (0.1) is a weak positional prior -- max contribution 0.05 at adjacency. Sum = 1.0 for interpretability. The ordering is principled; the magnitudes are starting points. Explicitly tunable.
-
-**Temporal decay derivation:** Hyperbolic decay. d=1→0.5, d=9→0.1, d=99→0.01. Why not exponential? e^(-0.1*50)≈0.007 -- decays too aggressively, temporal signal becomes effectively zero beyond a few messages. Why not logarithmic? 1/log(101)≈0.22 at d=100 -- decays too slowly, temporal signal stays too strong at long distances. Inverse linear is the middle ground: strong for nearby messages, weak but non-zero for distant ones. The 0.1 weight further dampens its influence.
+Resource rules vs truth rules: caps and cadences (the provenance walk's
+compute cap, the reference sample size R) are permissible resource
+rules -- but WHAT they keep must follow the law's own currency (the walk
+truncates best-first by path-product bound into the anchor set, never by
+hop order), and truncation is always instrumented, never silent.
 
 ==== Bounded Selective Assembly
 
-Zero-return is valid. If no message scores above threshold, the prompt is novel and the model receives it without augmentation.
+Zero-return is valid. If no candidate clears calibrated acceptance, the prompt is novel and the model receives it without augmentation.
 
 === Payload Assembly
 

@@ -12,10 +12,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elijahmontenegro/grudge/adkbridge"
 	"github.com/elijahmontenegro/grudge/core"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/rrc"
-	adk "github.com/elijahmontenegro/grudge/service/agent/internal/adk"
 	"github.com/elijahmontenegro/grudge/service/messages"
 	"github.com/elijahmontenegro/grudge/service/storage"
 
@@ -40,10 +43,18 @@ type Runner struct {
 	instruction     string
 	rerankerModelID string // for subagent forks to inherit
 	adkRunner       *runner.Runner
-	rrcLLM          *adk.RRCLLM // stored to set scope per-call
-	mu          sync.Mutex
-	msgSeq      atomic.Int64 // monotonic message ID counter
-	autoState   *AutonomousState
+	rrcLLM          *adkbridge.RRCLLM // stored to set scope per-call
+	mu              sync.Mutex
+	msgSeq          atomic.Int64 // monotonic message ID counter
+	// currentTurnID is the active-discourse identity stamped on every
+	// message stored during the in-flight SendMessage (the triggering
+	// event plus the model/tool events it spawns). Minted at SendMessage
+	// entry, read by indexMessage/indexPair — and, via CurrentTurn,
+	// by resolver-side writers (a tool-denial feedback row lands
+	// mid-turn and must join it) that cannot block on mu, which is held
+	// for the whole SendMessage call. Atomic for exactly that reason.
+	currentTurnID atomic.Value // string
+	autoState     *AutonomousState
 	// turnCancel holds the derived-context cancel for the in-flight
 	// turn. Atomic pointer because r.mu is held for the entire
 	// SendMessage call — CancelTurn has to read this without blocking
@@ -53,8 +64,8 @@ type Runner struct {
 	// interrupting ADK's event iterator (which is running on the
 	// derived ctx) and any in-flight HTTP call underneath.
 	turnCancel  atomic.Pointer[context.CancelFunc]
-	onStream    adk.StreamCallback
-	onSelection func(result *pb.SelectionResult)
+	onStream    adkbridge.StreamCallback
+	onSelection func(result *rrcv1.SelectionResult)
 	onRound     func(round int, elapsed time.Duration)
 	// Event handlers — service wires these to publish to GraphQL subscriptions
 	OnToolCall   func(callID, toolName, args string)
@@ -64,6 +75,12 @@ type Runner struct {
 	// runner's indexMessage go through this single inserter so chunk
 	// derivation lives in one place.
 	inserter *messages.Inserter
+	// scales grounds the token budget in provider-reported usage;
+	// countText is the completer adapter's counting projection. Both
+	// immutable after NewRunner and inherited by subagent forks (same
+	// model, same store).
+	scales    adkbridge.TokenScales
+	countText func(*llmv1.LLMMessage) string
 	// OnAutonomousError fires when a mid-run SendMessage fails during an
 	// autonomous loop. Per spec the loop pauses rather than exits — the
 	// handler is expected to pause autoState, publish Paused agent state
@@ -85,6 +102,13 @@ type Runner struct {
 	tickFirstEventSeen bool
 	tickPersistMs      int64 // accumulator: sum of InsertMessage durations inside processEvents
 	tickCorpusSize     int   // size of the corpus RRC saw on this tick
+	// The last usage-bearing model call's (prediction, reported)
+	// triple, latched as one atomic event from OnUsage — so the
+	// trace row's predicted/reported ratio always describes a single
+	// call, even when the turn's final call exited without usage.
+	tickUsagePredicted  int
+	tickUsagePrompt     int
+	tickUsageCompletion int
 	// SetTickRound (called by the autonomous loop just before
 	// SendMessage) records the round THIS tick belongs to. Reset to
 	// 0 at SendMessage entry so non-autonomous sends record round=0.
@@ -115,12 +139,12 @@ func (r *Runner) CancelTurn() {
 }
 
 // SetStreamCallback sets the callback for streaming deltas (for subscription publishing).
-func (r *Runner) SetStreamCallback(cb adk.StreamCallback) {
+func (r *Runner) SetStreamCallback(cb adkbridge.StreamCallback) {
 	r.onStream = cb
 }
 
 // SetSelectionCallback sets the callback for RRC selection results (for introspection).
-func (r *Runner) SetSelectionCallback(cb func(result *pb.SelectionResult)) {
+func (r *Runner) SetSelectionCallback(cb func(result *rrcv1.SelectionResult)) {
 	r.onSelection = cb
 }
 
@@ -136,11 +160,15 @@ func (r *Runner) SetRoundCallback(cb func(round int, elapsed time.Duration)) {
 // inserter, so chunk derivation is identical across both insert
 // pathways (no per-layer chunksFor duplicate).
 //
-// rerankerModelID is the id under which reranker chunk-pair scores
-// are persisted in the scores table. Passed through to RRCLLM so
-// its protocol-rectification resolver can score Store-resident
-// candidates against the current query.
-func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName, instruction, rerankerModelID string, inserter *messages.Inserter) (*Runner, error) {
+// rerankerModelID identifies the score model inherited by subagent
+// runners. Local-Context score persistence is wired into the shared engine.
+//
+// scales and countText ground token accounting for the completer
+// model: scales converts the budget via the learned usage-grounded
+// scale and receives per-call observations; countText is the
+// adapter's counting projection. Either may be nil (ungrounded /
+// count-everything).
+func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, threadID string, tools []tool.Tool, modelName, instruction, rerankerModelID string, inserter *messages.Inserter, scales adkbridge.TokenScales, countText func(*llmv1.LLMMessage) string) (*Runner, error) {
 	r := &Runner{
 		engine:          engine,
 		completer:       completer,
@@ -151,23 +179,35 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 		instruction:     instruction,
 		rerankerModelID: rerankerModelID,
 		inserter:        inserter,
+		scales:          scales,
+		countText:       countText,
 	}
 
 	// RRC-as-LLM: ADK calls this thinking it's an LLM. Engine owns its
 	// own lock now; rrcLLM acquires it directly via engine.Lock /
 	// Unlock — no shared mutex passed in.
-	rrcLLM := adk.NewRRCLLM(engine, completer, db, threadID, modelName, rerankerModelID)
+	rrcLLM := adkbridge.NewRRCLLM(engine, completer, db, threadID, modelName)
+	rrcLLM.Scales = scales
+	rrcLLM.CountText = countText
+	rrcLLM.OnUsage = func(predicted int, usage *llmv1.Usage) {
+		// Latch the pair for the tick trace. Same concurrency contract
+		// as tickAssemble: SendMessage holds r.mu for its duration and
+		// resets these at entry.
+		r.tickUsagePredicted = predicted
+		r.tickUsagePrompt = int(usage.PromptTokens)
+		r.tickUsageCompletion = int(usage.CompletionTokens)
+	}
 	rrcLLM.OnStream = func(delta, thinking string, done bool) {
 		if r.onStream != nil {
 			r.onStream(delta, thinking, done)
 		}
 	}
-	rrcLLM.OnSelection = func(result *pb.SelectionResult) {
+	rrcLLM.OnSelection = func(result *rrcv1.SelectionResult) {
 		if r.onSelection != nil {
 			r.onSelection(result)
 		}
 	}
-	rrcLLM.OnEdge = func(edge *pb.Edge) { db.InsertEdge(edge) }
+	rrcLLM.OnEdge = func(edge *rrcv1.Edge) { db.InsertEdge(edge) }
 	rrcLLM.OnAssemble = func(t rrc.AssembleTelemetry) {
 		// Capture into the per-SendMessage trace scratch. SendMessage
 		// holds r.mu for its entire duration and resets these fields at
@@ -186,18 +226,18 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 			r.tickAssembleSet = true
 			return
 		}
-		r.tickAssemble.OnMessage.DurationMs += t.OnMessage.DurationMs
-		r.tickAssemble.OnMessage.CandidatesScored += t.OnMessage.CandidatesScored
-		r.tickAssemble.OnMessage.Reranked += t.OnMessage.Reranked
+		r.tickAssemble.PrerequisiteSelection.DurationMs += t.PrerequisiteSelection.DurationMs
+		r.tickAssemble.PrerequisiteSelection.CandidatesScored += t.PrerequisiteSelection.CandidatesScored
+		r.tickAssemble.PrerequisiteSelection.Reranked += t.PrerequisiteSelection.Reranked
 		r.tickAssemble.SelectMs += t.SelectMs
 		r.tickAssemble.MMRMs += t.MMRMs
 		r.tickAssemble.ShedMs += t.ShedMs
 		// Final-state fields: take the last attempt's values.
-		r.tickAssemble.OnMessage.PriorsConsidered = t.OnMessage.PriorsConsidered
-		r.tickAssemble.OnMessage.EdgesFormed = t.OnMessage.EdgesFormed
+		r.tickAssemble.PrerequisiteSelection.PriorsConsidered = t.PrerequisiteSelection.PriorsConsidered
+		r.tickAssemble.PrerequisiteSelection.EdgesFormed = t.PrerequisiteSelection.EdgesFormed
 		r.tickAssemble.SelectedCount = t.SelectedCount
-		r.tickAssemble.RadiusCount = t.RadiusCount
-		r.tickAssemble.RectifiedCount = t.RectifiedCount
+		r.tickAssemble.LocalContextCount = t.LocalContextCount
+		r.tickAssemble.ClosureCount = t.ClosureCount
 		r.tickAssemble.SheddedCount = t.SheddedCount
 		r.tickAssemble.TotalTokens = t.TotalTokens
 		r.tickAssemble.EffectiveBudget = t.EffectiveBudget
@@ -217,7 +257,7 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 		Tools:           tools,
 		IncludeContents: llmagent.IncludeContentsNone,
 		BeforeModelCallbacks: []llmagent.BeforeModelCallback{
-			adk.StripADKIdentity(agentName, ""),
+			adkbridge.StripADKIdentity(agentName, ""),
 		},
 		AfterModelCallbacks: []llmagent.AfterModelCallback{
 			r.afterModelCallback,
@@ -253,16 +293,21 @@ func NewRunner(engine *rrc.Engine, completer core.Completer, db *storage.DB, thr
 // enqueue — for the entire 14h novel run, every pre-tool-call thought
 // landed in `chunks` but never got a vector in `chunk_vectors`. The
 // chunks were visible to BM25 / count queries but invisible to RRC's
-// vec0 KNN retrieval, until the next service boot's
-// BackfillEmbeddings caught them up. The fix collapses both ops into
-// one helper so the bug class is structurally impossible — adding a
-// future call-site can't reintroduce it.
+// vec0 KNN retrieval. The fix collapses both operations into one
+// helper so every stored message follows the same indexing path.
 //
 // The per-tick persist accumulator includes only the synchronous
 // SQLite write. The enqueue is fire-and-forget into the bounded
 // worker pool; its cost is steady-state background load, not a tick
 // stage.
-func (r *Runner) indexMessage(msg *pb.Message) error {
+func (r *Runner) indexMessage(msg *threadv1.Message) error {
+	// Stamp the active-discourse identity. Every message stored during a
+	// SendMessage — triggering event, thinking, tool calls, tool results,
+	// final assistant text — shares the turn's id, so BuildActiveDiscourse
+	// can recover the in-flight local discourse without fixed-N recency.
+	if msg.TurnId == "" {
+		msg.TurnId = r.CurrentTurn()
+	}
 	if r.inserter == nil {
 		// Tests construct a Runner with no inserter wired so they can
 		// exercise processEvents without a full runtime. Insert the
@@ -275,6 +320,32 @@ func (r *Runner) indexMessage(msg *pb.Message) error {
 	}
 	pStart := time.Now()
 	err := r.inserter.Insert(msg)
+	r.tickPersistMs += time.Since(pStart).Milliseconds()
+	return err
+}
+
+// indexPair persists a tool_call and its tool_result in ONE transaction.
+// This is the write-side guarantee for protocol closure: a tool_call
+// reaches the corpus only together with a result, so no crash, cancel,
+// or insert-error window can leave a lone call that bricks every later
+// assembly. Both rows share the turn id (stamped here, mirroring
+// indexMessage) so TurnPeers still groups them.
+func (r *Runner) indexPair(call, result *threadv1.Message) error {
+	if call.TurnId == "" {
+		call.TurnId = r.CurrentTurn()
+	}
+	if result.TurnId == "" {
+		result.TurnId = r.CurrentTurn()
+	}
+	pStart := time.Now()
+	var err error
+	if r.inserter == nil {
+		// Test path: no inserter wired — insert both rows chunkless and
+		// skip the embed enqueue (mirrors indexMessage's nil-inserter path).
+		err = r.db.InsertToolCallPair(call, nil, result, nil)
+	} else {
+		err = r.inserter.InsertPair(call, result)
+	}
 	r.tickPersistMs += time.Since(pStart).Milliseconds()
 	return err
 }
@@ -294,10 +365,43 @@ func (r *Runner) nextMsgID() string {
 	return fmt.Sprintf("msg-%s-%d-%d", r.threadID, time.Now().UnixNano(), r.msgSeq.Add(1))
 }
 
+// CurrentTurn returns the in-flight turn's active-discourse identity, ""
+// before the first SendMessage. Safe off-thread (mu-free): resolver-side
+// writers read it while the turn holds mu.
+func (r *Runner) CurrentTurn() string {
+	if v, ok := r.currentTurnID.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// syncMsgSeq raises msgSeq to the thread's stored position high-water
+// mark (idempotent). Seeded from MAX(position) — never COUNT(*): with
+// historical gaps or duplicated positions a count-seeded counter mints
+// colliding positions (measured: every turn's trigger landing on the
+// previous turn's final answer), and on a branch thread a count seed
+// starts below the branch point so new rows sort under the prefix.
+func (r *Runner) syncMsgSeq() {
+	if p := r.db.MaxPosition(r.threadID); p > r.msgSeq.Load() {
+		r.msgSeq.Store(p)
+	}
+}
+
+// NextPosition mints the next message position for out-of-runner writers
+// (resolver-stored corrections, tool-denial feedback). One position
+// authority: the same atomic every runner message site reads, so a
+// resolver write can never collide with the in-flight turn's messages —
+// including tool calls buffered in memory awaiting their result, which
+// no DB-derived position (MAX or COUNT) can see.
+func (r *Runner) NextPosition() int64 {
+	r.syncMsgSeq()
+	return r.msgSeq.Add(1)
+}
+
 // SendMessage processes a user message through the ADK agent loop.
 // ADK is the orchestrator — we iterate its events and surface tool calls,
 // results, thinking, and text to the frontend via callbacks.
-func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.SelectionScope, attachments ...*pb.AttachmentContent) (msg *pb.Message, retErr error) {
+func (r *Runner) SendMessage(ctx context.Context, content string, scope threadv1.SelectionScope, attachments ...*threadv1.AttachmentContent) (msg *threadv1.Message, retErr error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -310,6 +414,9 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.Selec
 	r.tickFirstEventSeen = false
 	r.tickPersistMs = 0
 	r.tickCorpusSize = 0
+	r.tickUsagePredicted = 0
+	r.tickUsagePrompt = 0
+	r.tickUsageCompletion = 0
 	// tickRound is NOT reset here — the autonomous loop sets it via
 	// SetTickRound immediately before this call. Non-autonomous sends
 	// never invoke SetTickRound, so the field is already 0 from the
@@ -336,16 +443,21 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.Selec
 		r.persistTickTrace(tickStart, retErr)
 	}()
 
-	corpus, err := r.db.ThreadCorpus(r.threadID)
-	if err != nil {
-		return nil, fmt.Errorf("load corpus: %w", err)
-	}
-	r.tickCorpusSize = len(corpus)
+	// Bounded aggregates, not a full corpus load: the runner needs the
+	// thread's message count for tick bookkeeping, and the position
+	// authority (msgSeq) raised to the stored high-water mark.
+	count := r.db.MessageCount(r.threadID)
+	r.tickCorpusSize = count
+	r.syncMsgSeq()
 
-	// Sync message counter to corpus length (idempotent on repeated calls)
-	if cur := int64(len(corpus)); cur > r.msgSeq.Load() {
-		r.msgSeq.Store(cur)
-	}
+	// Mint the active-discourse identity for this turn before the
+	// triggering event is stored, so the trigger and every model/tool
+	// event it spawns share it (indexMessage stamps it). Set it on the
+	// RRCLLM so BuildActiveDiscourse recovers exactly this turn's
+	// in-flight discourse as Local Context.
+	turnID := fmt.Sprintf("turn-%s-%d", r.threadID, time.Now().UnixNano())
+	r.currentTurnID.Store(turnID)
+	r.rrcLLM.CurrentTurnID = turnID
 
 	// Store the user Event only when it carries real content. Empty-
 	// content autonomous ticks do not enter the Store — they are a
@@ -354,23 +466,29 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.Selec
 	// at the adapter via repositioning of already-persisted messages,
 	// never by writing synthetic Events here.
 	if content != "" || len(attachments) > 0 {
-		blocks := rrc.BlocksFromText(content)
+		blocks := pbtext.BlocksFromText(content)
 		for _, a := range attachments {
-			blocks = append(blocks, &pb.ContentBlock{
-				Block: &pb.ContentBlock_Attachment{Attachment: a},
+			blocks = append(blocks, &threadv1.ContentBlock{
+				Block: &threadv1.ContentBlock_Attachment{Attachment: a},
 			})
 		}
-		userMsg := &pb.Message{
+		// Position from the same authority as every other message site
+		// (id mint advances msgSeq, then the position reads it). The old
+		// int64(count) stamp collided with the previous turn's final
+		// answer at every seam: model-side messages count themselves into
+		// msgSeq while COUNT(*) lags one behind — the corpus's total
+		// order was held by rowid luck exactly where the Local Context
+		// window spans turns.
+		userMsg := &threadv1.Message{
 			Id:       r.nextMsgID(),
-			Role:     pb.Role_ROLE_USER,
+			Role:     threadv1.Role_ROLE_USER,
 			Content:  blocks,
-			Position: int64(len(corpus)),
+			Position: r.msgSeq.Load(),
 			ThreadId: r.threadID,
 		}
 		if err := r.indexMessage(userMsg); err != nil {
 			return nil, err
 		}
-		corpus = append(corpus, userMsg)
 	}
 
 	// Set scope on RRCLLM before ADK runs — the scope toggle reaches the engine here
@@ -392,7 +510,7 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.Selec
 	events := r.adkRunner.Run(ctx, "user", r.threadID, genaiMsg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
 	})
-	return r.processEvents(events)
+	return r.processEvents(ctx, events)
 }
 
 // persistTickTrace builds a tick_traces row from the per-call scratch
@@ -402,7 +520,7 @@ func (r *Runner) SendMessage(ctx context.Context, content string, scope pb.Selec
 //
 // Stage attribution:
 //
-//	t_rrc_onmessage_ms = OnMessage's own duration (chunking + embed + KNN + rerank + edges)
+//	t_rrc_prerequisite_selection_ms = Local Context serialization, KNN, rerank, gates, and edges
 //	t_select_ms        = Engine.Select (graph walk + transitive reduction)
 //	t_assemble_ms      = the rest of Assemble (MMR + budget shed + token estimate)
 //	t_complete_ms      = wall clock from adkRunner.Run entry to first event,
@@ -417,14 +535,14 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 	// Stage decomposition. Some fields may be zero if SendMessage
 	// exited early (e.g., corpus load failed → no Assemble fired).
 	var (
-		onMessageMs int64
-		selectMs    int64
-		assembleMs  int64
-		completeMs  int64
-		streamMs    int64
+		onQueryMs  int64
+		selectMs   int64
+		assembleMs int64
+		completeMs int64
+		streamMs   int64
 	)
 	if r.tickAssembleSet {
-		onMessageMs = r.tickAssemble.OnMessage.DurationMs
+		onQueryMs = r.tickAssemble.PrerequisiteSelection.DurationMs
 		selectMs = r.tickAssemble.SelectMs
 		// "Assemble" stage in the trace folds MMR + budget shed since
 		// they're both post-Select assembly work and aren't worth
@@ -438,7 +556,7 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 			// round-trip. Subtract the Assemble stages so what's left
 			// approximates pure network/model wait.
 			runToFirst := r.tickFirstEvent.Sub(r.tickRunStart).Milliseconds()
-			assemblyInsideRun := onMessageMs + selectMs + assembleMs
+			assemblyInsideRun := onQueryMs + selectMs + assembleMs
 			completeMs = runToFirst - assemblyInsideRun
 			if completeMs < 0 {
 				// Clamp to zero — sub-millisecond stage timings can
@@ -455,19 +573,22 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 	}
 
 	trace := &storage.TickTrace{
-		ThreadID:           r.threadID,
-		Round:              r.tickRound,
-		RRCOnMessageMs:     onMessageMs,
-		SelectMs:           selectMs,
-		AssembleMs:         assembleMs,
-		CompleteMs:         completeMs,
-		StreamMs:           streamMs,
-		PersistMs:          r.tickPersistMs,
-		TotalMs:            totalMs,
-		CompleterModel:     r.modelName,
-		CorpusSize:         r.tickCorpusSize,
-		SelectedCount:      r.tickAssemble.SelectedCount,
-		AssembledTokensEst: r.tickAssemble.TotalTokens,
+		ThreadID:                   r.threadID,
+		Round:                      r.tickRound,
+		RRCPrerequisiteSelectionMs: onQueryMs,
+		SelectMs:                   selectMs,
+		AssembleMs:                 assembleMs,
+		CompleteMs:                 completeMs,
+		StreamMs:                   streamMs,
+		PersistMs:                  r.tickPersistMs,
+		TotalMs:                    totalMs,
+		CompleterModel:             r.modelName,
+		CorpusSize:                 r.tickCorpusSize,
+		SelectedCount:              r.tickAssemble.SelectedCount,
+		AssembledTokensEst:         r.tickAssemble.TotalTokens,
+		UsagePredictedTokens:       r.tickUsagePredicted,
+		UsagePromptTokens:          r.tickUsagePrompt,
+		UsageCompletionTokens:      r.tickUsageCompletion,
 	}
 	if callErr != nil {
 		trace.Errored = true
@@ -496,29 +617,46 @@ func (r *Runner) persistTickTrace(tickStart time.Time, callErr error) {
 // the dedup of ADK re-emission, the thinking-flush ordering around
 // tool calls, and the error/content precedence at turn-end are all
 // observable here.
-func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Message, error) {
+func (r *Runner) processEvents(ctx context.Context, events iter.Seq2[*session.Event, error]) (*threadv1.Message, error) {
 	var lastErr error
 	var thinkingBuf strings.Builder
+	// thinkingSig is the signature attached to the thinking text
+	// currently in thinkingBuf, if any. A provider signature binds to
+	// the EXACT text it was issued for — set alongside a
+	// signature-bearing part, then storeThinking flushes immediately
+	// (see below) so a later, unsigned continuation never accumulates
+	// into an already-signed buffer under a stale signature.
+	var thinkingSig []byte
 	var textBuf strings.Builder
-	var lastAssistantMsg *pb.Message
+	var lastAssistantMsg *threadv1.Message
 
 	// ADK occasionally emits the same FunctionCall or FunctionResponse
 	// Part across multiple events in a single Run (observed: every tool
 	// call stored twice in the corpus). Track IDs we've already persisted
 	// so repeat Parts are ignored at the storage boundary rather than
 	// polluting the corpus the RRC engine sees next round.
-	seenCallIDs := make(map[string]bool)
+	seenCallIDs := make(map[string]string)
 	seenResultIDs := make(map[string]bool)
 
-	// storeThinking flushes accumulated thinking as its own message in the turn.
+	// pendingCalls holds tool_call messages that have been emitted (and
+	// pushed to the live UI via OnToolCall) but not yet persisted. A call
+	// is written only inside the same transaction as its result, so a
+	// lone call can never reach the corpus — the write-side guarantee for
+	// protocol closure. pendingOrder preserves emission order for a
+	// deterministic turn-end flush.
+	pendingCalls := make(map[string]*threadv1.Message)
+	var pendingOrder []string
+
+	// storeThinking flushes accumulated thinking as its own message in
+	// the turn, carrying whatever signature (if any) is bound to it.
 	storeThinking := func() {
 		if thinkingBuf.Len() == 0 {
 			return
 		}
-		msg := &pb.Message{
+		msg := &threadv1.Message{
 			Id:       r.nextMsgID(),
-			Role:     pb.Role_ROLE_ASSISTANT,
-			Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: thinkingBuf.String()}}}},
+			Role:     threadv1.Role_ROLE_ASSISTANT,
+			Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: thinkingBuf.String(), Signature: thinkingSig}}}},
 			Position: r.msgSeq.Load(),
 			ThreadId: r.threadID,
 		}
@@ -526,10 +664,17 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 			log.Printf("[Runner] indexMessage(thinking) thread=%s: %v", r.threadID, err)
 		}
 		thinkingBuf.Reset()
+		thinkingSig = nil
 	}
 
 	for event, err := range events {
 		if err != nil {
+			// A user stop cancels turnCtx, which surfaces here as
+			// context.Canceled (e.g. the next model call's query-embed failing
+			// on the dead ctx). That is not a failure to latch or surface.
+			if errors.Is(err, context.Canceled) {
+				continue
+			}
 			log.Printf("[Runner] ADK event error: %v", err)
 			lastErr = err
 			continue
@@ -554,32 +699,44 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 		for _, part := range eventContent.Parts {
 			if part.FunctionCall != nil {
 				fc := part.FunctionCall
+				// An empty tool-call id is unpairable — CloseGroup would fatal
+				// on it (no key to find a result). No configured provider emits
+				// one; refuse the turn loudly rather than buffer an unpairable
+				// call (fail-fast, never a silently dropped call). Nothing
+				// buffered so far is persisted (pair writes happen at result
+				// time), so returning here leaves no orphan; paired calls stay
+				// closed.
+				if fc.ID == "" {
+					return nil, fmt.Errorf("agent: provider emitted a tool call with an empty id (tool %q); cannot guarantee protocol closure", fc.Name)
+				}
 				// Guard against ADK re-emitting the same call Part.
-				if fc.ID != "" && seenCallIDs[fc.ID] {
+				if _, seen := seenCallIDs[fc.ID]; seen {
 					continue
 				}
-				if fc.ID != "" {
-					seenCallIDs[fc.ID] = true
-				}
+				seenCallIDs[fc.ID] = fc.Name
 				// Flush thinking BEFORE the tool call so ordering is correct
 				storeThinking()
 
 				argsJSON := "{}"
 				if fc.Args != nil {
-					if s, err := adk.MarshalFunctionArgs(fc.Args); err == nil {
-						argsJSON = s
+					if b, err := json.Marshal(fc.Args); err == nil {
+						argsJSON = string(b)
 					}
 				}
-				toolCallMsg := &pb.Message{
+				toolCallMsg := &threadv1.Message{
 					Id:       r.nextMsgID(),
-					Role:     pb.Role_ROLE_ASSISTANT,
-					Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_ToolCall{ToolCall: &pb.ToolCallContent{Id: fc.ID, Name: fc.Name, Arguments: argsJSON}}}},
+					Role:     threadv1.Role_ROLE_ASSISTANT,
+					Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolCall{ToolCall: &threadv1.ToolCallContent{Id: fc.ID, Name: fc.Name, Arguments: argsJSON, Signature: part.ThoughtSignature}}}},
 					Position: r.msgSeq.Load(),
 					ThreadId: r.threadID,
 				}
-				if err := r.indexMessage(toolCallMsg); err != nil {
-					log.Printf("[Runner] indexMessage(tool_call %s) thread=%s: %v", fc.Name, r.threadID, err)
-				}
+				// Buffer the call — it is persisted only inside the same
+				// transaction as its result (indexPair), or as an IsError pair
+				// at the turn-end flush. Its position is already locked
+				// (nextMsgID advanced msgSeq at build), so parallel calls stay
+				// grouped, byte-identical to the old immediate-insert shape.
+				pendingCalls[fc.ID] = toolCallMsg
+				pendingOrder = append(pendingOrder, fc.ID)
 				if r.OnToolCall != nil {
 					r.OnToolCall(fc.ID, fc.Name, argsJSON)
 				}
@@ -587,11 +744,15 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 
 			if part.FunctionResponse != nil {
 				fr := part.FunctionResponse
-				if fr.ID != "" && seenResultIDs[fr.ID] {
+				// On a user stop the "result" that surfaces is the cancellation
+				// itself (e.g. "approval: context canceled" from a pending Bash
+				// approval). That is not a real tool result — don't write it into
+				// the corpus for the model to read.
+				if errors.Is(ctx.Err(), context.Canceled) {
 					continue
 				}
-				if fr.ID != "" {
-					seenResultIDs[fr.ID] = true
+				if fr.ID != "" && seenResultIDs[fr.ID] {
+					continue
 				}
 				resultText := ""
 				if fr.Response != nil {
@@ -601,47 +762,122 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 						resultText = string(b)
 					}
 				}
-				toolResultMsg := &pb.Message{
+				toolResultMsg := &threadv1.Message{
 					Id:       r.nextMsgID(),
-					Role:     pb.Role_ROLE_ASSISTANT,
-					Content:  []*pb.ContentBlock{{Block: &pb.ContentBlock_ToolResult{ToolResult: &pb.ToolResultContent{ToolCallId: fr.ID, Content: resultText}}}},
+					Role:     threadv1.Role_ROLE_ASSISTANT,
+					Content:  []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolResult{ToolResult: &threadv1.ToolResultContent{ToolCallId: fr.ID, Content: resultText}}}},
 					Position: r.msgSeq.Load(),
 					ThreadId: r.threadID,
 				}
-				if err := r.indexMessage(toolResultMsg); err != nil {
-					log.Printf("[Runner] indexMessage(tool_result %s) thread=%s: %v", fr.Name, r.threadID, err)
+				call := pendingCalls[fr.ID]
+				if call == nil {
+					// A result with no buffered call is unpairable; persisting it
+					// would itself brick CloseGroup ("requires exact tool call").
+					// Drop it. (Should not occur — every response follows a call;
+					// a re-emit is caught by the seenResultIDs guard above.)
+					log.Printf("[Runner] orphan tool_result %s (no matching call) thread=%s — dropping", fr.ID, r.threadID)
+					continue
 				}
+				// Co-write the call and its result in one transaction. On error,
+				// leave the call buffered so the turn-end flush closes it; the
+				// pair write is atomic, so this never leaves a lone call.
+				if err := r.indexPair(call, toolResultMsg); err != nil {
+					log.Printf("[Runner] indexPair(tool %s) thread=%s: %v", fr.Name, r.threadID, err)
+					continue
+				}
+				delete(pendingCalls, fr.ID)
+				seenResultIDs[fr.ID] = true
 				if r.OnToolResult != nil {
 					r.OnToolResult(fr.ID, fr.Name, resultText, false)
 				}
 			}
 
-			if part.Text != "" && part.FunctionCall == nil {
-				if part.Thought {
-					thinkingBuf.WriteString(part.Text)
-				} else {
-					textBuf.WriteString(part.Text)
+			// A thought part with no text can still carry a signature —
+			// e.g. the bridge's zero-text terminator that closes a
+			// signed Anthropic thinking block. Widen past the
+			// text != "" gate so that signature is never silently
+			// dropped.
+			if part.FunctionCall == nil && part.Thought && (part.Text != "" || len(part.ThoughtSignature) > 0) {
+				thinkingBuf.WriteString(part.Text)
+				if len(part.ThoughtSignature) > 0 {
+					// The signature binds to exactly the text
+					// accumulated up to this point — flush now rather
+					// than let further unsigned thinking extend the
+					// buffer under a signature that no longer matches
+					// its full contents.
+					thinkingSig = part.ThoughtSignature
+					storeThinking()
 				}
+			} else if part.Text != "" && part.FunctionCall == nil {
+				textBuf.WriteString(part.Text)
 			}
 		}
 	}
 
+	// Turn-end flush: any buffered call that never received a result
+	// is closed by co-writing an IsError placeholder result in the
+	// SAME transaction as the call. A cancelled or interrupted turn
+	// (the stream ended, or ctx was cancelled and the real
+	// FunctionResponse skipped above) therefore records a CLOSED
+	// pair, never a lone call — protocol closure holds by
+	// construction. Each pair is atomic and independent: a failing
+	// flush writes neither row for that call (no orphan) and does
+	// not abort the rest.
+	var flushErr error
+	for _, callID := range pendingOrder {
+		call := pendingCalls[callID]
+		if call == nil {
+			continue // already paired at result time
+		}
+		content := "Tool execution ended without a result."
+		if lastErr != nil {
+			content = "Tool execution failed: " + lastErr.Error()
+		}
+		resultMsg := &threadv1.Message{
+			Id:   r.nextMsgID(),
+			Role: threadv1.Role_ROLE_ASSISTANT,
+			Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolResult{
+				ToolResult: &threadv1.ToolResultContent{
+					ToolCallId: callID,
+					Content:    content,
+					IsError:    true,
+				},
+			}}},
+			Position: r.msgSeq.Load(),
+			ThreadId: r.threadID,
+		}
+		if err := r.indexPair(call, resultMsg); err != nil {
+			log.Printf("[Runner] flush indexPair(tool_call %s) thread=%s: %v", callID, r.threadID, err)
+			if flushErr == nil {
+				flushErr = err
+			}
+			continue
+		}
+		delete(pendingCalls, callID)
+		if r.OnToolResult != nil {
+			r.OnToolResult(callID, seenCallIDs[callID], content, true)
+		}
+	}
+	if flushErr != nil {
+		return nil, flushErr
+	}
+
 	// Store final thinking + text as the last message in the turn
-	var finalContent []*pb.ContentBlock
+	var finalContent []*threadv1.ContentBlock
 	if thinkingBuf.Len() > 0 {
-		finalContent = append(finalContent, &pb.ContentBlock{
-			Block: &pb.ContentBlock_Thinking{Thinking: &pb.ThinkingContent{Text: thinkingBuf.String()}},
+		finalContent = append(finalContent, &threadv1.ContentBlock{
+			Block: &threadv1.ContentBlock_Thinking{Thinking: &threadv1.ThinkingContent{Text: thinkingBuf.String(), Signature: thinkingSig}},
 		})
 	}
 	if textBuf.Len() > 0 {
-		finalContent = append(finalContent, &pb.ContentBlock{
-			Block: &pb.ContentBlock_Text{Text: &pb.TextContent{Text: textBuf.String()}},
+		finalContent = append(finalContent, &threadv1.ContentBlock{
+			Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: textBuf.String()}},
 		})
 	}
 	if len(finalContent) > 0 {
-		lastAssistantMsg = &pb.Message{
+		lastAssistantMsg = &threadv1.Message{
 			Id:       r.nextMsgID(),
-			Role:     pb.Role_ROLE_ASSISTANT,
+			Role:     threadv1.Role_ROLE_ASSISTANT,
 			Content:  finalContent,
 			Position: r.msgSeq.Load(),
 			ThreadId: r.threadID,
@@ -652,6 +888,11 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 		return lastAssistantMsg, nil
 	}
 
+	// A user stop cancels turnCtx. Report it as the clean ErrStopped sentinel
+	// (which the chat resolver swallows) rather than a surfaced "agent error".
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return nil, ErrStopped
+	}
 	if lastErr != nil {
 		return nil, fmt.Errorf("agent error: %w", lastErr)
 	}
@@ -667,6 +908,12 @@ func (r *Runner) processEvents(events iter.Seq2[*session.Event, error]) (*pb.Mes
 // autonomous loop distinguish this specifically from real errors.
 var ErrNoResponse = errors.New("no response from agent")
 
+// ErrStopped is returned when the turn's context was cancelled by a user stop
+// (StopAgent → CancelTurn). Like a cancelled autonomous tick it is not a
+// failure: no tool_result or synthetic error is persisted for the cancelled
+// calls, and the chat resolver swallows it so no GraphQL error surfaces.
+var ErrStopped = errors.New("agent turn stopped by user")
+
 // afterModelCallback extracts thinking blocks for carry-forward after every LLM call.
 func (r *Runner) afterModelCallback(
 	ctx adkagent.CallbackContext,
@@ -677,11 +924,10 @@ func (r *Runner) afterModelCallback(
 		return llmResponse, llmResponseError
 	}
 
-	// QUD carry-forward removed along with the small-fast-model extractor.
-	// Thinking blocks are still stored by the runner's message loop; edge
-	// discovery on thinking text is done by the scorer when the
-	// synthetic message is seen by OnMessage. No separate carry-forward
-	// pass is needed.
+	// Model and tool events are stored by the runner's message loop.
+	// A later outbound call sees those events through Local Context and
+	// builds a fresh serialized Local Context, so no separate carry-forward pass
+	// is needed here.
 	_ = llmResponse.Content
 	return llmResponse, nil
 }

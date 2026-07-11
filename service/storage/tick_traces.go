@@ -12,11 +12,12 @@ import (
 //
 // Stage definitions:
 //
-//   - RRCOnMessageMs: Engine.OnMessage (chunking + embed + KNN +
+//   - RRCPrerequisiteSelectionMs: Engine.SelectPrerequisites (Local Context
+//     serialization + KNN +
 //     reranker + edge writes)
 //   - SelectMs: Engine.Select (graph walk + transitive reduction)
 //   - AssembleMs: Engine.Assemble post-Select (MMR + budget shed +
-//     token estimation; excludes nested OnMessage/Select already
+//     token estimation; excludes nested SelectPrerequisites/Select already
 //     accounted for above)
 //   - CompleteMs: time-to-first-event on the upstream completer
 //     (network round-trip to the model)
@@ -31,23 +32,31 @@ import (
 // (StreamMs - CompleteMs) but low PersistMs → streaming network slow.
 // High PersistMs → SQLite contention.
 type TickTrace struct {
-	ID                  int64
-	ThreadID            string
-	Round               int
-	CreatedAt           time.Time
-	RRCOnMessageMs      int64
-	SelectMs            int64
-	AssembleMs          int64
-	CompleteMs          int64
-	StreamMs            int64
-	PersistMs           int64
-	TotalMs             int64
-	CompleterModel      string
-	CorpusSize          int
-	SelectedCount       int
-	AssembledTokensEst  int
-	Errored             bool
-	ErrorMsg            string
+	ID                         int64
+	ThreadID                   string
+	Round                      int
+	CreatedAt                  time.Time
+	RRCPrerequisiteSelectionMs int64
+	SelectMs                   int64
+	AssembleMs                 int64
+	CompleteMs                 int64
+	StreamMs                   int64
+	PersistMs                  int64
+	TotalMs                    int64
+	CompleterModel             string
+	CorpusSize                 int
+	SelectedCount              int
+	AssembledTokensEst         int
+	// The tick's last usage-bearing model call, as one atomic triple:
+	// the assembler's counter-unit prediction for that call's wire and
+	// the provider's reported prompt/completion totals. All zero when
+	// no call reported usage. UsagePromptTokens/UsagePredictedTokens
+	// is the grounding ratio the token-scale learner feeds on.
+	UsagePredictedTokens  int
+	UsagePromptTokens     int
+	UsageCompletionTokens int
+	Errored               bool
+	ErrorMsg              string
 }
 
 // InsertTickTrace appends one trace row. Telemetry must never block
@@ -64,16 +73,20 @@ func (d *DB) InsertTickTrace(t *TickTrace) error {
 	res, err := d.Exec(
 		`INSERT INTO tick_traces (
 			thread_id, round,
-			t_rrc_onmessage_ms, t_select_ms, t_assemble_ms,
+			t_rrc_prerequisite_selection_ms, t_select_ms, t_assemble_ms,
 			t_complete_ms, t_stream_ms, t_persist_ms, t_total_ms,
 			completer_model, corpus_size, selected_count,
-			assembled_tokens_est, errored, error_msg
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			assembled_tokens_est,
+			usage_predicted_tokens, usage_prompt_tokens, usage_completion_tokens,
+			errored, error_msg
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ThreadID, t.Round,
-		t.RRCOnMessageMs, t.SelectMs, t.AssembleMs,
+		t.RRCPrerequisiteSelectionMs, t.SelectMs, t.AssembleMs,
 		t.CompleteMs, t.StreamMs, t.PersistMs, t.TotalMs,
 		t.CompleterModel, t.CorpusSize, t.SelectedCount,
-		t.AssembledTokensEst, errored, errMsg,
+		t.AssembledTokensEst,
+		t.UsagePredictedTokens, t.UsagePromptTokens, t.UsageCompletionTokens,
+		errored, errMsg,
 	)
 	if err != nil {
 		return err
@@ -88,10 +101,12 @@ func (d *DB) InsertTickTrace(t *TickTrace) error {
 // newest first. limit <= 0 means "all."
 func (d *DB) ListTickTraces(threadID string, limit int) ([]*TickTrace, error) {
 	q := `SELECT id, thread_id, round, created_at,
-		t_rrc_onmessage_ms, t_select_ms, t_assemble_ms,
+		t_rrc_prerequisite_selection_ms, t_select_ms, t_assemble_ms,
 		t_complete_ms, t_stream_ms, t_persist_ms, t_total_ms,
 		completer_model, corpus_size, selected_count,
-		assembled_tokens_est, errored, error_msg
+		assembled_tokens_est,
+		usage_predicted_tokens, usage_prompt_tokens, usage_completion_tokens,
+		errored, error_msg
 		FROM tick_traces
 		WHERE thread_id = ?
 		ORDER BY id DESC`
@@ -114,10 +129,12 @@ func (d *DB) ListTickTraces(threadID string, limit int) ([]*TickTrace, error) {
 		var errored int
 		if err := rows.Scan(
 			&t.ID, &t.ThreadID, &t.Round, &t.CreatedAt,
-			&t.RRCOnMessageMs, &t.SelectMs, &t.AssembleMs,
+			&t.RRCPrerequisiteSelectionMs, &t.SelectMs, &t.AssembleMs,
 			&t.CompleteMs, &t.StreamMs, &t.PersistMs, &t.TotalMs,
 			&model, &t.CorpusSize, &t.SelectedCount,
-			&t.AssembledTokensEst, &errored, &errMsg,
+			&t.AssembledTokensEst,
+			&t.UsagePredictedTokens, &t.UsagePromptTokens, &t.UsageCompletionTokens,
+			&errored, &errMsg,
 		); err != nil {
 			return nil, err
 		}

@@ -3,49 +3,50 @@ package storage
 import (
 	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // InsertEdge persists a DAG edge.
-func (d *DB) InsertEdge(e *pb.Edge) error {
+func (d *DB) InsertEdge(e *rrcv1.Edge) error {
 	_, err := d.Exec(
 		`INSERT OR REPLACE INTO edges
 		 (from_message_id, to_message_id, score, source, cross_encoder_score,
-		  qud_weight, temporal_proximity, detected_at, from_thread_id, to_thread_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  detected_at, from_thread_id, to_thread_id, scorer_model)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.FromMessageId, e.ToMessageId, e.Score, int(e.Source),
-		e.CrossEncoderScore, e.QudWeight, e.TemporalProximity,
-		e.DetectedAt.AsTime(), e.FromThreadId, e.ToThreadId,
+		e.CrossEncoderScore,
+		e.DetectedAt.AsTime(), e.FromThreadId, e.ToThreadId, e.ScorerModel,
 	)
 	return err
 }
 
 // AllEdges loads all DAG edges for engine startup.
-func (d *DB) AllEdges() ([]*pb.Edge, error) {
+func (d *DB) AllEdges() ([]*rrcv1.Edge, error) {
 	rows, err := d.Query(
 		`SELECT from_message_id, to_message_id, score, source, cross_encoder_score,
-		        qud_weight, temporal_proximity, detected_at, from_thread_id, to_thread_id
-		 FROM edges`,
+		        detected_at, from_thread_id, to_thread_id, scorer_model
+		 FROM edges
+		 ORDER BY from_message_id, to_message_id, source`,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var edges []*pb.Edge
+	var edges []*rrcv1.Edge
 	for rows.Next() {
-		e := &pb.Edge{}
+		e := &rrcv1.Edge{}
 		var sourceInt int
 		var detectedAt time.Time
 		if err := rows.Scan(
 			&e.FromMessageId, &e.ToMessageId, &e.Score, &sourceInt,
-			&e.CrossEncoderScore, &e.QudWeight, &e.TemporalProximity,
-			&detectedAt, &e.FromThreadId, &e.ToThreadId,
+			&e.CrossEncoderScore,
+			&detectedAt, &e.FromThreadId, &e.ToThreadId, &e.ScorerModel,
 		); err != nil {
 			return nil, err
 		}
-		e.Source = pb.EdgeSource(sourceInt)
+		e.Source = rrcv1.EdgeSource(sourceInt)
 		e.DetectedAt = timestamppb.New(detectedAt)
 		edges = append(edges, e)
 	}
@@ -59,4 +60,16 @@ func (d *DB) DeleteEdgesForThread(threadID string) error {
 		threadID, threadID,
 	)
 	return err
+}
+
+// CountProvenanceEdges returns the number of recorded provenance
+// edges — the corpus-structure watermark the mass-refit arming check
+// reads (see substrate.Holder).
+func (d *DB) CountProvenanceEdges() (int, error) {
+	var n int
+	err := d.QueryRow(
+		`SELECT COUNT(*) FROM edges WHERE source = ?`,
+		int(rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE),
+	).Scan(&n)
+	return n, err
 }

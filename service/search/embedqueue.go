@@ -11,7 +11,7 @@ import (
 // worker pool and a bounded job buffer.
 //
 // Background — pre-queue failure mode (2026-04-23 autonomous run):
-// the OnMessageStored callback in the resolver was `go
+// the message-stored callback in the resolver was `go
 // s.EmbedMessageChunks(context.Background(), id)` — one unbounded
 // goroutine per stored message, with no timeout, no cancellation,
 // no concurrency limit. During an autonomous burst the runner
@@ -23,7 +23,7 @@ import (
 // deadlocked between the two TEI containers (documented in
 // NVIDIA/open-gpu-kernel-modules#968; TEI issue #713 matches the
 // "live HTTP, dead inference" signature we observed). Rerank
-// went silent, scorer errors started returning from OnMessage,
+// went silent, scorer errors started returning from selection,
 // and — because scorer errors were being swallowed at the
 // RRCLLM boundary (now fixed) — the autonomous loop generated
 // 33 blind rounds before anyone noticed.
@@ -53,7 +53,7 @@ import (
 //     to the message (it's already stored); only search recall
 //     for that message is degraded. If the backend is broken
 //     systemically, the RRC scorer path will fail separately
-//     on the next OnMessage and surface through that channel.
+//     when the next serialized Local Context is scored.
 type EmbedQueue struct {
 	searcher   *Searcher
 	jobs       chan string

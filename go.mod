@@ -6,11 +6,15 @@ require (
 	fyne.io/systray v1.12.0
 	github.com/99designs/gqlgen v0.17.90
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
+	github.com/elijahmontenegro/grudge/adoc v0.0.0
+	github.com/elijahmontenegro/grudge/core v0.0.0
+	github.com/elijahmontenegro/grudge/proto v0.0.0
+	github.com/elijahmontenegro/grudge/rrc v0.0.0
+	github.com/elijahmontenegro/grudge/sandbox v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/ncruces/go-sqlite3 v0.20.3
-	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/vektah/gqlparser/v2 v2.5.33
 	github.com/zalando/go-keyring v0.2.8
 	google.golang.org/adk v1.0.0
@@ -40,6 +44,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/ncruces/julianday v1.0.0 // indirect
+	github.com/pkoukk/tiktoken-go v0.1.8 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/sosodev/duration v1.4.0 // indirect
@@ -64,4 +69,15 @@ require (
 	google.golang.org/grpc v1.79.3 // indirect
 	rsc.io/omap v1.2.0 // indirect
 	rsc.io/ordered v1.1.1 // indirect
+)
+
+// Nested library modules — unpublished; resolved in-repo. The carve
+// exists so an importer of rrc/core/adoc/sandbox does not inherit the
+// application's require set into their module graph.
+replace (
+	github.com/elijahmontenegro/grudge/adoc => ./adoc
+	github.com/elijahmontenegro/grudge/core => ./core
+	github.com/elijahmontenegro/grudge/proto => ./proto
+	github.com/elijahmontenegro/grudge/rrc => ./rrc
+	github.com/elijahmontenegro/grudge/sandbox => ./sandbox
 )

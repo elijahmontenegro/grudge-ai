@@ -28,6 +28,7 @@ func (r *Resolver) runtimeDeps() runtime.Deps {
 		PlanStore:     r.plans,
 		Selections:    r.selections,
 		EmbedEnqueuer: r.substrate,
+		Scales:        r.scales,
 	}
 }
 

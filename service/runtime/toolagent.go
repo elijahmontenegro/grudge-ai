@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/service/agent/tools"
 	"github.com/elijahmontenegro/grudge/service/hooks"
 	"github.com/elijahmontenegro/grudge/service/storage"
@@ -74,7 +74,7 @@ func (a *toolAgent) SendToAgent(ctx context.Context, agentID, message string) (s
 	if !ok {
 		return "", fmt.Errorf("no runner for agent %s", agentID)
 	}
-	resp, err := entry.Runner.SendMessage(ctx, message, pb.SelectionScope_SELECTION_SCOPE_THREAD)
+	resp, err := entry.Runner.SendMessage(ctx, message, threadv1.SelectionScope_SELECTION_SCOPE_THREAD)
 	if err != nil {
 		return "", err
 	}

@@ -8,7 +8,8 @@ pair on a 12 GB GPU.
 ## What's measured
 
 Three architectural paths that satisfy RRC's contract (lossless prerequisite
-retrieval + sub-linear per-step compute) across an extended `pairs.json`
+retrieval + sub-linear per-step compute) across an extended seed set
+(`rrc/calibrate/seed/pairs.json`)
 including the `F_long_document` failure mode that distinguishes single-
 vector from multi-vector representations:
 
@@ -57,7 +58,9 @@ Output: `results_paths.json` (gitignored) plus a console summary table.
 
 ## Files
 
-- `pairs.json` — eval set with categories A–F (including `F_long_document`).
+- `../rrc/calibrate/seed/pairs.json` — the canonical seed/eval set, categories A–F
+  (including `F_long_document`). Lives with the library so self-calibration ships
+  embedded; this harness reads it by path.
 - `run_eval.py` — the harness for the multi-path comparison.
 - `run_live_smoke.py` — production validator. Hits the running TEI + vLLM
   substrate and compares against the eval baseline (R2 r@5 = 31/31,

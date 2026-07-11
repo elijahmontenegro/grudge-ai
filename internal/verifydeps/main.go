@@ -1,17 +1,26 @@
-// Package main runs dependency-graph invariants the plan's
-// verification section calls out:
+// Package main runs the repo's dependency-graph invariants — the
+// boundary contract as executable checks rather than comments:
 //
 //   - service/storage must not import any other service/* package.
-//     Storage is a leaf — taking on a service/<other> dep is a
-//     layering violation that creates cycle risk and couples
-//     storage's release cadence to the consumer.
+//     Storage is a leaf.
 //
 //   - rrc must not pull tiktoken-go or dlclark/regexp2 into its dep
-//     graph. Those are reachable only via rrc/tiktoken/, the opt-in
-//     subpackage. Consumers who don't want the tokenizer pay nothing.
+//     graph (opt-in via rrc/tiktoken only), and must never import
+//     core — the library promise in rrc/scorer.go.
 //
-// Must be invoked from the repo root (where go.mod lives). Run via
-// Taskfile: `task verify:deps`.
+//   - core must not import rrc or service — adapters are below the
+//     engine and the application.
+//
+//   - sandbox and adoc are standalone: no grudge imports at all.
+//
+//   - adkbridge must not import service/storage — its corpus access
+//     is the consumer-defined CorpusStore interface.
+//
+// Module boundaries make several of these impossible to violate
+// without also editing a go.mod; the checks keep the contract
+// executable regardless. Must be invoked from the repo root (the
+// go.work makes cross-module `go list` resolve). Run via Taskfile:
+// `task verify:deps`.
 package main
 
 import (
@@ -39,11 +48,38 @@ var checks = []check{
 	},
 	{
 		desc: "rrc tokenizer decoupling",
-		pkg:  "./rrc",
+		pkg:  "github.com/elijahmontenegro/grudge/rrc",
 		forbidden: []string{
 			"github.com/pkoukk/tiktoken-go",
 			"github.com/dlclark/regexp2",
 		},
+	},
+	{
+		desc:      "rrc never imports core (library promise)",
+		pkg:       "github.com/elijahmontenegro/grudge/rrc/...",
+		forbidden: []string{"github.com/elijahmontenegro/grudge/core"},
+	},
+	{
+		desc:      "core never imports rrc or service",
+		pkg:       "github.com/elijahmontenegro/grudge/core/...",
+		forbidden: []string{"github.com/elijahmontenegro/grudge/rrc", "github.com/elijahmontenegro/grudge/service"},
+	},
+	{
+		desc:      "sandbox is standalone (no grudge imports)",
+		pkg:       "github.com/elijahmontenegro/grudge/sandbox/...",
+		forbidden: []string{"github.com/elijahmontenegro/grudge/"},
+		allowed:   []string{"github.com/elijahmontenegro/grudge/sandbox"},
+	},
+	{
+		desc:      "adoc is standalone (no grudge imports)",
+		pkg:       "github.com/elijahmontenegro/grudge/adoc/...",
+		forbidden: []string{"github.com/elijahmontenegro/grudge/"},
+		allowed:   []string{"github.com/elijahmontenegro/grudge/adoc"},
+	},
+	{
+		desc:      "adkbridge corpus access stays interface-shaped (no storage import)",
+		pkg:       "./adkbridge/...",
+		forbidden: []string{"github.com/elijahmontenegro/grudge/service/storage"},
 	},
 }
 
@@ -104,9 +140,4 @@ func matchesAny(line string, patterns []string) bool {
 		}
 	}
 	return false
-}
-
-func fail(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(2)
 }

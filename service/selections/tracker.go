@@ -9,7 +9,7 @@ import (
 	"log"
 	"sync"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	"github.com/elijahmontenegro/grudge/service/storage"
 )
 
@@ -17,8 +17,7 @@ import (
 // write-through audit to the selections table. Construct via New.
 type Tracker struct {
 	mu        sync.RWMutex
-	results   map[string]*pb.SelectionResult
-	latest    map[string]string
+	results   map[string]*rrcv1.SelectionResult
 	citations map[string]int
 
 	db *storage.DB
@@ -27,8 +26,7 @@ type Tracker struct {
 // New constructs an empty Tracker bound to db for write-through audit.
 func New(db *storage.DB) *Tracker {
 	return &Tracker{
-		results:   make(map[string]*pb.SelectionResult),
-		latest:    make(map[string]string),
+		results:   make(map[string]*rrcv1.SelectionResult),
 		citations: make(map[string]int),
 		db:        db,
 	}
@@ -37,31 +35,23 @@ func New(db *storage.DB) *Tracker {
 // Record persists a selection event in the in-memory citation tally
 // and writes it through to the selections table for audit. Called by
 // the runner factory's selection callback.
-func (t *Tracker) Record(threadID string, result *pb.SelectionResult) {
+func (t *Tracker) Record(result *rrcv1.SelectionResult) {
 	t.mu.Lock()
 	t.results[result.EventId] = result
-	t.latest[threadID] = result.EventId
 	for _, sel := range result.Selected {
 		t.citations[sel.MessageId]++
 	}
 	t.mu.Unlock()
 
-	// Event IDs are synthesized as sel-<target_message_id> in the
-	// engine. Strip the prefix to recover the target for the
-	// selections table FK.
-	targetID := result.EventId
-	if len(targetID) > 4 && targetID[:4] == "sel-" {
-		targetID = targetID[4:]
-	}
-	if err := t.db.SaveSelection(result, targetID, threadID); err != nil {
-		log.Printf("SaveSelection(event=%s target=%s): %v", result.EventId, targetID, err)
+	if err := t.db.SaveSelection(result, result.AnchorMessageId); err != nil {
+		log.Printf("SaveSelection(event=%s anchor=%s): %v", result.EventId, result.AnchorMessageId, err)
 	}
 }
 
 // Get returns the in-memory cached selection for an event id. Used
 // by graph.queryResolver.SelectionResult as the hot path before
 // falling back to DB lookup.
-func (t *Tracker) Get(eventID string) (*pb.SelectionResult, bool) {
+func (t *Tracker) Get(eventID string) (*rrcv1.SelectionResult, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	res, ok := t.results[eventID]

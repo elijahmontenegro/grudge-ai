@@ -15,7 +15,8 @@ import (
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/introspection"
-	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	gqlparser "github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -78,7 +79,6 @@ type ComplexityRoot struct {
 		FromMessageId     func(childComplexity int) int
 		Score             func(childComplexity int) int
 		Source            func(childComplexity int) int
-		TemporalProximity func(childComplexity int) int
 		ToMessageId       func(childComplexity int) int
 	}
 
@@ -161,7 +161,6 @@ type ComplexityRoot struct {
 		EffectiveScore    func(childComplexity int) int
 		HopDepth          func(childComplexity int) int
 		MessageId         func(childComplexity int) int
-		TemporalProximity func(childComplexity int) int
 		ThreadId          func(childComplexity int) int
 	}
 
@@ -264,25 +263,24 @@ type ComplexityRoot struct {
 }
 
 type EdgeResolver interface {
-	Score(ctx context.Context, obj *v1.Edge) (float64, error)
-	Source(ctx context.Context, obj *v1.Edge) (string, error)
-	CrossEncoderScore(ctx context.Context, obj *v1.Edge) (float64, error)
-	TemporalProximity(ctx context.Context, obj *v1.Edge) (float64, error)
+	Score(ctx context.Context, obj *rrcv1.Edge) (float64, error)
+	Source(ctx context.Context, obj *rrcv1.Edge) (string, error)
+	CrossEncoderScore(ctx context.Context, obj *rrcv1.Edge) (float64, error)
 }
 type ExcludedMessageResolver interface {
-	Reason(ctx context.Context, obj *v1.ExcludedMessage) (string, error)
-	Score(ctx context.Context, obj *v1.ExcludedMessage) (float64, error)
+	Reason(ctx context.Context, obj *rrcv1.ExcludedMessage) (string, error)
+	Score(ctx context.Context, obj *rrcv1.ExcludedMessage) (float64, error)
 }
 type MessageResolver interface {
-	Role(ctx context.Context, obj *v1.Message) (string, error)
-	Content(ctx context.Context, obj *v1.Message) (string, error)
-	Thinking(ctx context.Context, obj *v1.Message) (*string, error)
-	ToolCalls(ctx context.Context, obj *v1.Message) ([]*ToolCallBlock, error)
-	ToolResults(ctx context.Context, obj *v1.Message) ([]*ToolResultBlock, error)
-	Attachments(ctx context.Context, obj *v1.Message) ([]*AttachmentBlock, error)
+	Role(ctx context.Context, obj *threadv1.Message) (string, error)
+	Content(ctx context.Context, obj *threadv1.Message) (string, error)
+	Thinking(ctx context.Context, obj *threadv1.Message) (*string, error)
+	ToolCalls(ctx context.Context, obj *threadv1.Message) ([]*ToolCallBlock, error)
+	ToolResults(ctx context.Context, obj *threadv1.Message) ([]*ToolResultBlock, error)
+	Attachments(ctx context.Context, obj *threadv1.Message) ([]*AttachmentBlock, error)
 
-	CreatedAt(ctx context.Context, obj *v1.Message) (*time.Time, error)
-	CitedByCount(ctx context.Context, obj *v1.Message) (int, error)
+	CreatedAt(ctx context.Context, obj *threadv1.Message) (*time.Time, error)
+	CitedByCount(ctx context.Context, obj *threadv1.Message) (int, error)
 }
 type MutationResolver interface {
 	StopAgent(ctx context.Context, threadID string) (bool, error)
@@ -293,12 +291,12 @@ type MutationResolver interface {
 	ApprovePlan(ctx context.Context, threadID string, executionMode ExecutionMode) (bool, error)
 	RejectPlan(ctx context.Context, threadID string, feedback *string) (bool, error)
 	UpdatePlanSource(ctx context.Context, threadID string, content string) (bool, error)
-	EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*v1.Thread, error)
+	EditMessage(ctx context.Context, threadID string, messagePosition int, newContent string) (*threadv1.Thread, error)
 	CompileAdoc(ctx context.Context, path string) (string, error)
-	SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope, attachments []*AttachmentInput) (*v1.Message, error)
+	SendMessage(ctx context.Context, threadID string, content string, scope *SelectionScope, attachments []*AttachmentInput) (*threadv1.Message, error)
 	UpdateSettings(ctx context.Context, input SettingsInput) (*Settings, error)
-	CreateThread(ctx context.Context, name *string, workingDirs []string, sandboxed *bool) (*v1.Thread, error)
-	UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*v1.Thread, error)
+	CreateThread(ctx context.Context, name *string, workingDirs []string, sandboxed *bool) (*threadv1.Thread, error)
+	UpdateThread(ctx context.Context, id string, name *string, workingDirs []string, sandboxed *bool) (*threadv1.Thread, error)
 	DeleteThread(ctx context.Context, id string) (bool, error)
 	ArchiveThread(ctx context.Context, id string) (bool, error)
 	UnarchiveThread(ctx context.Context, id string) (bool, error)
@@ -309,24 +307,23 @@ type MutationResolver interface {
 }
 type QueryResolver interface {
 	AgentState(ctx context.Context, threadID string) (*AgentState, error)
-	Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*v1.Message, error)
+	Messages(ctx context.Context, threadID string, limit *int, offset *int) ([]*threadv1.Message, error)
 	Search(ctx context.Context, query string, limit *int) ([]*SearchResult, error)
-	SelectionForMessage(ctx context.Context, messageID string) (*v1.SelectionResult, error)
+	SelectionForMessage(ctx context.Context, messageID string) (*rrcv1.SelectionResult, error)
 	Settings(ctx context.Context) (*Settings, error)
 	Skills(ctx context.Context) ([]*SkillInfo, error)
-	Threads(ctx context.Context, includeArchived *bool) ([]*v1.Thread, error)
-	Thread(ctx context.Context, id string) (*v1.Thread, error)
+	Threads(ctx context.Context, includeArchived *bool) ([]*threadv1.Thread, error)
+	Thread(ctx context.Context, id string) (*threadv1.Thread, error)
 	ViewState(ctx context.Context, threadID string) (*ViewState, error)
 	RecentActivity(ctx context.Context, limit *int) ([]*ActivityItem, error)
 }
 type SelectedMessageResolver interface {
-	EffectiveScore(ctx context.Context, obj *v1.SelectedMessage) (float64, error)
+	EffectiveScore(ctx context.Context, obj *rrcv1.SelectedMessage) (float64, error)
 
-	CrossEncoderScore(ctx context.Context, obj *v1.SelectedMessage) (float64, error)
-	TemporalProximity(ctx context.Context, obj *v1.SelectedMessage) (float64, error)
+	CrossEncoderScore(ctx context.Context, obj *rrcv1.SelectedMessage) (float64, error)
 }
 type SelectionResultResolver interface {
-	Scope(ctx context.Context, obj *v1.SelectionResult) (SelectionScope, error)
+	Scope(ctx context.Context, obj *rrcv1.SelectionResult) (SelectionScope, error)
 }
 type SubscriptionResolver interface {
 	AgentState(ctx context.Context, threadID string) (<-chan *AgentState, error)
@@ -336,12 +333,12 @@ type SubscriptionResolver interface {
 	SubagentProgress(ctx context.Context, threadID string) (<-chan *SubagentProgress, error)
 }
 type ThreadResolver interface {
-	CreatedAt(ctx context.Context, obj *v1.Thread) (*time.Time, error)
+	CreatedAt(ctx context.Context, obj *threadv1.Thread) (*time.Time, error)
 
-	ArchivedAt(ctx context.Context, obj *v1.Thread) (*time.Time, error)
-	MessageCount(ctx context.Context, obj *v1.Thread) (int, error)
-	Status(ctx context.Context, obj *v1.Thread) (AgentStatus, error)
-	Mode(ctx context.Context, obj *v1.Thread) (AgentMode, error)
+	ArchivedAt(ctx context.Context, obj *threadv1.Thread) (*time.Time, error)
+	MessageCount(ctx context.Context, obj *threadv1.Thread) (int, error)
+	Status(ctx context.Context, obj *threadv1.Thread) (AgentStatus, error)
+	Mode(ctx context.Context, obj *threadv1.Thread) (AgentMode, error)
 }
 
 type executableSchema graphql.ExecutableSchemaState[ResolverRoot, DirectiveRoot, ComplexityRoot]
@@ -499,12 +496,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Edge.Source(childComplexity), true
-	case "Edge.temporalProximity":
-		if e.ComplexityRoot.Edge.TemporalProximity == nil {
-			break
-		}
-
-		return e.ComplexityRoot.Edge.TemporalProximity(childComplexity), true
 	case "Edge.toMessageId":
 		if e.ComplexityRoot.Edge.ToMessageId == nil {
 			break
@@ -1024,12 +1015,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SelectedMessage.MessageId(childComplexity), true
-	case "SelectedMessage.temporalProximity":
-		if e.ComplexityRoot.SelectedMessage.TemporalProximity == nil {
-			break
-		}
-
-		return e.ComplexityRoot.SelectedMessage.TemporalProximity(childComplexity), true
 	case "SelectedMessage.threadId":
 		if e.ComplexityRoot.SelectedMessage.ThreadId == nil {
 			break
@@ -1705,8 +1690,6 @@ func (ec *executionContext) childFields_SelectedMessage(ctx context.Context, fie
 		return ec.fieldContext_SelectedMessage_crossThread(ctx, field)
 	case "crossEncoderScore":
 		return ec.fieldContext_SelectedMessage_crossEncoderScore(ctx, field)
-	case "temporalProximity":
-		return ec.fieldContext_SelectedMessage_temporalProximity(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SelectedMessage", field.Name)
 }
@@ -3175,7 +3158,7 @@ func (ec *executionContext) fieldContext_AttachmentBlock_path(_ context.Context,
 	return graphql.NewScalarFieldContext("AttachmentBlock", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Edge_fromMessageId(ctx context.Context, field graphql.CollectedField, obj *v1.Edge) (ret graphql.Marshaler) {
+func (ec *executionContext) _Edge_fromMessageId(ctx context.Context, field graphql.CollectedField, obj *rrcv1.Edge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3198,7 +3181,7 @@ func (ec *executionContext) fieldContext_Edge_fromMessageId(_ context.Context, f
 	return graphql.NewScalarFieldContext("Edge", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _Edge_toMessageId(ctx context.Context, field graphql.CollectedField, obj *v1.Edge) (ret graphql.Marshaler) {
+func (ec *executionContext) _Edge_toMessageId(ctx context.Context, field graphql.CollectedField, obj *rrcv1.Edge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3221,7 +3204,7 @@ func (ec *executionContext) fieldContext_Edge_toMessageId(_ context.Context, fie
 	return graphql.NewScalarFieldContext("Edge", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _Edge_score(ctx context.Context, field graphql.CollectedField, obj *v1.Edge) (ret graphql.Marshaler) {
+func (ec *executionContext) _Edge_score(ctx context.Context, field graphql.CollectedField, obj *rrcv1.Edge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3244,7 +3227,7 @@ func (ec *executionContext) fieldContext_Edge_score(_ context.Context, field gra
 	return graphql.NewScalarFieldContext("Edge", field, true, true, errors.New("field of type Float does not have child fields"))
 }
 
-func (ec *executionContext) _Edge_source(ctx context.Context, field graphql.CollectedField, obj *v1.Edge) (ret graphql.Marshaler) {
+func (ec *executionContext) _Edge_source(ctx context.Context, field graphql.CollectedField, obj *rrcv1.Edge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3267,7 +3250,7 @@ func (ec *executionContext) fieldContext_Edge_source(_ context.Context, field gr
 	return graphql.NewScalarFieldContext("Edge", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Edge_crossEncoderScore(ctx context.Context, field graphql.CollectedField, obj *v1.Edge) (ret graphql.Marshaler) {
+func (ec *executionContext) _Edge_crossEncoderScore(ctx context.Context, field graphql.CollectedField, obj *rrcv1.Edge) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3290,30 +3273,7 @@ func (ec *executionContext) fieldContext_Edge_crossEncoderScore(_ context.Contex
 	return graphql.NewScalarFieldContext("Edge", field, true, true, errors.New("field of type Float does not have child fields"))
 }
 
-func (ec *executionContext) _Edge_temporalProximity(ctx context.Context, field graphql.CollectedField, obj *v1.Edge) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_Edge_temporalProximity(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return ec.Resolvers.Edge().TemporalProximity(ctx, obj)
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v float64) graphql.Marshaler {
-			return ec.marshalNFloat2float64(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_Edge_temporalProximity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("Edge", field, true, true, errors.New("field of type Float does not have child fields"))
-}
-
-func (ec *executionContext) _ExcludedMessage_messageId(ctx context.Context, field graphql.CollectedField, obj *v1.ExcludedMessage) (ret graphql.Marshaler) {
+func (ec *executionContext) _ExcludedMessage_messageId(ctx context.Context, field graphql.CollectedField, obj *rrcv1.ExcludedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3336,7 +3296,7 @@ func (ec *executionContext) fieldContext_ExcludedMessage_messageId(_ context.Con
 	return graphql.NewScalarFieldContext("ExcludedMessage", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _ExcludedMessage_reason(ctx context.Context, field graphql.CollectedField, obj *v1.ExcludedMessage) (ret graphql.Marshaler) {
+func (ec *executionContext) _ExcludedMessage_reason(ctx context.Context, field graphql.CollectedField, obj *rrcv1.ExcludedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3359,7 +3319,7 @@ func (ec *executionContext) fieldContext_ExcludedMessage_reason(_ context.Contex
 	return graphql.NewScalarFieldContext("ExcludedMessage", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _ExcludedMessage_score(ctx context.Context, field graphql.CollectedField, obj *v1.ExcludedMessage) (ret graphql.Marshaler) {
+func (ec *executionContext) _ExcludedMessage_score(ctx context.Context, field graphql.CollectedField, obj *rrcv1.ExcludedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3382,7 +3342,7 @@ func (ec *executionContext) fieldContext_ExcludedMessage_score(_ context.Context
 	return graphql.NewScalarFieldContext("ExcludedMessage", field, true, true, errors.New("field of type Float does not have child fields"))
 }
 
-func (ec *executionContext) _Message_id(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_id(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3405,7 +3365,7 @@ func (ec *executionContext) fieldContext_Message_id(_ context.Context, field gra
 	return graphql.NewScalarFieldContext("Message", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _Message_role(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_role(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3428,7 +3388,7 @@ func (ec *executionContext) fieldContext_Message_role(_ context.Context, field g
 	return graphql.NewScalarFieldContext("Message", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Message_content(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_content(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3451,7 +3411,7 @@ func (ec *executionContext) fieldContext_Message_content(_ context.Context, fiel
 	return graphql.NewScalarFieldContext("Message", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Message_thinking(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_thinking(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3474,7 +3434,7 @@ func (ec *executionContext) fieldContext_Message_thinking(_ context.Context, fie
 	return graphql.NewScalarFieldContext("Message", field, true, true, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Message_toolCalls(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_toolCalls(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3506,7 +3466,7 @@ func (ec *executionContext) fieldContext_Message_toolCalls(_ context.Context, fi
 	return fc, nil
 }
 
-func (ec *executionContext) _Message_toolResults(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_toolResults(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3538,7 +3498,7 @@ func (ec *executionContext) fieldContext_Message_toolResults(_ context.Context, 
 	return fc, nil
 }
 
-func (ec *executionContext) _Message_attachments(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_attachments(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3570,7 +3530,7 @@ func (ec *executionContext) fieldContext_Message_attachments(_ context.Context, 
 	return fc, nil
 }
 
-func (ec *executionContext) _Message_position(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_position(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3593,7 +3553,7 @@ func (ec *executionContext) fieldContext_Message_position(_ context.Context, fie
 	return graphql.NewScalarFieldContext("Message", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
-func (ec *executionContext) _Message_threadId(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_threadId(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3616,7 +3576,7 @@ func (ec *executionContext) fieldContext_Message_threadId(_ context.Context, fie
 	return graphql.NewScalarFieldContext("Message", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _Message_createdAt(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_createdAt(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -3639,7 +3599,7 @@ func (ec *executionContext) fieldContext_Message_createdAt(_ context.Context, fi
 	return graphql.NewScalarFieldContext("Message", field, true, true, errors.New("field of type DateTime does not have child fields"))
 }
 
-func (ec *executionContext) _Message_citedByCount(ctx context.Context, field graphql.CollectedField, obj *v1.Message) (ret graphql.Marshaler) {
+func (ec *executionContext) _Message_citedByCount(ctx context.Context, field graphql.CollectedField, obj *threadv1.Message) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -4027,8 +3987,8 @@ func (ec *executionContext) _Mutation_editMessage(ctx context.Context, field gra
 			return ec.Resolvers.Mutation().EditMessage(ctx, fc.Args["threadId"].(string), fc.Args["messagePosition"].(int), fc.Args["newContent"].(string))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *v1.Thread) graphql.Marshaler {
-			return ec.marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThread(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *threadv1.Thread) graphql.Marshaler {
+			return ec.marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThread(ctx, selections, v)
 		},
 		true,
 		true,
@@ -4115,8 +4075,8 @@ func (ec *executionContext) _Mutation_sendMessage(ctx context.Context, field gra
 			return ec.Resolvers.Mutation().SendMessage(ctx, fc.Args["threadId"].(string), fc.Args["content"].(string), fc.Args["scope"].(*SelectionScope), fc.Args["attachments"].([]*AttachmentInput))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *v1.Message) graphql.Marshaler {
-			return ec.marshalNMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐMessage(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *threadv1.Message) graphql.Marshaler {
+			return ec.marshalNMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐMessage(ctx, selections, v)
 		},
 		true,
 		true,
@@ -4203,8 +4163,8 @@ func (ec *executionContext) _Mutation_createThread(ctx context.Context, field gr
 			return ec.Resolvers.Mutation().CreateThread(ctx, fc.Args["name"].(*string), fc.Args["workingDirs"].([]string), fc.Args["sandboxed"].(*bool))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *v1.Thread) graphql.Marshaler {
-			return ec.marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThread(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *threadv1.Thread) graphql.Marshaler {
+			return ec.marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThread(ctx, selections, v)
 		},
 		true,
 		true,
@@ -4247,8 +4207,8 @@ func (ec *executionContext) _Mutation_updateThread(ctx context.Context, field gr
 			return ec.Resolvers.Mutation().UpdateThread(ctx, fc.Args["id"].(string), fc.Args["name"].(*string), fc.Args["workingDirs"].([]string), fc.Args["sandboxed"].(*bool))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *v1.Thread) graphql.Marshaler {
-			return ec.marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThread(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *threadv1.Thread) graphql.Marshaler {
+			return ec.marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThread(ctx, selections, v)
 		},
 		true,
 		true,
@@ -4643,8 +4603,8 @@ func (ec *executionContext) _Query_messages(ctx context.Context, field graphql.C
 			return ec.Resolvers.Query().Messages(ctx, fc.Args["threadId"].(string), fc.Args["limit"].(*int), fc.Args["offset"].(*int))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*v1.Message) graphql.Marshaler {
-			return ec.marshalNMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐMessageᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []*threadv1.Message) graphql.Marshaler {
+			return ec.marshalNMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐMessageᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -4731,8 +4691,8 @@ func (ec *executionContext) _Query_selectionForMessage(ctx context.Context, fiel
 			return ec.Resolvers.Query().SelectionForMessage(ctx, fc.Args["messageId"].(string))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *v1.SelectionResult) graphql.Marshaler {
-			return ec.marshalOSelectionResult2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐSelectionResult(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *rrcv1.SelectionResult) graphql.Marshaler {
+			return ec.marshalOSelectionResult2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐSelectionResult(ctx, selections, v)
 		},
 		true,
 		false,
@@ -4839,8 +4799,8 @@ func (ec *executionContext) _Query_threads(ctx context.Context, field graphql.Co
 			return ec.Resolvers.Query().Threads(ctx, fc.Args["includeArchived"].(*bool))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*v1.Thread) graphql.Marshaler {
-			return ec.marshalNThread2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThreadᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []*threadv1.Thread) graphql.Marshaler {
+			return ec.marshalNThread2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThreadᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -4883,8 +4843,8 @@ func (ec *executionContext) _Query_thread(ctx context.Context, field graphql.Col
 			return ec.Resolvers.Query().Thread(ctx, fc.Args["id"].(string))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *v1.Thread) graphql.Marshaler {
-			return ec.marshalOThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThread(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *threadv1.Thread) graphql.Marshaler {
+			return ec.marshalOThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThread(ctx, selections, v)
 		},
 		true,
 		false,
@@ -5308,7 +5268,7 @@ func (ec *executionContext) fieldContext_SearchResult_score(_ context.Context, f
 	return graphql.NewScalarFieldContext("SearchResult", field, false, false, errors.New("field of type Float does not have child fields"))
 }
 
-func (ec *executionContext) _SelectedMessage_messageId(ctx context.Context, field graphql.CollectedField, obj *v1.SelectedMessage) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectedMessage_messageId(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5331,7 +5291,7 @@ func (ec *executionContext) fieldContext_SelectedMessage_messageId(_ context.Con
 	return graphql.NewScalarFieldContext("SelectedMessage", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _SelectedMessage_effectiveScore(ctx context.Context, field graphql.CollectedField, obj *v1.SelectedMessage) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectedMessage_effectiveScore(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5354,7 +5314,7 @@ func (ec *executionContext) fieldContext_SelectedMessage_effectiveScore(_ contex
 	return graphql.NewScalarFieldContext("SelectedMessage", field, true, true, errors.New("field of type Float does not have child fields"))
 }
 
-func (ec *executionContext) _SelectedMessage_hopDepth(ctx context.Context, field graphql.CollectedField, obj *v1.SelectedMessage) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectedMessage_hopDepth(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5377,7 +5337,7 @@ func (ec *executionContext) fieldContext_SelectedMessage_hopDepth(_ context.Cont
 	return graphql.NewScalarFieldContext("SelectedMessage", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
-func (ec *executionContext) _SelectedMessage_threadId(ctx context.Context, field graphql.CollectedField, obj *v1.SelectedMessage) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectedMessage_threadId(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5400,7 +5360,7 @@ func (ec *executionContext) fieldContext_SelectedMessage_threadId(_ context.Cont
 	return graphql.NewScalarFieldContext("SelectedMessage", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _SelectedMessage_crossThread(ctx context.Context, field graphql.CollectedField, obj *v1.SelectedMessage) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectedMessage_crossThread(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5423,7 +5383,7 @@ func (ec *executionContext) fieldContext_SelectedMessage_crossThread(_ context.C
 	return graphql.NewScalarFieldContext("SelectedMessage", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
-func (ec *executionContext) _SelectedMessage_crossEncoderScore(ctx context.Context, field graphql.CollectedField, obj *v1.SelectedMessage) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectedMessage_crossEncoderScore(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5446,30 +5406,7 @@ func (ec *executionContext) fieldContext_SelectedMessage_crossEncoderScore(_ con
 	return graphql.NewScalarFieldContext("SelectedMessage", field, true, true, errors.New("field of type Float does not have child fields"))
 }
 
-func (ec *executionContext) _SelectedMessage_temporalProximity(ctx context.Context, field graphql.CollectedField, obj *v1.SelectedMessage) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_SelectedMessage_temporalProximity(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return ec.Resolvers.SelectedMessage().TemporalProximity(ctx, obj)
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v float64) graphql.Marshaler {
-			return ec.marshalNFloat2float64(ctx, selections, v)
-		},
-		true,
-		true,
-	)
-}
-func (ec *executionContext) fieldContext_SelectedMessage_temporalProximity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("SelectedMessage", field, true, true, errors.New("field of type Float does not have child fields"))
-}
-
-func (ec *executionContext) _SelectionResult_eventId(ctx context.Context, field graphql.CollectedField, obj *v1.SelectionResult) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectionResult_eventId(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectionResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5492,7 +5429,7 @@ func (ec *executionContext) fieldContext_SelectionResult_eventId(_ context.Conte
 	return graphql.NewScalarFieldContext("SelectionResult", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _SelectionResult_scope(ctx context.Context, field graphql.CollectedField, obj *v1.SelectionResult) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectionResult_scope(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectionResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5515,7 +5452,7 @@ func (ec *executionContext) fieldContext_SelectionResult_scope(_ context.Context
 	return graphql.NewScalarFieldContext("SelectionResult", field, true, true, errors.New("field of type SelectionScope does not have child fields"))
 }
 
-func (ec *executionContext) _SelectionResult_threadId(ctx context.Context, field graphql.CollectedField, obj *v1.SelectionResult) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectionResult_threadId(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectionResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5538,7 +5475,7 @@ func (ec *executionContext) fieldContext_SelectionResult_threadId(_ context.Cont
 	return graphql.NewScalarFieldContext("SelectionResult", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _SelectionResult_selected(ctx context.Context, field graphql.CollectedField, obj *v1.SelectionResult) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectionResult_selected(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectionResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5550,8 +5487,8 @@ func (ec *executionContext) _SelectionResult_selected(ctx context.Context, field
 			return obj.Selected, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*v1.SelectedMessage) graphql.Marshaler {
-			return ec.marshalNSelectedMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐSelectedMessageᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []*rrcv1.SelectedMessage) graphql.Marshaler {
+			return ec.marshalNSelectedMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐSelectedMessageᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -5570,7 +5507,7 @@ func (ec *executionContext) fieldContext_SelectionResult_selected(_ context.Cont
 	return fc, nil
 }
 
-func (ec *executionContext) _SelectionResult_excluded(ctx context.Context, field graphql.CollectedField, obj *v1.SelectionResult) (ret graphql.Marshaler) {
+func (ec *executionContext) _SelectionResult_excluded(ctx context.Context, field graphql.CollectedField, obj *rrcv1.SelectionResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -5582,8 +5519,8 @@ func (ec *executionContext) _SelectionResult_excluded(ctx context.Context, field
 			return obj.Excluded, nil
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []*v1.ExcludedMessage) graphql.Marshaler {
-			return ec.marshalNExcludedMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐExcludedMessageᚄ(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v []*rrcv1.ExcludedMessage) graphql.Marshaler {
+			return ec.marshalNExcludedMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐExcludedMessageᚄ(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6224,7 +6161,7 @@ func (ec *executionContext) fieldContext_Subscription_subagentProgress(ctx conte
 	return fc, nil
 }
 
-func (ec *executionContext) _Thread_id(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_id(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6247,7 +6184,7 @@ func (ec *executionContext) fieldContext_Thread_id(_ context.Context, field grap
 	return graphql.NewScalarFieldContext("Thread", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_name(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_name(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6270,7 +6207,7 @@ func (ec *executionContext) fieldContext_Thread_name(_ context.Context, field gr
 	return graphql.NewScalarFieldContext("Thread", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_workingDirs(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_workingDirs(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6293,7 +6230,7 @@ func (ec *executionContext) fieldContext_Thread_workingDirs(_ context.Context, f
 	return graphql.NewScalarFieldContext("Thread", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_sandboxed(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_sandboxed(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6316,7 +6253,7 @@ func (ec *executionContext) fieldContext_Thread_sandboxed(_ context.Context, fie
 	return graphql.NewScalarFieldContext("Thread", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_createdAt(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_createdAt(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6339,7 +6276,7 @@ func (ec *executionContext) fieldContext_Thread_createdAt(_ context.Context, fie
 	return graphql.NewScalarFieldContext("Thread", field, true, true, errors.New("field of type DateTime does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_parentThreadId(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_parentThreadId(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6362,7 +6299,7 @@ func (ec *executionContext) fieldContext_Thread_parentThreadId(_ context.Context
 	return graphql.NewScalarFieldContext("Thread", field, false, false, errors.New("field of type ID does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_branchPointPosition(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_branchPointPosition(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6385,7 +6322,7 @@ func (ec *executionContext) fieldContext_Thread_branchPointPosition(_ context.Co
 	return graphql.NewScalarFieldContext("Thread", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_archivedAt(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_archivedAt(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6408,7 +6345,7 @@ func (ec *executionContext) fieldContext_Thread_archivedAt(_ context.Context, fi
 	return graphql.NewScalarFieldContext("Thread", field, true, true, errors.New("field of type DateTime does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_messageCount(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_messageCount(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6431,7 +6368,7 @@ func (ec *executionContext) fieldContext_Thread_messageCount(_ context.Context, 
 	return graphql.NewScalarFieldContext("Thread", field, true, true, errors.New("field of type Int does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_status(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_status(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -6454,7 +6391,7 @@ func (ec *executionContext) fieldContext_Thread_status(_ context.Context, field 
 	return graphql.NewScalarFieldContext("Thread", field, true, true, errors.New("field of type AgentStatus does not have child fields"))
 }
 
-func (ec *executionContext) _Thread_mode(ctx context.Context, field graphql.CollectedField, obj *v1.Thread) (ret graphql.Marshaler) {
+func (ec *executionContext) _Thread_mode(ctx context.Context, field graphql.CollectedField, obj *threadv1.Thread) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
@@ -8415,7 +8352,7 @@ func (ec *executionContext) _AttachmentBlock(ctx context.Context, sel ast.Select
 
 var edgeImplementors = []string{"Edge"}
 
-func (ec *executionContext) _Edge(ctx context.Context, sel ast.SelectionSet, obj *v1.Edge) graphql.Marshaler {
+func (ec *executionContext) _Edge(ctx context.Context, sel ast.SelectionSet, obj *rrcv1.Edge) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, edgeImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -8542,42 +8479,6 @@ func (ec *executionContext) _Edge(ctx context.Context, sel ast.SelectionSet, obj
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "temporalProximity":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._Edge_temporalProximity(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -8603,7 +8504,7 @@ func (ec *executionContext) _Edge(ctx context.Context, sel ast.SelectionSet, obj
 
 var excludedMessageImplementors = []string{"ExcludedMessage"}
 
-func (ec *executionContext) _ExcludedMessage(ctx context.Context, sel ast.SelectionSet, obj *v1.ExcludedMessage) graphql.Marshaler {
+func (ec *executionContext) _ExcludedMessage(ctx context.Context, sel ast.SelectionSet, obj *rrcv1.ExcludedMessage) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, excludedMessageImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -8714,7 +8615,7 @@ func (ec *executionContext) _ExcludedMessage(ctx context.Context, sel ast.Select
 
 var messageImplementors = []string{"Message"}
 
-func (ec *executionContext) _Message(ctx context.Context, sel ast.SelectionSet, obj *v1.Message) graphql.Marshaler {
+func (ec *executionContext) _Message(ctx context.Context, sel ast.SelectionSet, obj *threadv1.Message) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, messageImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -9610,7 +9511,7 @@ func (ec *executionContext) _SearchResult(ctx context.Context, sel ast.Selection
 
 var selectedMessageImplementors = []string{"SelectedMessage"}
 
-func (ec *executionContext) _SelectedMessage(ctx context.Context, sel ast.SelectionSet, obj *v1.SelectedMessage) graphql.Marshaler {
+func (ec *executionContext) _SelectedMessage(ctx context.Context, sel ast.SelectionSet, obj *rrcv1.SelectedMessage) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, selectedMessageImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -9711,42 +9612,6 @@ func (ec *executionContext) _SelectedMessage(ctx context.Context, sel ast.Select
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
-		case "temporalProximity":
-			field := field
-
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
-				defer func() {
-					if r := recover(); r != nil {
-						ec.Error(ctx, ec.Recover(ctx, r))
-					}
-				}()
-				res = ec._SelectedMessage_temporalProximity(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
-				return res
-			}
-
-			if field.Deferrable != nil {
-				dfs, ok := deferred[field.Deferrable.Label]
-				di := 0
-				if ok {
-					dfs.AddField(field)
-					di = len(dfs.Values) - 1
-				} else {
-					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
-					deferred[field.Deferrable.Label] = dfs
-				}
-				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
-					return innerFunc(ctx, dfs)
-				})
-
-				// don't run the out.Concurrently() call below
-				out.Values[i] = graphql.Null
-				continue
-			}
-
-			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -9772,7 +9637,7 @@ func (ec *executionContext) _SelectedMessage(ctx context.Context, sel ast.Select
 
 var selectionResultImplementors = []string{"SelectionResult"}
 
-func (ec *executionContext) _SelectionResult(ctx context.Context, sel ast.SelectionSet, obj *v1.SelectionResult) graphql.Marshaler {
+func (ec *executionContext) _SelectionResult(ctx context.Context, sel ast.SelectionSet, obj *rrcv1.SelectionResult) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, selectionResultImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -10107,7 +9972,7 @@ func (ec *executionContext) _Subscription(ctx context.Context, sel ast.Selection
 
 var threadImplementors = []string{"Thread"}
 
-func (ec *executionContext) _Thread(ctx context.Context, sel ast.SelectionSet, obj *v1.Thread) graphql.Marshaler {
+func (ec *executionContext) _Thread(ctx context.Context, sel ast.SelectionSet, obj *threadv1.Thread) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, threadImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -11094,11 +10959,11 @@ func (ec *executionContext) marshalNDateTime2ᚖtimeᚐTime(ctx context.Context,
 	return res
 }
 
-func (ec *executionContext) marshalNExcludedMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐExcludedMessageᚄ(ctx context.Context, sel ast.SelectionSet, v []*v1.ExcludedMessage) graphql.Marshaler {
+func (ec *executionContext) marshalNExcludedMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐExcludedMessageᚄ(ctx context.Context, sel ast.SelectionSet, v []*rrcv1.ExcludedMessage) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNExcludedMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐExcludedMessage(ctx, sel, v[i])
+		return ec.marshalNExcludedMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐExcludedMessage(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -11110,7 +10975,7 @@ func (ec *executionContext) marshalNExcludedMessage2ᚕᚖgithubᚗcomᚋelijahm
 	return ret
 }
 
-func (ec *executionContext) marshalNExcludedMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐExcludedMessage(ctx context.Context, sel ast.SelectionSet, v *v1.ExcludedMessage) graphql.Marshaler {
+func (ec *executionContext) marshalNExcludedMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐExcludedMessage(ctx context.Context, sel ast.SelectionSet, v *rrcv1.ExcludedMessage) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -11240,15 +11105,15 @@ func (ec *executionContext) marshalNInt2int64(ctx context.Context, sel ast.Selec
 	return res
 }
 
-func (ec *executionContext) marshalNMessage2githubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐMessage(ctx context.Context, sel ast.SelectionSet, v v1.Message) graphql.Marshaler {
+func (ec *executionContext) marshalNMessage2githubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐMessage(ctx context.Context, sel ast.SelectionSet, v threadv1.Message) graphql.Marshaler {
 	return ec._Message(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐMessageᚄ(ctx context.Context, sel ast.SelectionSet, v []*v1.Message) graphql.Marshaler {
+func (ec *executionContext) marshalNMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐMessageᚄ(ctx context.Context, sel ast.SelectionSet, v []*threadv1.Message) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐMessage(ctx, sel, v[i])
+		return ec.marshalNMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐMessage(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -11260,7 +11125,7 @@ func (ec *executionContext) marshalNMessage2ᚕᚖgithubᚗcomᚋelijahmontenegr
 	return ret
 }
 
-func (ec *executionContext) marshalNMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐMessage(ctx context.Context, sel ast.SelectionSet, v *v1.Message) graphql.Marshaler {
+func (ec *executionContext) marshalNMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐMessage(ctx context.Context, sel ast.SelectionSet, v *threadv1.Message) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -11296,11 +11161,11 @@ func (ec *executionContext) marshalNSearchResult2ᚖgithubᚗcomᚋelijahmontene
 	return ec._SearchResult(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNSelectedMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐSelectedMessageᚄ(ctx context.Context, sel ast.SelectionSet, v []*v1.SelectedMessage) graphql.Marshaler {
+func (ec *executionContext) marshalNSelectedMessage2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐSelectedMessageᚄ(ctx context.Context, sel ast.SelectionSet, v []*rrcv1.SelectedMessage) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNSelectedMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐSelectedMessage(ctx, sel, v[i])
+		return ec.marshalNSelectedMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐSelectedMessage(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -11312,7 +11177,7 @@ func (ec *executionContext) marshalNSelectedMessage2ᚕᚖgithubᚗcomᚋelijahm
 	return ret
 }
 
-func (ec *executionContext) marshalNSelectedMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐSelectedMessage(ctx context.Context, sel ast.SelectionSet, v *v1.SelectedMessage) graphql.Marshaler {
+func (ec *executionContext) marshalNSelectedMessage2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐSelectedMessage(ctx context.Context, sel ast.SelectionSet, v *rrcv1.SelectedMessage) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -11451,15 +11316,15 @@ func (ec *executionContext) marshalNSubagentProgress2ᚖgithubᚗcomᚋelijahmon
 	return ec._SubagentProgress(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNThread2githubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThread(ctx context.Context, sel ast.SelectionSet, v v1.Thread) graphql.Marshaler {
+func (ec *executionContext) marshalNThread2githubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThread(ctx context.Context, sel ast.SelectionSet, v threadv1.Thread) graphql.Marshaler {
 	return ec._Thread(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNThread2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThreadᚄ(ctx context.Context, sel ast.SelectionSet, v []*v1.Thread) graphql.Marshaler {
+func (ec *executionContext) marshalNThread2ᚕᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThreadᚄ(ctx context.Context, sel ast.SelectionSet, v []*threadv1.Thread) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
 		fc.Result = &v[i]
-		return ec.marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThread(ctx, sel, v[i])
+		return ec.marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThread(ctx, sel, v[i])
 	})
 
 	for _, e := range ret {
@@ -11471,7 +11336,7 @@ func (ec *executionContext) marshalNThread2ᚕᚖgithubᚗcomᚋelijahmontenegro
 	return ret
 }
 
-func (ec *executionContext) marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThread(ctx context.Context, sel ast.SelectionSet, v *v1.Thread) graphql.Marshaler {
+func (ec *executionContext) marshalNThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThread(ctx context.Context, sel ast.SelectionSet, v *threadv1.Thread) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
@@ -11855,7 +11720,7 @@ func (ec *executionContext) marshalORetryStatus2ᚖgithubᚗcomᚋelijahmonteneg
 	return ec._RetryStatus(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalOSelectionResult2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐSelectionResult(ctx context.Context, sel ast.SelectionSet, v *v1.SelectionResult) graphql.Marshaler {
+func (ec *executionContext) marshalOSelectionResult2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋrrcᚋv1ᚐSelectionResult(ctx context.Context, sel ast.SelectionSet, v *rrcv1.SelectionResult) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -11932,7 +11797,7 @@ func (ec *executionContext) marshalOString2ᚖstring(ctx context.Context, sel as
 	return res
 }
 
-func (ec *executionContext) marshalOThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋv1ᚐThread(ctx context.Context, sel ast.SelectionSet, v *v1.Thread) graphql.Marshaler {
+func (ec *executionContext) marshalOThread2ᚖgithubᚗcomᚋelijahmontenegroᚋgrudgeᚋprotoᚋgenᚋgoᚋgrudgeᚋthreadᚋv1ᚐThread(ctx context.Context, sel ast.SelectionSet, v *threadv1.Thread) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}

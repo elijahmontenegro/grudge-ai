@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -30,14 +30,30 @@ func (r *mutationResolver) DenyToolCall(ctx context.Context, callID string, reas
 	// operational context for the model, not a user utterance. It belongs in the
 	// system domain, not the conversation.
 	if reason != nil && *reason != "" && threadID != "" {
-		corpus, _ := r.db.ThreadCorpus(threadID)
+		agentRunner, rerr := r.getOrCreateRunner(threadID)
+		if rerr != nil {
+			return false, fmt.Errorf("denial feedback runner: %w", rerr)
+		}
 		denialText := fmt.Sprintf("Tool call denied by user. Reason: %s", *reason)
-		msg := &v1.Message{
+		// The denial lands MID-TURN — the approval gate blocks inside the
+		// in-flight SendMessage — so it joins the current turn (a fresh
+		// turn id here would evict the real preceding turn from the Local
+		// Context window for the rest of this turn's calls) and takes a
+		// runner-minted position: the pending tool call it answers is
+		// buffered in memory with a minted position no DB-derived stamp
+		// can see, and the old int64(len(corpus)) landed MID-history once
+		// positions carried gaps.
+		turnID := agentRunner.CurrentTurn()
+		if turnID == "" {
+			turnID = fmt.Sprintf("turn-%s-%d", threadID, time.Now().UnixNano())
+		}
+		msg := &threadv1.Message{
 			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-			Role:      v1.Role_ROLE_SYSTEM,
-			Content:   rrc.BlocksFromText(denialText),
-			Position:  int64(len(corpus)),
+			Role:      threadv1.Role_ROLE_SYSTEM,
+			Content:   pbtext.BlocksFromText(denialText),
+			Position:  agentRunner.NextPosition(),
 			ThreadId:  threadID,
+			TurnId:    turnID,
 			CreatedAt: timestamppb.Now(),
 		}
 		_ = r.storeMessage(msg, denialText)

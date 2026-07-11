@@ -8,20 +8,23 @@ func TestTickTrace_RoundTrip(t *testing.T) {
 	db := testDB(t)
 
 	trace := &TickTrace{
-		ThreadID:           "t-trace",
-		Round:              7,
-		RRCOnMessageMs:     1234,
-		SelectMs:           45,
-		AssembleMs:         12,
-		CompleteMs:         8900,
-		StreamMs:           9500,
-		PersistMs:          67,
-		TotalMs:            10800,
-		CompleterModel:     "minimax-m2.7",
-		CorpusSize:         1968,
-		SelectedCount:      8,
-		AssembledTokensEst: 142000,
-		Errored:            false,
+		ThreadID:                   "t-trace",
+		Round:                      7,
+		RRCPrerequisiteSelectionMs: 1234,
+		SelectMs:                   45,
+		AssembleMs:                 12,
+		CompleteMs:                 8900,
+		StreamMs:                   9500,
+		PersistMs:                  67,
+		TotalMs:                    10800,
+		CompleterModel:             "minimax-m2.7",
+		CorpusSize:                 1968,
+		SelectedCount:              8,
+		AssembledTokensEst:         142000,
+		UsagePredictedTokens:       141000,
+		UsagePromptTokens:          138500,
+		UsageCompletionTokens:      910,
+		Errored:                    false,
 	}
 	if err := db.InsertTickTrace(trace); err != nil {
 		t.Fatalf("InsertTickTrace: %v", err)
@@ -38,7 +41,7 @@ func TestTickTrace_RoundTrip(t *testing.T) {
 		t.Fatalf("expected 1 trace, got %d", len(got))
 	}
 	r := got[0]
-	if r.Round != 7 || r.RRCOnMessageMs != 1234 || r.SelectMs != 45 ||
+	if r.Round != 7 || r.RRCPrerequisiteSelectionMs != 1234 || r.SelectMs != 45 ||
 		r.AssembleMs != 12 || r.CompleteMs != 8900 || r.StreamMs != 9500 ||
 		r.PersistMs != 67 || r.TotalMs != 10800 {
 		t.Errorf("timing fields didn't round-trip: %+v", r)
@@ -49,6 +52,10 @@ func TestTickTrace_RoundTrip(t *testing.T) {
 	if r.CorpusSize != 1968 || r.SelectedCount != 8 || r.AssembledTokensEst != 142000 {
 		t.Errorf("counters didn't round-trip: corpus=%d selected=%d tokens=%d",
 			r.CorpusSize, r.SelectedCount, r.AssembledTokensEst)
+	}
+	if r.UsagePredictedTokens != 141000 || r.UsagePromptTokens != 138500 || r.UsageCompletionTokens != 910 {
+		t.Errorf("usage triple didn't round-trip: pred=%d prompt=%d completion=%d",
+			r.UsagePredictedTokens, r.UsagePromptTokens, r.UsageCompletionTokens)
 	}
 	if r.Errored {
 		t.Errorf("Errored should be false, got true")

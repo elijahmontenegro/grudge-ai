@@ -5,13 +5,23 @@
 //
 // Stage columns:
 //
-//	rrc      — Engine.OnMessage (chunking + embed + KNN + rerank + edges)
+//	rrc      — Engine.SelectPrerequisites (serialization + KNN + rerank + gates + edges)
 //	sel      — Engine.Select (graph walk + transitive reduction)
 //	asm      — MMR + budget shed + token estimation
 //	cmpl     — time-to-first-event (model response wait, network round-trip)
 //	strm     — first event → stream close (network streaming + processing)
 //	prst     — sum of per-InsertMessage durations (subset of strm)
 //	total    — SendMessage wall clock
+//
+// Token columns (the grounding signal):
+//
+//	est      — assembled_tokens_est (counter-unit prediction, last assembly)
+//	pred     — usage_predicted_tokens (prediction for the last usage-bearing call)
+//	prompt   — usage_prompt_tokens (provider-reported prompt total for that call)
+//	cmplt    — usage_completion_tokens (provider-reported generation total)
+//
+// prompt/pred is the observed counter→model ratio the token-scale
+// learner feeds on; zeros mean no call reported usage.
 //
 // Diagnostic reading: high cmpl → model slow. High strm-cmpl, low
 // prst → streaming network slow. High prst → SQLite contention.
@@ -74,23 +84,27 @@ func main() {
 }
 
 func printTable(traces []*storage.TickTrace) {
-	fmt.Printf("%-5s %-19s %-6s %-7s %-7s %-7s %-7s %-7s %-7s %-7s %s\n",
-		"round", "created_at", "total", "rrc", "sel", "asm", "cmpl", "strm", "prst", "errored", "model")
+	fmt.Printf("%-5s %-19s %-6s %-7s %-7s %-7s %-7s %-7s %-7s %-7s %-7s %-7s %-7s %-7s %s\n",
+		"round", "created_at", "total", "rrc", "sel", "asm", "cmpl", "strm", "prst", "est", "pred", "prompt", "cmplt", "errored", "model")
 	for _, t := range traces {
 		errMark := ""
 		if t.Errored {
 			errMark = "ERR"
 		}
-		fmt.Printf("%-5d %-19s %-6d %-7d %-7d %-7d %-7d %-7d %-7d %-7s %s\n",
+		fmt.Printf("%-5d %-19s %-6d %-7d %-7d %-7d %-7d %-7d %-7d %-7d %-7d %-7d %-7d %-7s %s\n",
 			t.Round,
 			t.CreatedAt.Format("2006-01-02 15:04:05"),
 			t.TotalMs,
-			t.RRCOnMessageMs,
+			t.RRCPrerequisiteSelectionMs,
 			t.SelectMs,
 			t.AssembleMs,
 			t.CompleteMs,
 			t.StreamMs,
 			t.PersistMs,
+			t.AssembledTokensEst,
+			t.UsagePredictedTokens,
+			t.UsagePromptTokens,
+			t.UsageCompletionTokens,
 			errMark,
 			t.CompleterModel,
 		)
@@ -106,7 +120,7 @@ func printPercentiles(traces []*storage.TickTrace) {
 		getter func(*storage.TickTrace) int64
 	}{
 		{"total", func(t *storage.TickTrace) int64 { return t.TotalMs }},
-		{"rrc", func(t *storage.TickTrace) int64 { return t.RRCOnMessageMs }},
+		{"rrc", func(t *storage.TickTrace) int64 { return t.RRCPrerequisiteSelectionMs }},
 		{"sel", func(t *storage.TickTrace) int64 { return t.SelectMs }},
 		{"asm", func(t *storage.TickTrace) int64 { return t.AssembleMs }},
 		{"cmpl", func(t *storage.TickTrace) int64 { return t.CompleteMs }},

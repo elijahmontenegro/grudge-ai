@@ -9,7 +9,6 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -23,24 +22,28 @@ import (
 	// Importing core alone gives an empty registry; each adapter
 	// package wires itself in init() in core/adapter/X/register.go.
 	_ "github.com/elijahmontenegro/grudge/core/adapter/anthropic"
+	_ "github.com/elijahmontenegro/grudge/core/adapter/gcpranking"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/googleai"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/ollama"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/openai"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/tei"
-	_ "github.com/elijahmontenegro/grudge/core/adapter/vllm"
+	_ "github.com/elijahmontenegro/grudge/core/adapter/vertex"
 	_ "github.com/elijahmontenegro/grudge/core/adapter/zerank"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/rrc/tiktoken"
-	"github.com/elijahmontenegro/grudge/service/agent"
+	"github.com/elijahmontenegro/grudge/rrc/tokenscale"
+	"github.com/elijahmontenegro/grudge/sandbox"
 	"github.com/elijahmontenegro/grudge/service/approvals"
+	"github.com/elijahmontenegro/grudge/service/attachments"
 	"github.com/elijahmontenegro/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/graph"
 	"github.com/elijahmontenegro/grudge/service/hooks"
+	"github.com/elijahmontenegro/grudge/service/mcp"
 	"github.com/elijahmontenegro/grudge/service/messages"
 	"github.com/elijahmontenegro/grudge/service/plans"
 	"github.com/elijahmontenegro/grudge/service/prompt"
 	srvruntime "github.com/elijahmontenegro/grudge/service/runtime"
-	"github.com/elijahmontenegro/grudge/service/sandbox"
 	"github.com/elijahmontenegro/grudge/service/selections"
 	"github.com/elijahmontenegro/grudge/service/skills"
 	"github.com/elijahmontenegro/grudge/service/storage"
@@ -83,16 +86,25 @@ func main() {
 	if err != nil {
 		log.Fatalf("token estimator: %v", err)
 	}
-	chunk.SetDefaultEstimator(tokenEst)
+
+	// The token-scale store grounds the estimator's absolute scale in
+	// provider-reported usage, per completer model. A corrupt artifact
+	// is a refittable cache — log loudly and run with the empty store
+	// (the next admitted observation overwrites it); only a genuine
+	// read failure refuses boot.
+	scales, err := tokenscale.Open(datadir.TokenScalePath(cfg.DataDir))
+	if err != nil {
+		if scales == nil {
+			log.Fatalf("token scales: %v", err)
+		}
+		log.Printf("Token scales: %v", err)
+	}
 
 	db, err := storage.Open(cfg.DataDir)
 	if err != nil {
 		log.Fatalf("storage: %v", err)
 	}
 	defer db.Close()
-	if n := db.BackfillThreadNames(); n > 0 {
-		log.Printf("Named %d unnamed threads from first message", n)
-	}
 
 	// Sandbox preflight — non-fatal. Threads with sandboxed=true will
 	// fail at Bash-call time with the same error if the image is not
@@ -103,18 +115,13 @@ func main() {
 		log.Printf("Sandbox ready: image %s", sandbox.Image)
 	}
 
-	// MCP toolsets from settings.
-	var mcpConfigs []agent.MCPServerConfig
-	for _, srv := range cfg.Settings.MCPServers {
-		mcpConfigs = append(mcpConfigs, agent.MCPServerConfig{
-			Name: srv.Name, Endpoint: srv.Endpoint, Enabled: srv.Enabled,
-		})
-	}
-	mcpToolsets := agent.LoadMCPTools(mcpConfigs)
+	// MCP toolsets from settings — the settings type IS the domain
+	// type; no copy layer.
+	mcpToolsets := mcp.LoadMCPTools(cfg.Settings.MCPServers)
 	if len(mcpToolsets) > 0 {
 		log.Printf("Loaded %d MCP toolsets", len(mcpToolsets))
 	}
-	mcpTools, err := agent.MCPToolsAsTools(mcpToolsets)
+	mcpTools, err := mcp.MCPToolsAsTools(mcpToolsets)
 	if err != nil {
 		log.Fatalf("mcp tools: %v", err)
 	}
@@ -124,7 +131,7 @@ func main() {
 		log.Fatalf("assembler: %v", err)
 	}
 	hookDispatcher := hooks.NewDispatcher(cfg.Settings.Hooks)
-	loadedSkills := skills.LoadAll(filepath.Join(cfg.DataDir, "skills"), nil)
+	loadedSkills := skills.LoadAll(datadir.SkillsDir(cfg.DataDir), nil)
 	if len(loadedSkills) > 0 {
 		log.Printf("Loaded %d skills", len(loadedSkills))
 	}
@@ -137,7 +144,7 @@ func main() {
 	// Substrate.Holder owns engine + embed-queue atomic pointers and
 	// serializes reloads. onReload stops in-flight runners against the
 	// stale engine; next request rebuilds them.
-	sub := substrate.NewHolder(cfg, db, runners.StopAll)
+	sub := substrate.NewHolder(cfg, db, tokenEst, runners.StopAll)
 	if err := sub.Bootstrap(ctx); err != nil {
 		log.Fatalf("substrate: %v", err)
 	}
@@ -165,6 +172,7 @@ func main() {
 		MCPTools:   mcpTools,
 		Assembler:  assembler,
 		Hooks:      hookDispatcher,
+		Scales:     scales,
 	})
 
 	// Reconcile agent_state rows left non-Idle by the previous process
@@ -202,7 +210,7 @@ func main() {
 	// Attachment upload/download. Files land in the thread's sandbox
 	// workspace so they're immediately accessible to the agent via
 	// FileRead — same path surface whether sandboxed=true or not.
-	attachmentMgr := graph.NewAttachmentManager(cfg.DataDir)
+	attachmentMgr := attachments.NewAttachmentManager(cfg.DataDir)
 	mux.HandleFunc("/api/attachments/", func(w http.ResponseWriter, r *http.Request) {
 		// One prefix routes both upload (POST) and download (GET) so
 		// clients don't need separate endpoints to construct.

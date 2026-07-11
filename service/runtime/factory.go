@@ -6,17 +6,21 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/elijahmontenegro/grudge/adkbridge"
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/core/httpc/retry"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/rrc/tokenscale"
 	"github.com/elijahmontenegro/grudge/service/agent"
 	"github.com/elijahmontenegro/grudge/service/agent/tools"
 	"github.com/elijahmontenegro/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/hooks"
 	"github.com/elijahmontenegro/grudge/service/messages"
 	"github.com/elijahmontenegro/grudge/service/prompt"
-	"github.com/elijahmontenegro/grudge/service/sandbox"
 	"github.com/elijahmontenegro/grudge/service/skills"
 	"github.com/elijahmontenegro/grudge/service/storage"
 
@@ -43,6 +47,13 @@ type Deps struct {
 	PlanStore     PlanStore
 	Selections    Selections
 	EmbedEnqueuer EmbedEnqueuer
+
+	// Scales is the process-wide token-scale store (learned per-model
+	// counter→model ratios, grounded in provider-reported usage).
+	// Owned by the composition root, not the settings-rebuild
+	// lifecycle — the store is keyed by adapter/model and survives
+	// provider swaps. Nil runs ungrounded.
+	Scales *tokenscale.Store
 }
 
 // Build constructs an Entry (runner + lifecycle handles) for
@@ -56,7 +67,7 @@ func Build(threadID string, deps Deps) (*Entry, error) {
 		return nil, fmt.Errorf("get thread %s: %w", threadID, err)
 	}
 
-	workspace, err := sandbox.WorkspaceDir(deps.Config.DataDir, threadID)
+	workspace, err := datadir.WorkspaceDir(deps.Config.DataDir, threadID)
 	if err != nil {
 		return nil, fmt.Errorf("workspace dir: %w", err)
 	}
@@ -98,7 +109,23 @@ func Build(threadID string, deps Deps) (*Entry, error) {
 	if c, ok := deps.Config.Settings.Providers["scorer"]; ok {
 		rerankerModelID = c.Model
 	}
-	runner, err := agent.NewRunner(deps.Engine, mainWithRetry, deps.DB, threadID, toolList, modelName, instruction, rerankerModelID, deps.Inserter)
+	// Token grounding for the main completer: the scale handle is
+	// pre-bound to adapter/model (the codec is part of the scale — the
+	// same model behind two adapters sends different subsets), and the
+	// counting projection comes from the adapter's own registration.
+	// Both nil when no main provider is configured — ungrounded,
+	// count-everything, today's exact behavior.
+	var scales adkbridge.TokenScales
+	var countText func(m *llmv1.LLMMessage) string
+	if c, ok := deps.Config.Settings.Providers["main"]; ok {
+		if deps.Scales != nil && c.Adapter != "" && c.Model != "" {
+			if bound := deps.Scales.Bound(c.Adapter + "/" + c.Model); bound != nil {
+				scales = bound
+			}
+		}
+		countText = core.CountProjection(c.Adapter)
+	}
+	runner, err := agent.NewRunner(deps.Engine, mainWithRetry, deps.DB, threadID, toolList, modelName, instruction, rerankerModelID, deps.Inserter, scales, countText)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +141,7 @@ func Build(threadID string, deps Deps) (*Entry, error) {
 // Approver / HookFirer); a single *toolAgent satisfies all five
 // structurally and is shared across the fields. Remaining fields
 // are static per-thread data (workspace, paths, skills, permissions).
-func buildToolDeps(threadID string, thread *pb.Thread, workspace string, skillDefs []tools.SkillDef, searchURL string, deps Deps) tools.ToolDeps {
+func buildToolDeps(threadID string, thread *threadv1.Thread, workspace string, skillDefs []tools.SkillDef, searchURL string, deps Deps) tools.ToolDeps {
 	ta := newToolAgent(threadID, deps)
 	return tools.ToolDeps{
 		SubAgent:    ta,
@@ -137,7 +164,7 @@ func buildToolDeps(threadID string, thread *pb.Thread, workspace string, skillDe
 // assembleInstruction produces the system prompt for the runner via
 // the prompt assembler. Failure here is fatal: an empty instruction
 // would leave the agent without any system context.
-func assembleInstruction(threadID string, thread *pb.Thread, deps Deps) (string, error) {
+func assembleInstruction(threadID string, thread *threadv1.Thread, deps Deps) (string, error) {
 	if deps.Assembler == nil {
 		return "", fmt.Errorf("prompt assembler not initialized — templates directory missing")
 	}
@@ -152,13 +179,12 @@ func assembleInstruction(threadID string, thread *pb.Thread, deps Deps) (string,
 		}
 	}
 	agentsMD := prompt.LoadAgentsMD(thread.WorkingDirs)
-	planDir, err := storage.PlanDirForThread(deps.Config.DataDir, threadID)
+	planDir, err := datadir.PlanDirForThread(deps.Config.DataDir, threadID)
 	if err != nil {
 		return "", fmt.Errorf("plan dir: %w", err)
 	}
 	return deps.Assembler.Assemble(prompt.TemplateData{
 		UserName:    deps.Config.Settings.GetUserName(),
-		ThreadName:  thread.Name,
 		Sandboxed:   thread.Sandboxed,
 		WorkingDirs: thread.WorkingDirs,
 		AgentsMD:    agentsMD,
@@ -181,8 +207,8 @@ func wireRunnerCallbacks(runner *agent.Runner, threadID string, deps Deps) {
 	// In-memory citation tally + DB persistence on every selection.
 	// The hot-path read against the in-memory map happens off this
 	// path (the resolver implementation reads directly).
-	runner.SetSelectionCallback(func(result *pb.SelectionResult) {
-		deps.Selections.Record(threadID, result)
+	runner.SetSelectionCallback(func(result *rrcv1.SelectionResult) {
+		deps.Selections.Record(result)
 	})
 
 	runner.SetRoundCallback(func(round int, elapsed time.Duration) {

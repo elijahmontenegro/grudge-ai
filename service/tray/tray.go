@@ -113,9 +113,9 @@ func spiderIcon() []byte {
 	// ICO header: 6 bytes header + 16 bytes directory entry + PNG data
 	ico := make([]byte, 0, 22+len(pngData))
 	// ICONDIR header
-	ico = append(ico, 0, 0)       // reserved
-	ico = append(ico, 1, 0)       // type: 1 = icon
-	ico = append(ico, 1, 0)       // count: 1 image
+	ico = append(ico, 0, 0) // reserved
+	ico = append(ico, 1, 0) // type: 1 = icon
+	ico = append(ico, 1, 0) // count: 1 image
 	// ICONDIRENTRY
 	ico = append(ico, byte(size)) // width
 	ico = append(ico, byte(size)) // height

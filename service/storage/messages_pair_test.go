@@ -1,0 +1,305 @@
+package storage
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
+
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// TestInsertToolCallPair_AtomicOnFailure verifies the core write-side
+// guarantee: if either row of the (call, result) pair fails to insert,
+// NEITHER is committed — so a lone tool_call can never reach the corpus.
+// A lone call bricks rrc/protocol.go CloseGroup on every later assembly.
+func TestInsertToolCallPair_AtomicOnFailure(t *testing.T) {
+	db := testDB(t)
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-insert a message whose id the pair's result will collide with,
+	// forcing the SECOND insert of the pair to fail on the primary key.
+	if err := db.InsertMessage(&threadv1.Message{
+		Id: "dup", ThreadId: "t1", Role: threadv1.Role_ROLE_ASSISTANT, Position: 0,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	call := &threadv1.Message{
+		Id: "call-row", ThreadId: "t1", Role: threadv1.Role_ROLE_ASSISTANT, Position: 1,
+		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolCall{
+			ToolCall: &threadv1.ToolCallContent{Id: "x", Name: "Bash"},
+		}}},
+	}
+	result := &threadv1.Message{
+		Id: "dup", ThreadId: "t1", Role: threadv1.Role_ROLE_ASSISTANT, Position: 2, // id collides
+		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolResult{
+			ToolResult: &threadv1.ToolResultContent{ToolCallId: "x", Content: "out"},
+		}}},
+	}
+
+	if err := db.InsertToolCallPair(call, nil, result, nil); err == nil {
+		t.Fatal("expected the pair insert to fail on the colliding result id")
+	}
+	// The call row must have rolled back with the failed result — both or
+	// neither. A committed call here would be an orphan.
+	if m, _ := db.GetMessage("call-row"); m != nil {
+		t.Fatal("call row was committed despite the pair transaction failing — not atomic")
+	}
+}
+
+// TestInsertToolCallPair_WritesBothRows: the happy path commits both the
+// call and the result, sharing a turn, so CloseGroup sees a closed pair.
+func TestInsertToolCallPair_WritesBothRows(t *testing.T) {
+	db := testDB(t)
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	call := &threadv1.Message{
+		Id: "c", ThreadId: "t1", TurnId: "turn-1", Role: threadv1.Role_ROLE_ASSISTANT, Position: 0,
+		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolCall{
+			ToolCall: &threadv1.ToolCallContent{Id: "x", Name: "Bash"},
+		}}},
+	}
+	result := &threadv1.Message{
+		Id: "r", ThreadId: "t1", TurnId: "turn-1", Role: threadv1.Role_ROLE_ASSISTANT, Position: 1,
+		Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_ToolResult{
+			ToolResult: &threadv1.ToolResultContent{ToolCallId: "x", Content: "out"},
+		}}},
+	}
+	if err := db.InsertToolCallPair(call, nil, result, nil); err != nil {
+		t.Fatalf("InsertToolCallPair: %v", err)
+	}
+	gotCall, err := db.GetMessage("c")
+	if err != nil {
+		t.Fatalf("call not committed: %v", err)
+	}
+	gotResult, err := db.GetMessage("r")
+	if err != nil {
+		t.Fatalf("result not committed: %v", err)
+	}
+	if gotCall.TurnId != "turn-1" || gotResult.TurnId != "turn-1" {
+		t.Fatalf("pair should share turn: call=%q result=%q", gotCall.TurnId, gotResult.TurnId)
+	}
+}
+
+// TestMaxPosition covers the position-authority seed: -1 on an empty
+// thread; the true high-water mark on a corpus carrying gaps and
+// duplicated positions, where COUNT(*) understates it and a count-seeded
+// counter would mint colliding positions.
+func TestMaxPosition(t *testing.T) {
+	db := testDB(t)
+	if err := db.CreateThread(&threadv1.Thread{Id: "tp", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := db.MaxPosition("tp"); got != -1 {
+		t.Fatalf("empty thread MaxPosition = %d, want -1", got)
+	}
+	for _, m := range []*threadv1.Message{
+		{Id: "p0", ThreadId: "tp", Role: threadv1.Role_ROLE_USER, Position: 0},
+		{Id: "p1", ThreadId: "tp", Role: threadv1.Role_ROLE_ASSISTANT, Position: 8},
+		{Id: "p2", ThreadId: "tp", Role: threadv1.Role_ROLE_USER, Position: 8},
+	} {
+		if err := db.InsertMessage(m, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := db.MaxPosition("tp"); got != 8 {
+		t.Fatalf("MaxPosition = %d, want 8 (COUNT(*) is 3)", got)
+	}
+}
+
+// TestPrecedingTurnID covers the window-tail selector: the latest turn
+// id other than the current one — none on a first turn, legacy empty
+// turn ids never form a tail, and mid-turn the CURRENT turn's own rows
+// must not shadow the true preceding turn.
+func TestPrecedingTurnID(t *testing.T) {
+	db := testDB(t)
+	if err := db.CreateThread(&threadv1.Thread{Id: "tw", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(id string, pos int64, turn string) *threadv1.Message {
+		return &threadv1.Message{Id: id, ThreadId: "tw", TurnId: turn, Role: threadv1.Role_ROLE_USER, Position: pos}
+	}
+	// Empty thread: no tail.
+	if got, err := db.PrecedingTurnID("tw", "turn-B"); err != nil || got != "" {
+		t.Fatalf("empty thread: got %q err=%v, want \"\"", got, err)
+	}
+	for _, m := range []*threadv1.Message{
+		mk("l0", 0, ""),       // legacy row: never a tail
+		mk("a0", 1, "turn-A"), // the true preceding turn
+		mk("a1", 2, "turn-A"),
+		mk("l1", 3, ""),       // legacy row between turns: skipped
+		mk("b0", 4, "turn-B"), // current turn, mid-flight
+		mk("b1", 5, "turn-B"),
+	} {
+		if err := db.InsertMessage(m, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Mid-turn: the current turn's own rows sit at the top of the
+	// position order — they must be skipped, not returned.
+	if got, err := db.PrecedingTurnID("tw", "turn-B"); err != nil || got != "turn-A" {
+		t.Fatalf("mid-turn: got %q err=%v, want turn-A", got, err)
+	}
+	// First turn of a thread whose history is only legacy rows: no tail.
+	if err := db.CreateThread(&threadv1.Thread{Id: "tl", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertMessage(&threadv1.Message{Id: "x0", ThreadId: "tl", Role: threadv1.Role_ROLE_USER, Position: 0}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.PrecedingTurnID("tl", "turn-Z"); err != nil || got != "" {
+		t.Fatalf("legacy-only history: got %q err=%v, want \"\"", got, err)
+	}
+}
+
+// TestTurnStartPosition_SnapsToTurnBoundary verifies the Layer-2 branch
+// snap: a position inside a turn resolves to that turn's first position,
+// so a branch prefix never bisects a tool_call/tool_result pair. Turn
+// starts and legacy empty-turn rows resolve to themselves.
+func TestTurnStartPosition_SnapsToTurnBoundary(t *testing.T) {
+	db := testDB(t)
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(id string, pos int64, turn string) *threadv1.Message {
+		return &threadv1.Message{Id: id, ThreadId: "t1", TurnId: turn, Role: threadv1.Role_ROLE_ASSISTANT, Position: pos}
+	}
+	// Turn "a": positions 0,1. Turn "b" (a tool turn): positions 2,3,4.
+	for _, m := range []*threadv1.Message{
+		mk("m0", 0, "a"), mk("m1", 1, "a"),
+		mk("m2", 2, "b"), mk("m3", 3, "b"), mk("m4", 4, "b"),
+	} {
+		if err := db.InsertMessage(m, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Any position inside turn "b" snaps to its start (2).
+	for _, pos := range []int64{2, 3, 4} {
+		got, err := db.TurnStartPosition("t1", pos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != 2 {
+			t.Fatalf("TurnStartPosition(%d) = %d, want 2 (turn b start)", pos, got)
+		}
+	}
+	// A turn start snaps to itself.
+	if got, _ := db.TurnStartPosition("t1", 0); got != 0 {
+		t.Fatalf("turn-start 0 should snap to 0, got %d", got)
+	}
+	// A legacy row with empty turn_id snaps to itself (no boundary to find).
+	if err := db.InsertMessage(mk("m5", 5, ""), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := db.TurnStartPosition("t1", 5); got != 5 {
+		t.Fatalf("empty-turn row should snap to itself, got %d", got)
+	}
+	// A position with no row snaps to itself.
+	if got, _ := db.TurnStartPosition("t1", 99); got != 99 {
+		t.Fatalf("missing position should snap to itself, got %d", got)
+	}
+}
+
+// TestEdgeScorerModel_RoundTripAndV4Migration pins the instrument stamp
+// (A4-D5): edges persist and reload the scorer that measured their
+// observations, and a v4-stamped database migrates forward in place —
+// additive, idempotent (the column check tolerates a step interrupted
+// between ALTER and the identity update), data intact.
+func TestEdgeScorerModel_RoundTripAndV4Migration(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := db.InsertEdge(&rrcv1.Edge{
+		FromMessageId: "c", ToMessageId: "a", Score: 0.8, CrossEncoderScore: 0.7,
+		Source:       rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER,
+		FromThreadId: "t1", ToThreadId: "t1",
+		DetectedAt: timestamppb.Now(), ScorerModel: "zerank-test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	edges, err := db.AllEdges()
+	if err != nil || len(edges) != 1 || edges[0].ScorerModel != "zerank-test" {
+		t.Fatalf("round-trip: edges=%v err=%v", edges, err)
+	}
+	// Simulate a v4-stamped database (the half-migrated shape: column
+	// present, identity old — exactly what an interrupted migration
+	// leaves) and reopen: the forward migration must run idempotently.
+	if _, err := db.Exec(`UPDATE schema_identity SET version = 4, identity = ?`, schemaIdentityV4); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db2, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen with v4 identity should migrate, got: %v", err)
+	}
+	defer db2.Close()
+	var version int
+	var identity string
+	if err := db2.QueryRow(`SELECT version, identity FROM schema_identity WHERE id = 1`).Scan(&version, &identity); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion || identity != schemaIdentity {
+		t.Fatalf("migration left (%d, %s), want (%d, %s)", version, identity, schemaVersion, schemaIdentity)
+	}
+	edges, err = db2.AllEdges()
+	if err != nil || len(edges) != 1 || edges[0].ScorerModel != "zerank-test" {
+		t.Fatalf("data must survive migration: edges=%v err=%v", edges, err)
+	}
+}
+
+// TestRandomChunkRefs_DeterministicPerSeed pins the noise reference's
+// draw contract: same seed → identical sample (the determinism suite
+// depends on it); different seeds → different orderings; limit
+// honored.
+func TestRandomChunkRefs_DeterministicPerSeed(t *testing.T) {
+	db := testDB(t)
+	if err := db.CreateThread(&threadv1.Thread{Id: "tr", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		m := &threadv1.Message{
+			Id: fmt.Sprintf("rm%d", i), ThreadId: "tr",
+			Role: threadv1.Role_ROLE_USER, Position: int64(i),
+			Content: pbtext.BlocksFromText(fmt.Sprintf("reference row %d", i)),
+		}
+		if err := db.InsertMessage(m, []Chunk{{MessageID: m.Id, ChunkIndex: 0, Text: fmt.Sprintf("chunk %d", i), TokenEst: 3}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a1, err := db.RandomChunkRefs(6, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, _ := db.RandomChunkRefs(6, 42)
+	if len(a1) != 6 || len(a2) != 6 {
+		t.Fatalf("limit not honored: %d/%d", len(a1), len(a2))
+	}
+	for i := range a1 {
+		if a1[i] != a2[i] {
+			t.Fatalf("same seed diverged at %d: %+v vs %+v", i, a1[i], a2[i])
+		}
+	}
+	b, _ := db.RandomChunkRefs(6, 43)
+	same := true
+	for i := range a1 {
+		if a1[i] != b[i] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("different seeds should draw different orderings")
+	}
+	if a1[0].ThreadID != "tr" || a1[0].Text == "" {
+		t.Fatalf("ref missing fields: %+v", a1[0])
+	}
+}

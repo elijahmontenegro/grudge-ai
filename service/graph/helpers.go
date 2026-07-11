@@ -3,18 +3,18 @@ package graph
 import (
 	"strings"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 )
 
 // protoRoleToDisplay maps proto roles to frontend-friendly names.
 // Decouples the frontend from proto enum string representations.
-func protoRoleToDisplay(r pb.Role) string {
+func protoRoleToDisplay(r threadv1.Role) string {
 	switch r {
-	case pb.Role_ROLE_USER:
+	case threadv1.Role_ROLE_USER:
 		return "user"
-	case pb.Role_ROLE_ASSISTANT:
+	case threadv1.Role_ROLE_ASSISTANT:
 		return "assistant"
-	case pb.Role_ROLE_SYSTEM:
+	case threadv1.Role_ROLE_SYSTEM:
 		return "system"
 	default:
 		return "unknown"
@@ -23,7 +23,7 @@ func protoRoleToDisplay(r pb.Role) string {
 
 // protoContentToDisplay extracts text-only content from proto blocks.
 // Tool calls and results are returned via separate structured resolvers.
-func protoContentToDisplay(blocks []*pb.ContentBlock) string {
+func protoContentToDisplay(blocks []*threadv1.ContentBlock) string {
 	var parts []string
 	for _, b := range blocks {
 		if t := b.GetText(); t != nil {
@@ -34,8 +34,8 @@ func protoContentToDisplay(blocks []*pb.ContentBlock) string {
 }
 
 // protoToolCalls extracts tool call blocks from proto content.
-func protoToolCalls(blocks []*pb.ContentBlock) []*pb.ToolCallContent {
-	var calls []*pb.ToolCallContent
+func protoToolCalls(blocks []*threadv1.ContentBlock) []*threadv1.ToolCallContent {
+	var calls []*threadv1.ToolCallContent
 	for _, b := range blocks {
 		if tc := b.GetToolCall(); tc != nil {
 			calls = append(calls, tc)
@@ -45,8 +45,8 @@ func protoToolCalls(blocks []*pb.ContentBlock) []*pb.ToolCallContent {
 }
 
 // protoToolResults extracts tool result blocks from proto content.
-func protoToolResults(blocks []*pb.ContentBlock) []*pb.ToolResultContent {
-	var results []*pb.ToolResultContent
+func protoToolResults(blocks []*threadv1.ContentBlock) []*threadv1.ToolResultContent {
+	var results []*threadv1.ToolResultContent
 	for _, b := range blocks {
 		if tr := b.GetToolResult(); tr != nil {
 			results = append(results, tr)
@@ -56,7 +56,7 @@ func protoToolResults(blocks []*pb.ContentBlock) []*pb.ToolResultContent {
 }
 
 // protoThinkingContent extracts thinking text from content blocks.
-func protoThinkingContent(blocks []*pb.ContentBlock) string {
+func protoThinkingContent(blocks []*threadv1.ContentBlock) string {
 	var parts []string
 	for _, b := range blocks {
 		if t := b.GetThinking(); t != nil {
@@ -70,8 +70,8 @@ func protoThinkingContent(blocks []*pb.ContentBlock) string {
 // proto AttachmentContent blocks. The client has already uploaded files
 // via POST /api/attachments/{threadId} and echoed back the metadata —
 // this is a pure shape transform, no re-validation.
-func attachmentInputsToBlocks(inputs []*AttachmentInput) []*pb.AttachmentContent {
-	out := make([]*pb.AttachmentContent, 0, len(inputs))
+func attachmentInputsToBlocks(inputs []*AttachmentInput) []*threadv1.AttachmentContent {
+	out := make([]*threadv1.AttachmentContent, 0, len(inputs))
 	for _, a := range inputs {
 		if a == nil {
 			continue
@@ -80,7 +80,7 @@ func attachmentInputsToBlocks(inputs []*AttachmentInput) []*pb.AttachmentContent
 		if a.InlinedText != nil {
 			inlined = *a.InlinedText
 		}
-		out = append(out, &pb.AttachmentContent{
+		out = append(out, &threadv1.AttachmentContent{
 			Id:          a.ID,
 			Filename:    a.Filename,
 			MimeType:    a.MimeType,
@@ -91,4 +91,3 @@ func attachmentInputsToBlocks(inputs []*AttachmentInput) []*pb.AttachmentContent
 	}
 	return out
 }
-

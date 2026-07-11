@@ -1,0 +1,85 @@
+syntax = "proto3";
+
+package grudge.rrc.v1;
+
+option go_package = "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1;rrcv1";
+
+import "google/protobuf/timestamp.proto";
+import "grudge/thread/v1/thread.proto";
+
+// Prerequisite DAG edge. Produced by cross-encoder scoring or recorded
+// as generation provenance.
+
+enum EdgeSource {
+  EDGE_SOURCE_UNSPECIFIED = 0;
+  EDGE_SOURCE_CROSS_ENCODER = 1;
+  // Recorded at generation time: "the turn at to_message_id was generated
+  // from from_message_id." Not similarity-scored — it is a fact about what
+  // fed the turn, legible even where semantic similarity is near zero. Its
+  // `score` field carries the contribution weight (was the source
+  // load-bearing for the turn, not merely present). Provenance edges are
+  // the structural signal that lifts required-but-weakly-connected
+  // prerequisites — roots above all — over calibrated acceptance.
+  EDGE_SOURCE_PROVENANCE = 4;
+}
+
+message Edge {
+  string from_message_id = 1;
+  string to_message_id = 2;
+  float score = 3;
+  EdgeSource source = 4;
+  float cross_encoder_score = 5;
+  google.protobuf.Timestamp detected_at = 8;
+  string from_thread_id = 9;  // Thread origin of the source message. Visible in citations when cross-thread.
+  string to_thread_id = 10;
+  // Which instrument measured this edge's observations. Raw similarity
+  // (cross_encoder_score) and provenance contribution weights are in the
+  // scorer's units — instrument-relative facts, like the scores cache's
+  // model key. Stamped at formation because it is retroactively
+  // unrecoverable: an unstamped edge's instrument is unknowable later.
+  // A scorer swap re-MEASURES foreign-unit observations (a new fact by a
+  // new instrument); it never rewrites them.
+  string scorer_model = 11;
+}
+
+// Selection result. Returned by the RRC engine. Drives citations in the UI.
+
+message SelectedMessage {
+  string message_id = 1;
+  float effective_score = 2;
+  int32 hop_depth = 3;
+  repeated Edge via_edges = 4;
+  string thread_id = 5;       // Thread the selected message belongs to
+  bool cross_thread = 6;      // True if selected from a different thread than the prompt
+  // Raw dependency evidence for provenance banking: the product of
+  // cross_encoder_score along the via-path (1-hop: the accepting edge's
+  // raw CE). Stamped at selection-entry construction — BEFORE transitive
+  // reduction prunes via_edges and BEFORE MMR rewrites effective_score —
+  // so neither the mass lift nor the diversity rewrite ever launders
+  // into the recorded provenance graph.
+  float provenance_weight = 7;
+}
+
+enum ExclusionReason {
+  EXCLUSION_REASON_UNSPECIFIED = 0;
+  EXCLUSION_REASON_BELOW_THRESHOLD = 1;
+  EXCLUSION_REASON_TRANSITIVE_REDUCTION = 2;
+  EXCLUSION_REASON_DEPTH_LIMIT = 3;
+}
+
+message ExcludedMessage {
+  string message_id = 1;
+  ExclusionReason reason = 2;
+  float score = 3;
+}
+
+message SelectionResult {
+  string event_id = 1;                // Unique ID for this RRC selection event
+  grudge.thread.v1.SelectionScope scope = 2;           // Thread-scoped or all-threads
+  string thread_id = 3;               // Thread where the prompt originated
+  repeated SelectedMessage selected = 4;
+  repeated ExcludedMessage excluded = 5;
+  string local_context_fingerprint = 6;       // Exact bounded Local Context serialization
+  repeated string local_context_message_ids = 7;
+  string anchor_message_id = 8;       // Latest stored event receiving DAG edges
+}

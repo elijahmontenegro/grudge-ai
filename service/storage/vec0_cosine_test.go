@@ -4,11 +4,11 @@ import (
 	"math"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// TestVec0Cosine_RoundTrip pins migrationV5's distance_metric=cosine
+// TestVec0Cosine_RoundTrip pins the baseline schema's distance_metric=cosine
 // declaration. Without it sqlite-vec defaults to L2, and the
 // engine's Layer-1-score consumer (rrccache.NearestChunks) computes
 // similarity as `1.0 - row.Distance`. That conversion is correct
@@ -20,7 +20,7 @@ import (
 // This test inserts a known pair (query vec, two candidates with
 // analytically computable cosine distances), runs NearestChunkVectors,
 // and asserts `row.Distance` matches the analytical cosine distance
-// to floating-point precision. If migrationV5 regresses (someone
+// to floating-point precision. If the schema regresses (someone
 // drops the distance_metric clause), this fails immediately.
 //
 // Vectors must be 1024-dim to match the schema (chunk_vectors
@@ -33,16 +33,16 @@ func TestVec0Cosine_RoundTrip(t *testing.T) {
 	// Schema requires a thread + messages to exist before
 	// InsertChunkEmbedding can populate chunk_vectors (FK lookup
 	// against messages for thread_id / role).
-	if err := db.CreateThread(&pb.Thread{
+	if err := db.CreateThread(&threadv1.Thread{
 		Id: "tCos", Name: "cosine probe", CreatedAt: timestamppb.Now(),
 	}); err != nil {
 		t.Fatalf("CreateThread: %v", err)
 	}
 	for _, id := range []string{"q", "near", "far"} {
-		msg := &pb.Message{
-			Id: id, ThreadId: "tCos", Role: pb.Role_ROLE_USER,
-			Content: []*pb.ContentBlock{{Block: &pb.ContentBlock_Text{
-				Text: &pb.TextContent{Text: id},
+		msg := &threadv1.Message{
+			Id: id, ThreadId: "tCos", Role: threadv1.Role_ROLE_USER,
+			Content: []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{
+				Text: &threadv1.TextContent{Text: id},
 			}}},
 			Position: 0, CreatedAt: timestamppb.Now(),
 		}

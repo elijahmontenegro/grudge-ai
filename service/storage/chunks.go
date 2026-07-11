@@ -73,8 +73,7 @@ func (d *DB) GetChunks(messageID string) ([]Chunk, error) {
 
 // GetChunksForMessages fetches all chunks for a list of messages in
 // one query. Returns a map keyed by message_id, each value ordered
-// by chunk_index. Used in hot paths (OnMessage scoring) where we
-// want chunks for many priors in bulk.
+// by chunk_index. Used when scoring many candidates for one query.
 func (d *DB) GetChunksForMessages(messageIDs []string) (map[string][]Chunk, error) {
 	if len(messageIDs) == 0 {
 		return map[string][]Chunk{}, nil
@@ -109,32 +108,6 @@ func (d *DB) GetChunksForMessages(messageIDs []string) (map[string][]Chunk, erro
 	return out, rows.Err()
 }
 
-// MessagesWithoutChunks returns message IDs that have text content but
-// no chunks persisted. Used by the startup backfill to populate
-// chunks for messages that existed before the chunk table was added
-// (post-v2 migration) or for messages where chunking failed mid-transaction.
-func (d *DB) MessagesWithoutChunks() ([]string, error) {
-	rows, err := d.Query(`
-		SELECT m.id FROM messages m
-		LEFT JOIN chunks c ON c.message_id = m.id
-		WHERE c.message_id IS NULL
-		ORDER BY m.created_at
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
-}
-
 // ChunkExists returns true if any chunk exists for the message.
 func (d *DB) ChunkExists(messageID string) (bool, error) {
 	var n int
@@ -143,4 +116,44 @@ func (d *DB) ChunkExists(messageID string) (bool, error) {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// RandomChunkRef is one row of the acceptance law's noise reference: a
+// corpus chunk with the fields the oracle needs to build an rrc.ChunkRef.
+type RandomChunkRef struct {
+	MessageID  string
+	ChunkIndex int
+	Text       string
+	ThreadID   string
+}
+
+// RandomChunkRefs draws `limit` chunks deterministically pseudo-randomly:
+// rows ordered by a Knuth multiplicative hash of (rowid + seed) — the
+// seed mixes BEFORE the multiply (added after, it would shift all values
+// equally and preserve the ordering) — so the
+// same seed always draws the same sample and different seeds draw
+// independent ones. This is the selection event's background sample —
+// unbiased by similarity, unlike any ANN shortlist.
+func (d *DB) RandomChunkRefs(limit int, seed uint64) ([]RandomChunkRef, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := d.Query(`
+		SELECT c.message_id, c.chunk_index, c.text, m.thread_id
+		FROM chunks c JOIN messages m ON m.id = c.message_id
+		ORDER BY ((c.rowid + ?) * 2654435761) % 4294967296
+		LIMIT ?`, int64(seed%4294967296), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RandomChunkRef
+	for rows.Next() {
+		var r RandomChunkRef
+		if err := rows.Scan(&r.MessageID, &r.ChunkIndex, &r.Text, &r.ThreadID); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

@@ -1,7 +1,7 @@
 package storage
 
 import (
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -17,7 +17,10 @@ import (
 // panel wants and it's small.
 
 // SaveSelection persists a SelectionResult. Idempotent by event_id.
-func (d *DB) SaveSelection(result *pb.SelectionResult, targetMessageID, threadID string) error {
+// Everything queryable (scope, fingerprint, Local Context ids, thread)
+// lives inside the marshaled result; the row carries only the lookup
+// keys.
+func (d *DB) SaveSelection(result *rrcv1.SelectionResult, anchorMessageID string) error {
 	if result == nil {
 		return nil
 	}
@@ -26,17 +29,19 @@ func (d *DB) SaveSelection(result *pb.SelectionResult, targetMessageID, threadID
 		return err
 	}
 	_, err = d.Exec(
-		`INSERT OR REPLACE INTO selections (event_id, target_message_id, thread_id, scope, result) VALUES (?, ?, ?, ?, ?)`,
-		result.EventId, targetMessageID, threadID, int(result.Scope), blob,
+		`INSERT OR REPLACE INTO selections
+		 (event_id, anchor_message_id, result)
+		 VALUES (?, ?, ?)`,
+		result.EventId, anchorMessageID, blob,
 	)
 	return err
 }
 
 // GetSelection fetches a persisted SelectionResult by event_id.
 // Returns (nil, nil) if not found — selections are optional; Retrieval
-// Events without a Query (autonomous continuation) skip Selection
+// Autonomous continuations without a new event skip Selection
 // entirely and have no row.
-func (d *DB) GetSelection(eventID string) (*pb.SelectionResult, error) {
+func (d *DB) GetSelection(eventID string) (*rrcv1.SelectionResult, error) {
 	var blob []byte
 	err := d.QueryRow(
 		`SELECT result FROM selections WHERE event_id = ?`,
@@ -45,31 +50,27 @@ func (d *DB) GetSelection(eventID string) (*pb.SelectionResult, error) {
 	if err != nil {
 		return nil, nil
 	}
-	result := &pb.SelectionResult{}
+	result := &rrcv1.SelectionResult{}
 	if err := proto.Unmarshal(blob, result); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-// GetSelectionForMessage returns the SelectionResult that drove the
-// turn which produced the given target message. The engine's event_id
-// format is sel-<target_message_id>, so we can derive the lookup key
-// without an extra column scan, but the target_message_id column is
-// still the supported query path for when the format changes.
-func (d *DB) GetSelectionForMessage(messageID string) (*pb.SelectionResult, error) {
+// GetSelectionForMessage returns the SelectionResult anchored to the
+// given stored event.
+func (d *DB) GetSelectionForMessage(messageID string) (*rrcv1.SelectionResult, error) {
 	var blob []byte
 	err := d.QueryRow(
-		`SELECT result FROM selections WHERE target_message_id = ? ORDER BY created_at DESC LIMIT 1`,
+		`SELECT result FROM selections WHERE anchor_message_id = ? ORDER BY created_at DESC LIMIT 1`,
 		messageID,
 	).Scan(&blob)
 	if err != nil {
 		return nil, nil
 	}
-	result := &pb.SelectionResult{}
+	result := &rrcv1.SelectionResult{}
 	if err := proto.Unmarshal(blob, result); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
-

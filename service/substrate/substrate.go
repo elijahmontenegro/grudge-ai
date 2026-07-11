@@ -16,65 +16,16 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
+	"math"
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/service/config"
+	"github.com/elijahmontenegro/grudge/service/oracle"
 	"github.com/elijahmontenegro/grudge/service/search"
 	"github.com/elijahmontenegro/grudge/service/storage"
 )
-
-// backfillChunks populates the chunks table for every message
-// that has none. Cheap enough to block boot — no network calls,
-// pure text-chunking in Go.
-func backfillChunks(db *storage.DB, chunkCfg chunk.Config) error {
-	ids, err := db.MessagesWithoutChunks()
-	if err != nil {
-		return fmt.Errorf("MessagesWithoutChunks: %w", err)
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	log.Printf("Chunk backfill: processing %d pre-existing messages", len(ids))
-	start := time.Now()
-	var withChunks, withoutText int
-	for _, id := range ids {
-		msg, err := db.GetMessage(id)
-		if err != nil || msg == nil {
-			continue
-		}
-		text := rrc.TextFromBlocks(msg.Content)
-		if text == "" {
-			withoutText++
-			continue
-		}
-		rcs := chunk.Split(text, chunkCfg)
-		if len(rcs) == 0 {
-			withoutText++
-			continue
-		}
-		schunks := make([]storage.Chunk, len(rcs))
-		for i, c := range rcs {
-			schunks[i] = storage.Chunk{
-				ChunkIndex: c.Index,
-				Text:       c.Text,
-				ByteStart:  c.ByteStart,
-				ByteEnd:    c.ByteEnd,
-				TokenEst:   c.TokenEst,
-			}
-		}
-		if err := db.InsertChunks(id, schunks); err != nil {
-			log.Printf("Chunk backfill: InsertChunks(%s): %v", id, err)
-			continue
-		}
-		withChunks++
-	}
-	log.Printf("Chunk backfill: chunked %d messages (%d text-only, %d empty) in %v",
-		withChunks, withChunks, withoutText, time.Since(start))
-	return nil
-}
 
 // Substrate is the wired-up runtime substrate consumers receive
 // from Build. Every field is non-nil unless the corresponding
@@ -112,6 +63,15 @@ type Option func(*options)
 type options struct {
 	scorer      core.Scorer
 	chunkOracle rrc.ChunkOracle
+	estimator   chunk.TokenEstimator
+}
+
+// WithTokenEstimator supplies the token estimator the engine config
+// carries (chunking, budget sizing, wire estimation). Required: Build
+// fails without one — a substrate with no token units cannot enforce
+// any budget contract.
+func WithTokenEstimator(e chunk.TokenEstimator) Option {
+	return func(o *options) { o.estimator = e }
 }
 
 // WithScorer overrides the scorer substrate would otherwise
@@ -185,7 +145,12 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 			return nil, fmt.Errorf("scorer (%s/%s): %w", scrCfg.Adapter, scrCfg.Model, err)
 		}
 		s.Scorer = sc
-		s.RerankerModelID = scrCfg.Model
+		// The artifact-binding identity is the full endpoint identity, not
+		// the bare model name: an empty Model (TEI-style endpoint-defined
+		// scorers) must never wildcard-match a foreign artifact, and the
+		// same model name behind a different endpoint is a different score
+		// distribution.
+		s.RerankerModelID = scrCfg.Adapter + "/" + scrCfg.Model + "@" + scrCfg.BaseURL
 		log.Printf("Scorer: %s/%s @ %s", scrCfg.Adapter, scrCfg.Model, scrCfg.BaseURL)
 	}
 
@@ -207,43 +172,43 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		s.EmbedModelID = embCfg.Model
 	}
 
+	// Self-adapting embedding dimension. Probe the configured embedder for
+	// its native vector width and reconcile the vector cache to it before the
+	// ChunkOracle / backfill are constructed (they must see the final table).
+	// A dimension change drops and rebuilds chunk_vectors; the backfill
+	// goroutine then re-embeds the corpus under the new dim. A transient
+	// probe failure degrades to skip-rebuild rather than crashing boot.
+	if s.Embedder != nil && s.EmbedModelID != "" {
+		if vecs, err := s.Embedder.Embed(ctx, core.RoleDocument, []string{"probe"}); err == nil && len(vecs) > 0 && len(vecs[0]) > 0 {
+			if err := db.EnsureEmbeddingDim(len(vecs[0]), s.EmbedModelID); err != nil {
+				return nil, fmt.Errorf("ensure embedding dim: %w", err)
+			}
+		} else {
+			log.Printf("WARNING: embedding dim probe failed, skipping vector-table reconcile: %v", err)
+		}
+	}
+
 	if s.Scorer == nil || s.MainCompleter == nil {
 		log.Printf("WARNING: providers not fully configured — configure at http://grudge.localhost:8420/settings")
 	}
 
-	// RRC engine. Config precedence: zero Settings.Engine → DefaultConfig
-	// (first run / pre-engine-block legacy config). Otherwise trust the
-	// persisted snapshot verbatim — zero in an individual field is
-	// intentional (ScoreFloor=0 → no cutoff, etc.).
+	// A completely absent Engine block uses canonical defaults. Once
+	// present, the persisted snapshot is authoritative.
 	rrcCfg := rrc.DefaultConfig()
+	if o.estimator == nil {
+		return nil, fmt.Errorf("substrate.Build: no token estimator (pass WithTokenEstimator)")
+	}
+	rrcCfg.Chunk.Estimator = o.estimator
 	if se := cfg.Settings.Engine; se != (config.EngineConfig{}) {
-		rrcCfg.EdgeThreshold = se.EdgeThreshold
-		rrcCfg.ScoreFloor = se.ScoreFloor
-		rrcCfg.ZScoreThreshold = se.ZScoreThreshold
-		rrcCfg.MinBatchStdDev = se.MinBatchStdDev
-		rrcCfg.RadiusSize = se.RadiusSize
-		rrcCfg.RerankTopK = se.RerankTopK
-		rrcCfg.ContextBudgetTokens = se.ContextBudgetTokens
-		// Preserve DefaultConfig values for new tunables when the
-		// persisted settings predate them.
-		if se.DiversityLambda > 0 {
-			rrcCfg.DiversityLambda = se.DiversityLambda
-		}
-		if se.BudgetHeadroomPct > 0 {
-			rrcCfg.BudgetHeadroomPct = se.BudgetHeadroomPct
-		}
-		if se.PerMsgDelimiterTokens > 0 {
-			rrcCfg.PerMsgDelimiterTokens = se.PerMsgDelimiterTokens
-		}
+		rrcCfg = se.ApplyTo(rrcCfg)
 	}
-	// Chunk backfill for pre-existing messages. Messages inserted
-	// before chunk-table migration have no rows — they'd be
-	// invisible to RRC scoring. Synchronous on startup because
-	// embedding backfill below depends on chunks existing first;
-	// pure text-chunking in Go, no network calls.
-	if err := backfillChunks(db, rrcCfg.Chunk); err != nil {
-		log.Printf("Chunk backfill: %v", err)
-	}
+
+	// Acceptance carries no fitted artifact and no persistent state:
+	// every threshold is measured by the selection event about itself
+	// (the rank-CFAR noise reference), interpreted within that event,
+	// and discarded. The one hand-set value judgment is LossRatio.
+	log.Printf("Acceptance: detection-theoretic (rank CFAR, R=%d ref/event, scorer=%s) | stance s0=-log2(1-LossRatio)=%.2f bits",
+		rrc.ReferenceSampleSize, s.RerankerModelID, -math.Log2(1-rrcCfg.LossRatio))
 
 	// Searcher + ChunkOracle share the same embedder and model id.
 	// Construct before the engine so the oracle can flow in as an
@@ -253,8 +218,18 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	if o.chunkOracle != nil {
 		s.ChunkOracle = o.chunkOracle
 	} else if s.Embedder != nil && s.EmbedModelID != "" {
-		s.Searcher = search.NewSearcher(s.Embedder, s.EmbedModelID, db)
-		s.ChunkOracle = search.NewChunkOracle(db, s.Embedder, s.EmbedModelID)
+		oc, err := oracle.NewChunkOracle(db, s.Embedder, s.EmbedModelID)
+		if err != nil {
+			return nil, fmt.Errorf("build chunk oracle: %w", err)
+		}
+		s.ChunkOracle = oc
+		// Every embedding-insert path (lazy EnsureVector, the post-insert
+		// embed queue, the backfill) feeds the ANN index through this hook,
+		// so the index stays current without those writers importing it.
+		db.SetEmbeddingObserver(oc.IndexAdd)
+		// Search shares the oracle's in-RAM index (same embedder + model) so it
+		// queries the same global graph.
+		s.Searcher = search.NewSearcher(s.Embedder, s.EmbedModelID, db, oc.Index())
 	}
 
 	// Engine constructed in one shot with everything wired:
@@ -269,40 +244,35 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		log.Printf("Loaded %d edges", len(edges))
 	}
 	if s.RerankerModelID != "" {
-		if scores, err := db.ChunkScoresForModel(s.RerankerModelID); err == nil && len(scores) > 0 {
+		if scores, err := db.LocalContextScoresForModel(s.RerankerModelID); err == nil && len(scores) > 0 {
 			converted := make([]rrc.PersistedScore, 0, len(scores))
 			for k, v := range scores {
 				converted = append(converted, rrc.PersistedScore{
-					FromMsgID:    k.FromID,
-					FromChunkIdx: k.FromIdx,
-					ToMsgID:      k.ToID,
-					ToChunkIdx:   k.ToIdx,
-					Score:        v,
+					LocalContextFingerprint: k.LocalContextFingerprint,
+					LocalContextChunkIndex:  k.LocalContextChunkIndex,
+					CandidateMsgID:          k.CandidateID,
+					CandidateChunkIdx:       k.CandidateChunkIdx,
+					Score:                   v,
 				})
 			}
 			engineOpts = append(engineOpts, rrc.WithLoadedScores(converted))
-			log.Printf("Loaded %d chunk-pair scores (model=%s)", len(scores), s.RerankerModelID)
+			log.Printf("Loaded %d Local Context/candidate scores (model=%s)", len(scores), s.RerankerModelID)
 		}
 		modelID := s.RerankerModelID
-		engineOpts = append(engineOpts, rrc.WithScorePersister(func(fromID string, fromIdx int, toID string, toIdx int, score float64) {
-			if err := db.InsertChunkScore(fromID, fromIdx, toID, toIdx, modelID, score); err != nil {
-				log.Printf("InsertChunkScore(%s[%d], %s[%d], %s): %v", fromID, fromIdx, toID, toIdx, modelID, err)
+		engineOpts = append(engineOpts, rrc.WithScorePersister(func(fingerprint string, localContextChunkIndex int, candidateID string, candidateChunkIndex int, score float64) {
+			if err := db.InsertLocalContextScore(fingerprint, localContextChunkIndex, candidateID, candidateChunkIndex, modelID, score); err != nil {
+				log.Printf("InsertLocalContextScore(%s[%d], %s[%d], %s): %v", fingerprint, localContextChunkIndex, candidateID, candidateChunkIndex, modelID, err)
 			}
 		}))
 	}
 	if s.ChunkOracle != nil {
 		engineOpts = append(engineOpts, rrc.WithChunkOracle(s.ChunkOracle))
 	}
+	// Instrument identity: every formed edge's observations (raw sims,
+	// contribution weights) are stamped with the scorer that measured
+	// them — retroactively unrecoverable, so it rides config from day one.
+	rrcCfg.ScorerModelID = s.RerankerModelID
 	s.Engine = rrc.NewEngine(rrcCfg, s.Scorer, engineOpts...)
-
-	// Backfill chunk embeddings in the background. Non-blocking —
-	// service accepts requests immediately; OnMessage misses on
-	// not-yet-backfilled chunks just embed live. Skip when the
-	// oracle was injected (it may not implement the production
-	// BackfillEmbeddings protocol).
-	if real, ok := s.ChunkOracle.(*search.ChunkOracle); ok {
-		go real.BackfillEmbeddings(context.Background())
-	}
 
 	return s, nil
 }

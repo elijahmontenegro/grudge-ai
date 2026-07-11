@@ -12,11 +12,11 @@ import (
 
 // Error type constants for GraphQL error extensions.
 const (
-	ErrTypeProviderUnavailable  = "PROVIDER_UNAVAILABLE"
-	ErrTypeScorerUnavailable = "SCORER_UNAVAILABLE"
-	ErrTypeContextLength        = "CONTEXT_LENGTH"
-	ErrTypeToolDenied           = "TOOL_DENIED"
-	ErrTypeAgentError           = "AGENT_ERROR"
+	ErrTypeProviderUnavailable = "PROVIDER_UNAVAILABLE"
+	ErrTypeScorerUnavailable   = "SCORER_UNAVAILABLE"
+	ErrTypeContextLength       = "CONTEXT_LENGTH"
+	ErrTypeToolDenied          = "TOOL_DENIED"
+	ErrTypeAgentError          = "AGENT_ERROR"
 )
 
 // ErrorPresenter maps Go errors to typed GraphQL errors with extensions.

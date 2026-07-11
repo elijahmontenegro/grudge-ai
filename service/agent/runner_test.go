@@ -1,15 +1,15 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"iter"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc/chunk"
-	"github.com/elijahmontenegro/grudge/rrc/tiktoken"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/elijahmontenegro/grudge/service/storage"
 
 	"google.golang.org/adk/model"
@@ -18,15 +18,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func init() {
-	// chunk.Split is called from storage.InsertMessage; the
-	// estimator must be installed before any test exercises that path.
-	est, err := tiktoken.New()
-	if err != nil {
-		panic("runner_test: tiktoken.New: " + err.Error())
-	}
-	chunk.SetDefaultEstimator(est)
-}
+// runnerTestEstimator: the estimator lives on chunk.Config now; the
+// runner tests thread it through the engine configs they build.
+type runnerTestEstimator struct{}
+
+func (runnerTestEstimator) Estimate(s string) int { return len(s)/4 + 1 }
 
 // --- Test runner + event fixtures ---
 
@@ -41,7 +37,7 @@ func newTestRunner(t *testing.T, threadID string) *Runner {
 		t.Fatalf("storage.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := db.CreateThread(&pb.Thread{
+	if err := db.CreateThread(&threadv1.Thread{
 		Id: threadID, Name: "test", CreatedAt: timestamppb.Now(),
 	}); err != nil {
 		t.Fatalf("CreateThread: %v", err)
@@ -50,6 +46,57 @@ func newTestRunner(t *testing.T, threadID string) *Runner {
 		db:       db,
 		threadID: threadID,
 		msgSeq:   atomic.Int64{},
+	}
+}
+
+// TestPositionAuthority_MaxSeededAndCollisionFree pins A2-W7: every
+// position mints from the runner's msgSeq, seeded from MAX(position) —
+// never COUNT(*). With gaps or duplicated positions in history (the
+// measured pre-A2 corpus shape), a count seed mints colliding positions;
+// the max seed places every new row strictly above every existing one,
+// and out-of-runner writers (NextPosition) share the same atomic so they
+// can never collide with runner message sites.
+func TestPositionAuthority_MaxSeededAndCollisionFree(t *testing.T) {
+	r := newTestRunner(t, "t-pos")
+	// Gap + duplicate: COUNT(*)=3 but the high-water mark is 20.
+	for _, m := range []*threadv1.Message{
+		{Id: "h0", ThreadId: "t-pos", Role: threadv1.Role_ROLE_USER, Position: 0},
+		{Id: "h1", ThreadId: "t-pos", Role: threadv1.Role_ROLE_ASSISTANT, Position: 20},
+		{Id: "h2", ThreadId: "t-pos", Role: threadv1.Role_ROLE_USER, Position: 20},
+	} {
+		if err := r.db.InsertMessage(m, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := r.NextPosition()
+	if first != 21 {
+		t.Fatalf("NextPosition over max=20 corpus = %d, want 21 (a COUNT seed would mint 4)", first)
+	}
+	// The runner message-site pattern: the id mint advances msgSeq, then
+	// Position reads it — strictly increasing past the resolver mint.
+	_ = r.nextMsgID()
+	pos := r.msgSeq.Load()
+	if pos != first+1 {
+		t.Fatalf("runner site minted %d, want %d (strictly after NextPosition)", pos, first+1)
+	}
+	// Re-syncing never regresses the counter below in-memory mints
+	// (buffered tool calls hold positions the DB cannot see yet).
+	r.syncMsgSeq()
+	if got := r.msgSeq.Load(); got != pos {
+		t.Fatalf("syncMsgSeq regressed the counter: %d -> %d", pos, got)
+	}
+}
+
+// TestCurrentTurn_AccessorIsMuFree: resolver-side writers read the
+// in-flight turn id without the runner mutex; a fresh runner reads "".
+func TestCurrentTurn_AccessorIsMuFree(t *testing.T) {
+	r := newTestRunner(t, "t-turn")
+	if got := r.CurrentTurn(); got != "" {
+		t.Fatalf("fresh runner CurrentTurn = %q, want empty", got)
+	}
+	r.currentTurnID.Store("turn-t-turn-1")
+	if got := r.CurrentTurn(); got != "turn-t-turn-1" {
+		t.Fatalf("CurrentTurn = %q, want turn-t-turn-1", got)
 	}
 }
 
@@ -116,9 +163,41 @@ func textEvent(text string, thought bool) *session.Event {
 	}
 }
 
+// thinkingChunkEvent builds one thinking Part carrying an optional
+// signature — mirrors what the bridge yields per streamed thinking
+// chunk: a text-bearing part with no signature, or (per Anthropic's
+// zero-text terminator) an empty-text part carrying only the
+// signature that closes the block.
+func thinkingChunkEvent(text string, signature []byte) *session.Event {
+	return &session.Event{
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Role:  "model",
+				Parts: []*genai.Part{{Text: text, Thought: true, ThoughtSignature: signature}},
+			},
+		},
+	}
+}
+
+// fnCallEventSigned is fnCallEvent with a Gemini-style Part-level
+// thought signature attached to the function call.
+func fnCallEventSigned(id, name string, args map[string]any, signature []byte) *session.Event {
+	return &session.Event{
+		LLMResponse: model.LLMResponse{
+			Content: &genai.Content{
+				Role: "model",
+				Parts: []*genai.Part{{
+					FunctionCall:     &genai.FunctionCall{ID: id, Name: name, Args: args},
+					ThoughtSignature: signature,
+				}},
+			},
+		},
+	}
+}
+
 // corpusOf returns the stored corpus for the runner's thread. Helper
 // shared by tests that check message ordering and dedup.
-func corpusOf(t *testing.T, r *Runner) []*pb.Message {
+func corpusOf(t *testing.T, r *Runner) []*threadv1.Message {
 	t.Helper()
 	msgs, err := r.db.ThreadCorpus(r.threadID)
 	if err != nil {
@@ -137,7 +216,7 @@ func TestProcessEvents_DuplicateFunctionCallDedup(t *testing.T) {
 	call := fnCallEvent("c1", "Bash", map[string]any{"cmd": "ls"})
 
 	events := eventSeq(call, call, call) // same event thrice
-	_, _ = r.processEvents(events)
+	_, _ = r.processEvents(context.Background(), events)
 
 	corpus := corpusOf(t, r)
 	count := 0
@@ -154,11 +233,17 @@ func TestProcessEvents_DuplicateFunctionCallDedup(t *testing.T) {
 }
 
 func TestProcessEvents_DuplicateFunctionResponseDedup(t *testing.T) {
+	// ADK sometimes re-emits the same FunctionResponse. A call plus its
+	// duplicated response must yield exactly one stored result. (A
+	// response with no call is dropped, not stored — see
+	// OrphanFunctionResponseDropped.)
 	r := newTestRunner(t, "thread-1")
-	resp := fnResponseEvent("c1", "Bash", map[string]any{"output": "out"})
-
-	events := eventSeq(resp, resp)
-	_, _ = r.processEvents(events)
+	events := eventSeq(
+		fnCallEvent("c1", "Bash", map[string]any{"cmd": "ls"}),
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "out"}),
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "out"}), // dup
+	)
+	_, _ = r.processEvents(context.Background(), events)
 
 	corpus := corpusOf(t, r)
 	count := 0
@@ -171,6 +256,80 @@ func TestProcessEvents_DuplicateFunctionResponseDedup(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("duplicate FunctionResponse should be stored once, got %d", count)
+	}
+}
+
+func TestProcessEvents_UnmatchedToolCallGetsExactErrorResult(t *testing.T) {
+	r := newTestRunner(t, "t-unmatched")
+	_, err := r.processEvents(context.Background(), eventSeqThenError(
+		errors.New("cancelled"),
+		fnCallEvent("call-1", "Read", map[string]any{"path": "x"}),
+	))
+	if err == nil {
+		t.Fatal("interrupted run should still report its error")
+	}
+	corpus := corpusOf(t, r)
+	if len(corpus) != 2 {
+		t.Fatalf("stored messages=%d, want call plus exact error result", len(corpus))
+	}
+	call := corpus[0].Content[0].GetToolCall()
+	result := corpus[1].Content[0].GetToolResult()
+	if call == nil || result == nil || call.Id != result.ToolCallId {
+		t.Fatalf("protocol relation not preserved: call=%+v result=%+v", call, result)
+	}
+	if !result.IsError {
+		t.Fatal("synthesized interruption result must be marked as an error")
+	}
+}
+
+func TestProcessEvents_UserStopPersistsNothingAndReturnsErrStopped(t *testing.T) {
+	// A user stop cancels turnCtx. Unlike a plain tool error (above), the
+	// cancellation "result" ADK reflects back (e.g. "approval: context
+	// canceled" from a pending Bash approval) must NOT be persisted into the
+	// corpus, and the turn must report the clean ErrStopped sentinel rather
+	// than a surfaced "agent error".
+	r := newTestRunner(t, "t-stop")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the stop happened before these events are drained
+
+	resp := fnResponseEvent("call-1", "Bash", map[string]any{"output": "approval: context canceled", "exit_code": 1})
+	_, err := r.processEvents(ctx, eventSeq(resp))
+
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("a cancelled turn must return ErrStopped, got %v", err)
+	}
+	if corpus := corpusOf(t, r); len(corpus) != 0 {
+		t.Fatalf("a user stop must persist no tool_result, got %d messages: %+v", len(corpus), corpus)
+	}
+}
+
+func TestProcessEvents_UserStopClosesProtocolForDanglingCall(t *testing.T) {
+	// The regression guard: a user stop cancels the turn AFTER a tool call was
+	// persisted but before its result. Protocol closure requires every persisted
+	// call to have a result, so the synthetic backfill must still run on cancel.
+	// An earlier version skipped it on cancel, leaving a dangling call that broke
+	// every later turn's assembly with "requires exact tool result".
+	r := newTestRunner(t, "t-stop-dangling")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := r.processEvents(ctx, eventSeq(fnCallEvent("call-1", "Bash", map[string]any{"cmd": "ls"})))
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("cancelled turn must return ErrStopped, got %v", err)
+	}
+	var haveCall, haveResult bool
+	for _, m := range corpusOf(t, r) {
+		for _, b := range m.Content {
+			if b.GetToolCall() != nil {
+				haveCall = true
+			}
+			if tr := b.GetToolResult(); tr != nil && tr.ToolCallId == "call-1" {
+				haveResult = true
+			}
+		}
+	}
+	if !haveCall || !haveResult {
+		t.Fatalf("a cancelled tool call must be protocol-closed (call=%v result=%v); a dangling call breaks later turns", haveCall, haveResult)
 	}
 }
 
@@ -189,7 +348,7 @@ func TestProcessEvents_ThinkingFlushedBeforeToolCall(t *testing.T) {
 		textEvent("done", false),
 	)
 
-	_, err := r.processEvents(events)
+	_, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("processEvents: %v", err)
 	}
@@ -228,7 +387,7 @@ func TestProcessEvents_TextAndThinkingAccumulateSeparately(t *testing.T) {
 		textEvent("42.", false),
 	)
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("processEvents: %v", err)
 	}
@@ -246,6 +405,86 @@ func TestProcessEvents_TextAndThinkingAccumulateSeparately(t *testing.T) {
 	}
 }
 
+// A signature binds to the exact text accumulated when it arrives —
+// two independently signed thinking segments must become two
+// separately stored messages, each with its own signature, not one
+// merged message under either signature.
+func TestProcessEvents_SignatureTriggersThinkingFlush(t *testing.T) {
+	r := newTestRunner(t, "thread-1")
+	events := eventSeq(
+		thinkingChunkEvent("first reasoning", nil),
+		thinkingChunkEvent("", []byte("sig-1")),
+		thinkingChunkEvent("second reasoning", nil),
+		thinkingChunkEvent("", []byte("sig-2")),
+		textEvent("done", false),
+	)
+
+	msg, err := r.processEvents(context.Background(), events)
+	if err != nil {
+		t.Fatalf("processEvents: %v", err)
+	}
+	if msg == nil || msg.Content[0].GetText() == nil || msg.Content[0].GetText().Text != "done" {
+		t.Fatalf("expected final text message \"done\", got %+v", msg)
+	}
+
+	corpus := corpusOf(t, r)
+	if len(corpus) != 3 {
+		t.Fatalf("expected 2 signed thinking messages + 1 final text, got %d: %+v", len(corpus), corpus)
+	}
+	th1 := corpus[0].Content[0].GetThinking()
+	if th1 == nil || th1.Text != "first reasoning" || string(th1.Signature) != "sig-1" {
+		t.Fatalf("first thinking block wrong: %+v", th1)
+	}
+	th2 := corpus[1].Content[0].GetThinking()
+	if th2 == nil || th2.Text != "second reasoning" || string(th2.Signature) != "sig-2" {
+		t.Fatalf("second thinking block wrong: %+v", th2)
+	}
+	if corpus[2].Content[0].GetText() == nil {
+		t.Fatalf("third stored message should be the final text, got %+v", corpus[2])
+	}
+}
+
+// A Gemini function call's Part-level thought signature is stored on
+// the persisted ToolCallContent block.
+func TestProcessEvents_ToolCallSignatureStored(t *testing.T) {
+	r := newTestRunner(t, "thread-1")
+	events := eventSeq(
+		fnCallEventSigned("c1", "Bash", map[string]any{"cmd": "ls"}, []byte("call-sig")),
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "out"}),
+		textEvent("done", false),
+	)
+
+	_, err := r.processEvents(context.Background(), events)
+	if err != nil {
+		t.Fatalf("processEvents: %v", err)
+	}
+
+	corpus := corpusOf(t, r)
+	call := corpus[0].Content[0].GetToolCall()
+	if call == nil || string(call.Signature) != "call-sig" {
+		t.Fatalf("tool_call signature not stored: %+v", call)
+	}
+}
+
+// Thinking that never receives a signature accumulates exactly as
+// before — no premature flush, no signature on the eventual message.
+func TestProcessEvents_UnsignedThinkingAccumulatesAsBefore(t *testing.T) {
+	r := newTestRunner(t, "thread-1")
+	events := eventSeq(
+		textEvent("reasoning", true),
+		textEvent("more", true),
+	)
+
+	msg, err := r.processEvents(context.Background(), events)
+	if err != nil {
+		t.Fatalf("processEvents: %v", err)
+	}
+	th := msg.Content[0].GetThinking()
+	if th == nil || th.Text != "reasoningmore" || len(th.Signature) != 0 {
+		t.Fatalf("unsigned thinking should accumulate with no signature: %+v", th)
+	}
+}
+
 func TestProcessEvents_ContentWinsOverLastErr(t *testing.T) {
 	// If content accumulated AND the iterator errored, content path
 	// wins — the message is returned, error is swallowed. Represents
@@ -254,7 +493,7 @@ func TestProcessEvents_ContentWinsOverLastErr(t *testing.T) {
 	boom := errors.New("stream broken after content")
 	events := eventSeqThenError(boom, textEvent("partial answer", false))
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("content should win over lastErr, got err: %v", err)
 	}
@@ -274,7 +513,7 @@ func TestProcessEvents_ErrorWithNoContent(t *testing.T) {
 	boom := errors.New("total failure")
 	events := eventSeqThenError(boom)
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if msg != nil {
 		t.Fatalf("expected nil message, got %+v", msg)
 	}
@@ -294,7 +533,7 @@ func TestProcessEvents_NoEventsReturnsError(t *testing.T) {
 	r := newTestRunner(t, "thread-1")
 	events := eventSeq()
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if msg != nil {
 		t.Fatalf("expected nil message, got %+v", msg)
 	}
@@ -313,7 +552,7 @@ func TestProcessEvents_NilContentSkipped(t *testing.T) {
 	nilContentEvent := &session.Event{LLMResponse: model.LLMResponse{Content: nil}}
 	events := eventSeq(nilContentEvent, textEvent("after empty", false))
 
-	msg, err := r.processEvents(events)
+	msg, err := r.processEvents(context.Background(), events)
 	if err != nil {
 		t.Fatalf("nil-content event should be skipped silently: %v", err)
 	}
@@ -348,7 +587,7 @@ func TestProcessEvents_MultipleDistinctToolCalls(t *testing.T) {
 		fnResponseEvent("c2", "Grep", map[string]any{"output": "two"}),
 	)
 
-	_, _ = r.processEvents(events)
+	_, _ = r.processEvents(context.Background(), events)
 	corpus := corpusOf(t, r)
 	calls, results := 0, 0
 	for _, m := range corpus {
@@ -381,12 +620,126 @@ func TestProcessEvents_OnToolCallCallback(t *testing.T) {
 		fnResponseEvent("c1", "Bash", map[string]any{"output": "x"}),
 		fnResponseEvent("c1", "Bash", map[string]any{"output": "x"}), // dup
 	)
-	_, _ = r.processEvents(events)
+	_, _ = r.processEvents(context.Background(), events)
 
 	if callCount != 1 {
 		t.Fatalf("OnToolCall should fire once per unique ID, got %d", callCount)
 	}
 	if resultCount != 1 {
 		t.Fatalf("OnToolResult should fire once per unique ID, got %d", resultCount)
+	}
+}
+
+func TestProcessEvents_OrphanFunctionResponseDropped(t *testing.T) {
+	// A FunctionResponse with no matching (buffered) tool_call is
+	// unpairable — persisting it would brick CloseGroup ("requires exact
+	// tool call"). It must be dropped, not stored. (Cannot occur in the
+	// real ADK loop; every response follows a call.)
+	r := newTestRunner(t, "thread-1")
+	_, _ = r.processEvents(context.Background(), eventSeq(
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "out"}),
+	))
+	if corpus := corpusOf(t, r); len(corpus) != 0 {
+		t.Fatalf("orphan tool_result must be dropped, got %d messages: %+v", len(corpus), corpus)
+	}
+}
+
+func TestProcessEvents_ParallelToolCallsGroupedAndClosed(t *testing.T) {
+	// Two parallel tool calls (both emitted before either result) persist
+	// as a GROUPED, fully-closed corpus — call1, call2, result1, result2
+	// in position order, byte-identical to the pre-change shape, because
+	// positions are stamped at emission, not at insert. Each call pairs
+	// with its result.
+	r := newTestRunner(t, "thread-1")
+	events := eventSeq(
+		fnCallEvent("c1", "Bash", map[string]any{"cmd": "ls"}),
+		fnCallEvent("c2", "Grep", map[string]any{"pattern": "foo"}),
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "one"}),
+		fnResponseEvent("c2", "Grep", map[string]any{"output": "two"}),
+		textEvent("done", false),
+	)
+	if _, err := r.processEvents(context.Background(), events); err != nil {
+		t.Fatalf("processEvents: %v", err)
+	}
+	var kinds []string
+	for _, m := range corpusOf(t, r) {
+		b := m.Content[0]
+		switch {
+		case b.GetToolCall() != nil:
+			kinds = append(kinds, "call:"+b.GetToolCall().Id)
+		case b.GetToolResult() != nil:
+			kinds = append(kinds, "result:"+b.GetToolResult().ToolCallId)
+		case b.GetText() != nil:
+			kinds = append(kinds, "text")
+		default:
+			kinds = append(kinds, "other")
+		}
+	}
+	want := []string{"call:c1", "call:c2", "result:c1", "result:c2", "text"}
+	if len(kinds) != len(want) {
+		t.Fatalf("corpus shape = %v, want %v", kinds, want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("corpus[%d] = %s, want %s (full: %v)", i, kinds[i], want[i], kinds)
+		}
+	}
+}
+
+func TestProcessEvents_EmptyToolCallIDFailsFast(t *testing.T) {
+	// An empty tool-call id is unpairable — the turn must fail loudly
+	// rather than silently drop the call or persist an unpairable one.
+	r := newTestRunner(t, "thread-1")
+	_, err := r.processEvents(context.Background(), eventSeq(
+		fnCallEvent("", "Bash", map[string]any{"cmd": "ls"}),
+	))
+	if err == nil {
+		t.Fatal("empty tool-call id must fail the turn")
+	}
+	if corpus := corpusOf(t, r); len(corpus) != 0 {
+		t.Fatalf("empty-id call must persist nothing, got %d: %+v", len(corpus), corpus)
+	}
+}
+
+func TestProcessEvents_CorpusPassesRealProtocolClosure(t *testing.T) {
+	// The crux of the whole change: a corpus produced by the deferred-pair
+	// write path must pass rrc's REAL protocol closure — every tool_call
+	// has its result and vice versa — for EVERY proto-bearing root. This is
+	// exactly what GenerateContent runs (via Assemble) over the turn's
+	// messages at each model call; a dangling pair here is the brick this
+	// change removes. Exercises a mixed turn: thinking, parallel calls with
+	// results, plus an interrupted call closed by the turn-end flush.
+	r := newTestRunner(t, "thread-1")
+	events := eventSeqThenError(
+		errors.New("stream broke"),
+		textEvent("planning", true),
+		fnCallEvent("c1", "Bash", map[string]any{"cmd": "ls"}),
+		fnCallEvent("c2", "Grep", map[string]any{"pattern": "x"}), // parallel
+		fnResponseEvent("c1", "Bash", map[string]any{"output": "one"}),
+		fnResponseEvent("c2", "Grep", map[string]any{"output": "two"}),
+		fnCallEvent("c3", "Read", map[string]any{"path": "p"}), // no result -> flush closes it
+	)
+	_, _ = r.processEvents(context.Background(), events)
+
+	corpus := corpusOf(t, r)
+	idx := rrc.NewProtocolIndex(corpus)
+	roots := 0
+	for _, m := range corpus {
+		hasProto := false
+		for _, b := range m.Content {
+			if b.GetToolCall() != nil || b.GetToolResult() != nil {
+				hasProto = true
+			}
+		}
+		if !hasProto {
+			continue
+		}
+		roots++
+		if _, err := idx.CloseGroup(m, 0); err != nil {
+			t.Fatalf("corpus fails protocol closure at %s: %v", m.Id, err)
+		}
+	}
+	if roots == 0 {
+		t.Fatal("expected tool_call/result roots in the corpus")
 	}
 }

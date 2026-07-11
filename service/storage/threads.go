@@ -4,12 +4,12 @@ import (
 	"database/sql"
 	"time"
 
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // CreateThread inserts a new thread.
-func (d *DB) CreateThread(t *pb.Thread) error {
+func (d *DB) CreateThread(t *threadv1.Thread) error {
 	_, err := d.Exec(
 		`INSERT INTO threads (id, name, sandboxed, created_at, parent_thread_id, branch_point_position)
 		 VALUES (?, ?, ?, ?, ?, ?)`,
@@ -32,8 +32,8 @@ func (d *DB) CreateThread(t *pb.Thread) error {
 }
 
 // GetThread retrieves a thread by ID.
-func (d *DB) GetThread(id string) (*pb.Thread, error) {
-	t := &pb.Thread{}
+func (d *DB) GetThread(id string) (*threadv1.Thread, error) {
+	t := &threadv1.Thread{}
 	var createdAt time.Time
 	var parentID sql.NullString
 	var branchPos sql.NullInt64
@@ -76,7 +76,7 @@ func (d *DB) GetThread(id string) (*pb.Thread, error) {
 }
 
 // ListThreads returns all threads, optionally including archived.
-func (d *DB) ListThreads(includeArchived bool) ([]*pb.Thread, error) {
+func (d *DB) ListThreads(includeArchived bool) ([]*threadv1.Thread, error) {
 	query := `SELECT id FROM threads`
 	if !includeArchived {
 		query += ` WHERE archived_at IS NULL`
@@ -89,7 +89,7 @@ func (d *DB) ListThreads(includeArchived bool) ([]*pb.Thread, error) {
 	}
 	defer rows.Close()
 
-	var threads []*pb.Thread
+	var threads []*threadv1.Thread
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -127,7 +127,7 @@ func (d *DB) DeleteThread(id string) error {
 // on threads — so we update the scalar fields in one statement and replace the
 // join rows in two more. Wrapped in a transaction so a partial failure can't
 // leave the dirs half-replaced.
-func (d *DB) UpdateThread(t *pb.Thread) error {
+func (d *DB) UpdateThread(t *threadv1.Thread) error {
 	tx, err := d.Begin()
 	if err != nil {
 		return err
@@ -161,48 +161,6 @@ func (d *DB) UpdateThread(t *pb.Thread) error {
 func (d *DB) UpdateThreadName(id, name string) error {
 	_, err := d.Exec(`UPDATE threads SET name = ? WHERE id = ?`, name, id)
 	return err
-}
-
-// BackfillThreadNames names any threads still called "New Thread" using their
-// first user message content. Called once at startup.
-func (d *DB) BackfillThreadNames() int {
-	rows, err := d.Query(`SELECT id FROM threads WHERE name = 'New Thread' OR name = '' OR name IS NULL`)
-	if err != nil {
-		return 0
-	}
-	defer rows.Close()
-
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err == nil {
-			ids = append(ids, id)
-		}
-	}
-
-	count := 0
-	for _, id := range ids {
-		msgs, err := d.ListMessages(id, 1, 0)
-		if err != nil || len(msgs) == 0 {
-			continue
-		}
-		// Extract text from first message's content blocks
-		var text string
-		for _, block := range msgs[0].Content {
-			if t := block.GetText(); t != nil {
-				text = t.Text
-				break
-			}
-		}
-		if text == "" {
-			continue
-		}
-		name := TruncateThreadName(text)
-		if d.UpdateThreadName(id, name) == nil {
-			count++
-		}
-	}
-	return count
 }
 
 // TruncateThreadName truncates a thread name to ~60 chars at a word boundary.

@@ -80,3 +80,171 @@ type PredHasMetadata struct {
 }
 
 func (PredHasMetadata) predicateMarker() {}
+
+// PredExcludeMessageIDs rejects chunks whose owning message is already
+// present in bounded Local Context.
+type PredExcludeMessageIDs struct {
+	MessageIDs []string
+}
+
+func (PredExcludeMessageIDs) predicateMarker() {}
+
+// CandidateAttrs is the attribute view EvalPredicate judges a candidate
+// chunk by. Metadata is the open key space PredHasMetadata queries
+// (e.g. "model_id"); "thread_id" is answered from the ThreadID field.
+type CandidateAttrs struct {
+	MessageID string
+	ThreadID  string
+	Metadata  map[string]string
+}
+
+// EvalPredicate is the canonical in-memory evaluator for the Predicate
+// algebra. Oracle backends delegate here (typically as a post-filter
+// over retrieval pages) so every backend shares identical semantics —
+// a backend hand-reimplementing the algebra drifts silently. A nil
+// predicate matches everything; an unknown predicate type matches
+// nothing (precision-first default).
+func EvalPredicate(p Predicate, a CandidateAttrs) bool {
+	if p == nil {
+		return true
+	}
+	switch p := p.(type) {
+	case PredAll:
+		return true
+	case PredThread:
+		return a.ThreadID == p.ThreadID
+	case PredScope:
+		return p.Scope == ScopeAll || a.ThreadID == p.CurrentThread
+	case PredExcludeMessageIDs:
+		for _, id := range p.MessageIDs {
+			if a.MessageID == id {
+				return false
+			}
+		}
+		return true
+	case PredAnd:
+		for _, child := range p.Children {
+			if !EvalPredicate(child, a) {
+				return false
+			}
+		}
+		return true
+	case PredOr:
+		for _, child := range p.Children {
+			if EvalPredicate(child, a) {
+				return true
+			}
+		}
+		return false
+	case PredNot:
+		return !EvalPredicate(p.Inner, a)
+	case PredHasMetadata:
+		if p.Key == "thread_id" {
+			return a.ThreadID == p.Value
+		}
+		return a.Metadata[p.Key] == p.Value
+	default:
+		return false
+	}
+}
+
+// CompilePredicate lowers a Predicate into a fast per-candidate evaluator,
+// precomputing O(1) lookups — notably the PredExcludeMessageIDs set — once, so a
+// hot filter loop does not rescan them for every candidate. The returned closure
+// has semantics identical to EvalPredicate(p, ·) (verified by test); a nil
+// predicate matches everything, an unknown type matches nothing.
+func CompilePredicate(p Predicate) func(CandidateAttrs) bool {
+	switch p := p.(type) {
+	case nil, PredAll:
+		return func(CandidateAttrs) bool { return true }
+	case PredThread:
+		want := p.ThreadID
+		return func(a CandidateAttrs) bool { return a.ThreadID == want }
+	case PredScope:
+		if p.Scope == ScopeAll {
+			return func(CandidateAttrs) bool { return true }
+		}
+		want := p.CurrentThread
+		return func(a CandidateAttrs) bool { return a.ThreadID == want }
+	case PredExcludeMessageIDs:
+		set := make(map[string]struct{}, len(p.MessageIDs))
+		for _, id := range p.MessageIDs {
+			set[id] = struct{}{}
+		}
+		return func(a CandidateAttrs) bool { _, excluded := set[a.MessageID]; return !excluded }
+	case PredAnd:
+		fs := make([]func(CandidateAttrs) bool, len(p.Children))
+		for i, c := range p.Children {
+			fs[i] = CompilePredicate(c)
+		}
+		return func(a CandidateAttrs) bool {
+			for _, f := range fs {
+				if !f(a) {
+					return false
+				}
+			}
+			return true
+		}
+	case PredOr:
+		fs := make([]func(CandidateAttrs) bool, len(p.Children))
+		for i, c := range p.Children {
+			fs[i] = CompilePredicate(c)
+		}
+		return func(a CandidateAttrs) bool {
+			for _, f := range fs {
+				if f(a) {
+					return true
+				}
+			}
+			return false
+		}
+	case PredNot:
+		inner := CompilePredicate(p.Inner)
+		return func(a CandidateAttrs) bool { return !inner(a) }
+	case PredHasMetadata:
+		key, val := p.Key, p.Value
+		return func(a CandidateAttrs) bool {
+			if key == "thread_id" {
+				return a.ThreadID == val
+			}
+			return a.Metadata[key] == val
+		}
+	default:
+		return func(CandidateAttrs) bool { return false }
+	}
+}
+
+// ThreadScopeOf reports the single thread a predicate pins retrieval to, if it
+// implies ThreadID == T for every matching candidate. The ANN index uses this
+// to route a query to that thread's graph partition instead of the global
+// graph, so THREAD-scope retrieval is bounded by the thread rather than the
+// whole corpus. Routing is a pure optimisation: the predicate is still applied
+// in full as the residual filter, so routing to T can never change the result
+// set — a non-T candidate could not pass the predicate anyway.
+//
+// Returns ("", false) for anything that does NOT pin one thread (ScopeAll,
+// PredOr, PredNot, metadata, exclusions) so those correctly fall back to the
+// global graph. It keys on Scope == ScopeThread, NEVER on a non-empty
+// CurrentThread: PredScope{ScopeAll, CurrentThread: T} matches every thread, so
+// routing it to T would wrongly drop cross-thread results.
+func ThreadScopeOf(p Predicate) (string, bool) {
+	switch p := p.(type) {
+	case PredThread:
+		return p.ThreadID, true
+	case PredScope:
+		if p.Scope == ScopeThread {
+			return p.CurrentThread, true
+		}
+		return "", false
+	case PredAnd:
+		// AND is a subset of T if ANY child pins T; the others only narrow it.
+		for _, child := range p.Children {
+			if t, ok := ThreadScopeOf(child); ok {
+				return t, true
+			}
+		}
+		return "", false
+	default:
+		return "", false
+	}
+}

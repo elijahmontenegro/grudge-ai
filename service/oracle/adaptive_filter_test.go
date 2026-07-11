@@ -1,0 +1,421 @@
+package oracle
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/elijahmontenegro/grudge/core"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/service/storage"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+type fixedEmbedder struct {
+	vector []float32
+}
+
+func (f fixedEmbedder) Embed(context.Context, core.EmbedRole, []string) ([][]float32, error) {
+	return [][]float32{f.vector}, nil
+}
+
+func TestNearestChunksAdaptivelyFindsEligibleCandidate(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, threadID := range []string{"current", "foreign"} {
+		if err := db.CreateThread(&threadv1.Thread{Id: threadID, CreatedAt: timestamppb.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	queryVector := basisVector(0)
+	for i := range 4 {
+		id := "foreign-" + string(rune('a'+i))
+		insertVectorMessage(t, db, id, "foreign", int64(i), basisVector(0))
+	}
+	eligibleVector := make([]float32, 1024)
+	eligibleVector[0], eligibleVector[1] = 0.8, 0.2
+	insertVectorMessage(t, db, "eligible", "current", 0, eligibleVector)
+
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: queryVector}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := oracle.NearestChunks(t.Context(), "query", 1, rrc.PredThread{ThreadID: "current"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].MessageID != "eligible" {
+		t.Fatalf("adaptive filter returned %+v, want eligible current-thread candidate", got)
+	}
+}
+
+func TestNearestChunksExcludesLocalMessagesWithoutLosingK(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	insertVectorMessage(t, db, "local", "t1", 0, basisVector(0))
+	candidate := make([]float32, 1024)
+	candidate[0], candidate[1] = 0.8, 0.2
+	insertVectorMessage(t, db, "candidate", "t1", 1, candidate)
+
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := oracle.NearestChunks(t.Context(), "query", 1, rrc.PredExcludeMessageIDs{MessageIDs: []string{"local"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].MessageID != "candidate" {
+		t.Fatalf("local exclusion returned %+v", got)
+	}
+}
+
+// TestNearestChunksWidensPastExcludedShortlist is the regression guard for the
+// under-return a single fetch introduces under THREAD scope: the excluded
+// local-context messages are the most similar, so they can fill the entire
+// first k*annOverfetch shortlist, leaving a real candidate ranked just past it
+// unreachable. Here 10 top-scoring messages (all on the query) are all excluded
+// and one lower-scoring candidate sits below them; the first shortlist (k=1 ->
+// 8) is entirely excluded, so the widen loop must fetch further — within the
+// thread partition — to surface the candidate. A single fetch returns nothing.
+func TestNearestChunksWidensPastExcludedShortlist(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// 10 excluded messages exactly on the query (score 1.0) — more than the
+	// k*annOverfetch=8 first shortlist, so they fill it entirely.
+	excluded := make([]string, 0, 10)
+	for i := range 10 {
+		id := fmt.Sprintf("local-%d", i)
+		insertVectorMessage(t, db, id, "t1", int64(i), basisVector(0))
+		excluded = append(excluded, id)
+	}
+	// One real candidate in the same thread, ranked strictly below the excluded.
+	cand := make([]float32, 1024)
+	cand[0], cand[1] = 0.8, 0.2
+	insertVectorMessage(t, db, "candidate", "t1", 10, cand)
+
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Production predicate shape: thread scope + local-context exclusion.
+	predicate := rrc.PredAnd{Children: []rrc.Predicate{
+		rrc.PredScope{CurrentThread: "t1", Scope: rrc.ScopeThread},
+		rrc.PredExcludeMessageIDs{MessageIDs: excluded},
+	}}
+	got, err := oracle.NearestChunks(t.Context(), "query", 1, predicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].MessageID != "candidate" {
+		t.Fatalf("widen-past-excluded returned %+v, want [candidate] — a single fetch would return nothing", got)
+	}
+}
+
+// TestNearestChunksWidensPastExcludedShortlist_AllScope is the same under-return
+// but under ALL_THREADS scope (the interactive-chat default): a large current
+// turn fills the first shortlist in the global graph too. If ALL scope refuses
+// to widen, it returns nothing.
+func TestNearestChunksWidensPastExcludedShortlist_AllScope(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	excluded := make([]string, 0, 10)
+	for i := range 10 {
+		id := fmt.Sprintf("local-%d", i)
+		insertVectorMessage(t, db, id, "t1", int64(i), basisVector(0))
+		excluded = append(excluded, id)
+	}
+	cand := make([]float32, 1024)
+	cand[0], cand[1] = 0.8, 0.2
+	insertVectorMessage(t, db, "candidate", "t1", 10, cand)
+
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	predicate := rrc.PredAnd{Children: []rrc.Predicate{
+		rrc.PredScope{CurrentThread: "t1", Scope: rrc.ScopeAll},
+		rrc.PredExcludeMessageIDs{MessageIDs: excluded},
+	}}
+	got, err := oracle.NearestChunks(t.Context(), "query", 1, predicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].MessageID != "candidate" {
+		t.Fatalf("all-scope widen-past-excluded returned %+v, want [candidate]", got)
+	}
+}
+
+// TestNearestChunksReturnsDistinctMessages pins the chunk->message fix: a
+// message with several top-ranked chunks must occupy ONE candidate slot, not
+// crowd out other messages. Without the dedupe, k=3 here returns three chunks of
+// "big" (one distinct message); with it, three distinct messages.
+func TestNearestChunksReturnsDistinctMessages(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	// "big" — five chunks, all exactly on the query (highest score).
+	bigChunks := make([]storage.Chunk, 5)
+	for i := range bigChunks {
+		bigChunks[i] = storage.Chunk{MessageID: "big", ChunkIndex: i, Text: fmt.Sprintf("big-%d", i), ByteEnd: 5, TokenEst: 1}
+	}
+	if err := db.InsertMessage(&threadv1.Message{Id: "big", ThreadId: "t1", Role: threadv1.Role_ROLE_USER, CreatedAt: timestamppb.Now()}, bigChunks); err != nil {
+		t.Fatal(err)
+	}
+	for i := range bigChunks {
+		if err := db.InsertChunkEmbedding("big", i, "model", basisVector(0)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Three single-chunk messages, slightly less similar.
+	for j, mid := range []string{"a", "b", "c"} {
+		v := make([]float32, 1024)
+		v[0], v[1] = 0.9, 0.1
+		insertVectorMessage(t, db, mid, "t1", int64(10+j), v)
+	}
+
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := oracle.NearestChunks(t.Context(), "q", 3, rrc.PredThread{ThreadID: "t1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, r := range got {
+		if seen[r.MessageID] {
+			t.Fatalf("duplicate message %s in results — dedupe broken: %+v", r.MessageID, got)
+		}
+		seen[r.MessageID] = true
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d results, want 3 distinct messages", len(got))
+	}
+	if !seen["big"] {
+		t.Fatalf("expected the most-similar message 'big' among results: %+v", got)
+	}
+}
+
+// TestIndexAddIgnoresOtherModels: the index is per-model, and the embedding
+// observer fires for every model's inserts, so IndexAdd must drop any embedding
+// written under a different model (mixing models/widths would corrupt distances).
+func TestIndexAddIgnoresOtherModels(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracle.IndexAdd("mine", 0, "model", "t1", basisVector(0))
+	oracle.IndexAdd("theirs", 0, "other-model", "t1", basisVector(0))
+	if !oracle.index.Has(chunkKeyStr("mine", 0)) {
+		t.Fatal("same-model chunk was not indexed")
+	}
+	if oracle.index.Has(chunkKeyStr("theirs", 0)) {
+		t.Fatal("other-model chunk was indexed — the observer is not model-scoped")
+	}
+}
+
+func (o *ChunkOracle) resetExamined()       { o.examined.Store(0) }
+func (o *ChunkOracle) examinedCount() int64 { return o.examined.Load() }
+
+// TestNearestChunksWorkInvariant is the deterministic guard the partition-graph
+// guard could not provide: it drives the FULL NearestChunks path (routing +
+// multi-iteration widen + filter), not Search directly, and asserts the candidate
+// count it examines for a fixed thread is byte-identical as OTHER threads
+// accumulate. A regression that routed THREAD scope to the global graph would make
+// this grow with filler — the O(N) leak this effort closed, uncovered elsewhere.
+//
+// The target thread forces the widen to iterate: excludedSize excluded messages
+// sit Hamming-nearest to the query, filling the whole first k*annOverfetch
+// shortlist so zero survive the filter; the keepers sit just beyond and only
+// surface once the shortlist doubles. So the loop runs twice — the exclusion-heavy
+// widen path that regressed three times, now under a guard.
+func TestNearestChunksWorkInvariant(t *testing.T) {
+	const (
+		target       = "target"
+		excludedSize = 120 // > k*annOverfetch, so the first shortlist is entirely excluded
+		keeperSize   = 20  // >= k keepers surface only after one widen
+		k            = 8
+	)
+	var want int64
+	for fi, filler := range []int{0, 500, 2000} {
+		db, err := storage.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.CreateThread(&threadv1.Thread{Id: target, CreatedAt: timestamppb.Now()}); err != nil {
+			t.Fatal(err)
+		}
+		// Excluded at distinct distances 0..excludedSize-1 (all strictly nearer than
+		// any keeper), keepers just beyond. Graded (not identical) codes so the graph
+		// is well-connected and the beam returns the full requested shortlist.
+		excluded := make([]string, 0, excludedSize)
+		for i := range excludedSize {
+			id := fmt.Sprintf("excluded-%d", i)
+			insertVectorMessage(t, db, id, target, int64(i), gradedVec(i))
+			excluded = append(excluded, id)
+		}
+		for i := range keeperSize {
+			insertVectorMessage(t, db, fmt.Sprintf("keeper-%d", i), target, int64(excludedSize+i), gradedVec(excludedSize+i))
+		}
+		if filler > 0 {
+			if err := db.CreateThread(&threadv1.Thread{Id: "filler", CreatedAt: timestamppb.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			for i := range filler {
+				insertVectorMessage(t, db, fmt.Sprintf("f-%d", i), "filler", int64(excludedSize+keeperSize+i), basisVector(0))
+			}
+		}
+		oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+		if err != nil {
+			t.Fatal(err)
+		}
+		predicate := rrc.PredAnd{Children: []rrc.Predicate{
+			rrc.PredScope{CurrentThread: target, Scope: rrc.ScopeThread},
+			rrc.PredExcludeMessageIDs{MessageIDs: excluded},
+		}}
+		oracle.resetExamined()
+		got, err := oracle.NearestChunks(t.Context(), "query", k, predicate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		examined := oracle.examinedCount()
+		db.Close()
+		// The widen surfaced k distinct keeper messages past the all-excluded first
+		// shortlist — proof the multi-iteration path ran and returned real results.
+		if len(got) != k {
+			t.Fatalf("filler=%d: NearestChunks returned %d results, want %d keepers past the excluded shortlist", filler, len(got), k)
+		}
+		if fi == 0 {
+			want = examined
+			continue
+		}
+		if examined != want {
+			t.Fatalf("filler=%d: NearestChunks examined %d candidates, want %d — THREAD-scope work grew with other-thread filler (O(N) leak)",
+				filler, examined, want)
+		}
+	}
+	// Two iterations (k*annOverfetch then 2*k*annOverfetch) examine more than a
+	// single shortlist; a one-shot fetch would examine exactly k*annOverfetch.
+	if want <= int64(k*annOverfetch) {
+		t.Fatalf("examined %d candidates — the widen never iterated, so this no longer guards the multi-iteration path", want)
+	}
+	t.Logf("THREAD-scope NearestChunks widened and examined %d candidates, invariant across filler [0 500 2000]", want)
+}
+
+func insertVectorMessage(t *testing.T, db *storage.DB, id, thread string, position int64, vector []float32) {
+	t.Helper()
+	message := &threadv1.Message{
+		Id: id, ThreadId: thread, Position: position, Role: threadv1.Role_ROLE_USER,
+		Content:   []*threadv1.ContentBlock{{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: id}}}},
+		CreatedAt: timestamppb.Now(),
+	}
+	if err := db.InsertMessage(message, []storage.Chunk{{
+		ChunkIndex: 0, Text: id, ByteEnd: len(id), TokenEst: 1,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertChunkEmbedding(id, 0, "model", vector); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func basisVector(index int) []float32 {
+	vector := make([]float32, 1024)
+	vector[index] = 1
+	return vector
+}
+
+// gradedVec returns a vector at Hamming distance dist from the query basisVector(0):
+// index 0 stays positive (so it scores 1.0 and shares bit 0), and bits 1..dist are
+// flipped negative. Distinct dist values give distinct codes on a smooth gradient,
+// so the HNSW graph stays well-connected (unlike identical codes, which strand the
+// beam) while nearer messages rank strictly ahead of farther ones.
+func gradedVec(dist int) []float32 {
+	vector := make([]float32, 1024)
+	vector[0] = 1
+	for i := 1; i <= dist; i++ {
+		vector[i] = -1
+	}
+	return vector
+}
+
+// TestRandomChunksRespectsExclusion pins the CFAR reference discipline:
+// the noise draw must honor the exclusion predicate — reference cells
+// never contain the test cells. Without it, a scoped small corpus draws
+// the candidates themselves as "background" and the floor becomes the
+// best candidate's own score (measured live: a planted fact at 0.903
+// poisoned its own floor and recall admitted nothing).
+func TestRandomChunksRespectsExclusion(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		insertVectorMessage(t, db, fmt.Sprintf("m%d", i), "t1", int64(i), basisVector(i))
+	}
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	excluded := rrc.PredAnd{Children: []rrc.Predicate{
+		rrc.PredThread{ThreadID: "t1"},
+		rrc.PredExcludeMessageIDs{MessageIDs: []string{"m0", "m1", "m2"}},
+	}}
+	refs, err := oracle.RandomChunks(t.Context(), 16, 7, excluded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 5 {
+		t.Fatalf("expected the 5 non-excluded chunks, got %d", len(refs))
+	}
+	for _, r := range refs {
+		if r.MessageID == "m0" || r.MessageID == "m1" || r.MessageID == "m2" {
+			t.Fatalf("excluded candidate %s drawn as reference", r.MessageID)
+		}
+	}
+	// Determinism: same seed, same draw order.
+	again, _ := oracle.RandomChunks(t.Context(), 16, 7, excluded)
+	for i := range refs {
+		if refs[i].MessageID != again[i].MessageID {
+			t.Fatal("same seed must reproduce the draw")
+		}
+	}
+}

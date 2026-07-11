@@ -21,10 +21,26 @@ type fakePubsub struct {
 	retries   []retry.Event
 }
 
-func (f *fakePubsub) PublishStream(ev StreamDelta)         { f.mu.Lock(); defer f.mu.Unlock(); f.streams = append(f.streams, ev) }
-func (f *fakePubsub) PublishAgentState(ev AgentStateUpdate) { f.mu.Lock(); defer f.mu.Unlock(); f.states = append(f.states, ev) }
-func (f *fakePubsub) PublishToolExec(ev ToolExec)          { f.mu.Lock(); defer f.mu.Unlock(); f.tools = append(f.tools, ev) }
-func (f *fakePubsub) PublishSubagent(ev SubagentEvent)     { f.mu.Lock(); defer f.mu.Unlock(); f.subagents = append(f.subagents, ev) }
+func (f *fakePubsub) PublishStream(ev StreamDelta) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.streams = append(f.streams, ev)
+}
+func (f *fakePubsub) PublishAgentState(ev AgentStateUpdate) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.states = append(f.states, ev)
+}
+func (f *fakePubsub) PublishToolExec(ev ToolExec) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tools = append(f.tools, ev)
+}
+func (f *fakePubsub) PublishSubagent(ev SubagentEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.subagents = append(f.subagents, ev)
+}
 func (f *fakePubsub) PublishRetry(threadID string, ev retry.Event) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

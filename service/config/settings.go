@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	net_http "net/http"
 	"os"
 	"path/filepath"
@@ -9,6 +11,9 @@ import (
 	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
+	"github.com/elijahmontenegro/grudge/rrc"
+	"github.com/elijahmontenegro/grudge/service/hooks"
+	"github.com/elijahmontenegro/grudge/service/mcp"
 	"github.com/elijahmontenegro/grudge/service/secrets"
 )
 
@@ -16,28 +21,116 @@ import (
 type Settings struct {
 	Providers   map[string]ProviderConfig `json:"providers"`
 	Permissions map[string]string         `json:"permissions"`
-	MCPServers  []MCPServer               `json:"mcp_servers"`
-	Hooks       []HookConfig              `json:"hooks"`
+	MCPServers  []mcp.ServerConfig        `json:"mcp_servers"`
+	Hooks       []hooks.HookConfig        `json:"hooks"`
 	Preferences map[string]string         `json:"preferences"`
 	Engine      EngineConfig              `json:"engine"`
 }
 
-// EngineConfig holds live-tunable RRC engine parameters. Mirrors
-// rrc.EngineConfig but lives in the config package to avoid a
-// service→rrc cycle at settings-serialization time. Zero-value
+// EngineConfig is the explicit settings wire schema for the RRC
+// engine's live-tunable knobs. It deliberately mirrors the tunable
+// subset of rrc.EngineConfig rather than serializing it directly: the
+// wire contract (required keys, DisallowUnknownFields, validation)
+// lives here, and construction-time fields on the rrc side
+// (Chunk.Estimator) never leak into the settings file. ApplyTo /
+// EngineConfigFromRRC are the only conversion points. Zero-value
 // Engine means "use the rrc default" — handled at the service
 // boundary.
 type EngineConfig struct {
-	EdgeThreshold         float64 `json:"edge_threshold"`
-	ScoreFloor            float64 `json:"score_floor"`
-	ZScoreThreshold       float64 `json:"z_score_threshold"`
+	// LossRatio is the live acceptance operating point (the precision
+	// stance): a candidate is accepted when its calibrated P(prereq)
+	// clears LossRatio (plus the budget's marginal token price). This is
+	// the knob that actually gates edge formation and DAG traversal.
+	LossRatio float64 `json:"loss_ratio"`
+
 	MinBatchStdDev        float64 `json:"min_batch_stddev"`
-	RadiusSize            int     `json:"radius_size"`
+	LocalContextSize      int     `json:"local_context_size"`
 	RerankTopK            int     `json:"rerank_top_k"`
 	ContextBudgetTokens   int     `json:"context_budget_tokens"`
-	DiversityLambda       float64 `json:"diversity_lambda"`
 	BudgetHeadroomPct     float64 `json:"budget_headroom_pct"`
 	PerMsgDelimiterTokens int     `json:"per_msg_delimiter_tokens"`
+}
+
+func (e *EngineConfig) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	// Retired keys migrate by tolerated deletion: diversity_lambda died
+	// with the MMR λ knob (the redundancy discount is derived — the
+	// novel fraction — never a configuration). An existing settings file
+	// keeps loading; the key drops on the next save.
+	delete(fields, "diversity_lambda")
+	cleaned, err := json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	type plain EngineConfig
+	decoder := json.NewDecoder(bytes.NewReader(cleaned))
+	decoder.DisallowUnknownFields()
+	var decoded plain
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	// loss_ratio is optional (absent = keep the default stance); every
+	// other live knob is required — a partial engine config is a config
+	// error, not a request for defaults.
+	required := []string{
+		"min_batch_stddev", "local_context_size", "rerank_top_k",
+		"context_budget_tokens",
+		"budget_headroom_pct", "per_msg_delimiter_tokens",
+	}
+	for _, key := range required {
+		if _, ok := fields[key]; !ok {
+			return fmt.Errorf("engine config missing required field %q", key)
+		}
+	}
+	*e = EngineConfig(decoded)
+	return e.Validate()
+}
+
+// ApplyTo copies this settings snapshot's live knobs onto base
+// (typically rrc.DefaultConfig() or the currently-live engine config)
+// and returns it. LossRatio 0 means "unset — keep base's stance".
+// The single conversion point from settings to engine config.
+func (e EngineConfig) ApplyTo(base rrc.EngineConfig) rrc.EngineConfig {
+	if e.LossRatio > 0 {
+		base.LossRatio = e.LossRatio
+	}
+	base.MinBatchStdDev = e.MinBatchStdDev
+	base.LocalContextSize = e.LocalContextSize
+	base.RerankTopK = e.RerankTopK
+	base.ContextBudgetTokens = e.ContextBudgetTokens
+	base.BudgetHeadroomPct = e.BudgetHeadroomPct
+	base.PerMsgDelimiterTokens = e.PerMsgDelimiterTokens
+	return base
+}
+
+// EngineConfigFromRRC captures the live engine config's tunable knobs
+// as a settings snapshot. The single conversion point from engine
+// config to settings.
+func EngineConfigFromRRC(ec rrc.EngineConfig) EngineConfig {
+	return EngineConfig{
+		LossRatio:             ec.LossRatio,
+		MinBatchStdDev:        ec.MinBatchStdDev,
+		LocalContextSize:      ec.LocalContextSize,
+		RerankTopK:            ec.RerankTopK,
+		ContextBudgetTokens:   ec.ContextBudgetTokens,
+		BudgetHeadroomPct:     ec.BudgetHeadroomPct,
+		PerMsgDelimiterTokens: ec.PerMsgDelimiterTokens,
+	}
+}
+
+func (e EngineConfig) Validate() error {
+	if e.MinBatchStdDev < 0 ||
+		e.LocalContextSize <= 0 || e.RerankTopK <= 0 ||
+		e.ContextBudgetTokens < 0 ||
+		e.BudgetHeadroomPct < 0 || e.BudgetHeadroomPct > 1 ||
+		e.LossRatio < 0 || e.LossRatio > 1 ||
+		e.PerMsgDelimiterTokens < 0 {
+		return fmt.Errorf("engine config: Local Context size and top-K must be positive; other values cannot be negative; headroom and loss_ratio must be in [0,1]")
+	}
+	return nil
 }
 
 // GetUserName returns the configured display name. Priority:
@@ -64,6 +157,9 @@ type ProviderConfig struct {
 	Model   string `json:"model"`
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key,omitempty"`
+	// Options carries provider-specific transport config (e.g. GCP
+	// project/location for vertex). Passed through to core.ProviderConfig.
+	Options map[string]string `json:"options,omitempty"`
 }
 
 // ToCore converts to a core.ProviderConfig, resolving the API key
@@ -80,22 +176,8 @@ func (p ProviderConfig) ToCore() core.ProviderConfig {
 		Model:   p.Model,
 		BaseURL: p.BaseURL,
 		APIKey:  apiKey,
+		Options: p.Options,
 	}
-}
-
-// MCPServer configures an MCP endpoint.
-type MCPServer struct {
-	Name     string `json:"name"`
-	Endpoint string `json:"endpoint"`
-	Enabled  bool   `json:"enabled"`
-}
-
-// HookConfig defines a lifecycle event hook.
-type HookConfig struct {
-	Event   string `json:"event"`
-	Command string `json:"command"`
-	Match   string `json:"match"`
-	Timeout string `json:"timeout"`
 }
 
 // Paths holds resolved XDG base directories.
@@ -133,8 +215,17 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	if err := json.Unmarshal(data, &cfg.Settings); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cfg.Settings); err != nil {
 		return nil, err
+	}
+	var topLevel map[string]json.RawMessage
+	if err := json.Unmarshal(data, &topLevel); err != nil {
+		return nil, err
+	}
+	if _, ok := topLevel["engine"]; !ok {
+		return nil, fmt.Errorf("settings missing required field %q", "engine")
 	}
 
 	return cfg, nil
@@ -151,7 +242,7 @@ func (c *Config) Save() error {
 
 func defaultSettings() Settings {
 	s := Settings{
-		Providers:   make(map[string]ProviderConfig),
+		Providers: make(map[string]ProviderConfig),
 		Permissions: map[string]string{
 			"FileRead":  "allow",
 			"Glob":      "allow",
@@ -163,6 +254,14 @@ func defaultSettings() Settings {
 			"Bash":      "ask",
 		},
 		Preferences: make(map[string]string),
+		Engine: EngineConfig{
+			MinBatchStdDev:        0.05,
+			LocalContextSize:      10,
+			RerankTopK:            64,
+			ContextBudgetTokens:   150000,
+			BudgetHeadroomPct:     0.90,
+			PerMsgDelimiterTokens: 5,
+		},
 	}
 	// Auto-detect local providers on first run
 	probeProviders(&s)

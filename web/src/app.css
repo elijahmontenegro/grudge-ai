@@ -2245,8 +2245,6 @@ button { cursor: pointer; }
   transform: translateY(-50%);
   background: var(--accent);
 }
-.score-row .bar[data-k="qud"] i { background: var(--ink); }
-.score-row .bar[data-k="temp"] i { background: var(--muted); }
 .score-row .bar[data-empty="true"] i { display: none; }
 .score-row .val {
   text-align: right;
@@ -2271,71 +2269,6 @@ button { cursor: pointer; }
 .score-formula .result { color: var(--ink); font-weight: 500; }
 .score-formula .decay { display: block; margin-top: 4px; color: var(--muted); }
 .score-formula .decay .result { color: var(--accent-ink); }
-
-/* QUD graph */
-.qud-graph { position: relative; }
-.qud {
-  position: relative;
-  padding: 11px 14px 12px;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  margin-bottom: 8px;
-  background: var(--paper);
-  font-size: 13px;
-  line-height: 1.5;
-}
-.qud[data-status="resolved"] {
-  opacity: 0.55;
-  background: transparent;
-}
-.qud[data-highlighted="true"] {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 6%, var(--paper));
-  box-shadow: 0 0 0 1px var(--accent);
-}
-.qud .q-status {
-  position: absolute;
-  top: 10px; right: 12px;
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.qud[data-status="open"] .q-status { color: var(--accent-ink); }
-.qud[data-status="partial"] .q-status { color: var(--ink-2); }
-.qud .q-id {
-  font-family: var(--mono);
-  color: var(--muted);
-  font-size: 10px;
-  letter-spacing: 0.04em;
-}
-.qud .q-text {
-  display: block;
-  margin-top: 4px;
-  color: var(--ink);
-  font-family: var(--serif);
-  font-size: 13.5px;
-  line-height: 1.5;
-  padding-right: 54px;
-}
-.qud .q-meta {
-  margin-top: 8px;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
-  letter-spacing: 0.02em;
-}
-.qud[data-child="true"] { position: relative; }
-.qud[data-child="true"]::before {
-  content: "";
-  position: absolute;
-  left: -12px; top: -4px; bottom: 50%;
-  border-left: 1px solid var(--rule);
-  border-bottom: 1px solid var(--rule);
-  width: 10px;
-  border-bottom-left-radius: 5px;
-}
 
 /* DAG neighborhood */
 .dag-view {

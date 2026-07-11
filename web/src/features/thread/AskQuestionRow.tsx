@@ -104,15 +104,9 @@ function parseAnswers(raw: string): Record<string, string> {
         }
         return out
       }
-      if (typeof obj.response === 'string') {
-        // Legacy single-question result shape from the pre-refactor backend.
-        // Not reachable for new calls but keeps historic threads readable.
-        return { __legacy: obj.response }
-      }
     }
   } catch {
-    // Treat the whole raw string as a single legacy answer.
-    return raw.trim() ? { __legacy: raw } : {}
+    // not JSON — no answers to show
   }
   return {}
 }

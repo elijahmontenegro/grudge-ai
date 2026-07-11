@@ -21,7 +21,7 @@ Concrete protections:
   `allow`. Users can override per-tool in Settings.
 - **Path traversal defense.** Thread IDs feeding filesystem paths are
   validated against `^thread-\d+$` before interpolation
-  (`service/storage/paths.go`).
+  (`service/datadir`, the single owner of the data-dir layout).
 - **Path containment.** Sandboxed file tools resolve every path through
   `sandbox.ResolveWorkspacePath`; anything outside the workspace is
   rejected.

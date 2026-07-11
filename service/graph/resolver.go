@@ -6,7 +6,8 @@ import (
 	"log"
 
 	"github.com/elijahmontenegro/grudge/core/httpc/retry"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/rrc/tokenscale"
 	"github.com/elijahmontenegro/grudge/service/agent"
 	"github.com/elijahmontenegro/grudge/service/approvals"
 	"github.com/elijahmontenegro/grudge/service/config"
@@ -48,12 +49,13 @@ type Resolver struct {
 	mcpTools   []tool.Tool
 	assembler  *prompt.Assembler
 	hooks      *hooks.Dispatcher
+	scales     *tokenscale.Store
 
 	// Per-thread fan-out topics for UI subscriptions. Each is a
 	// thin instance of pubsub.Topic / pubsub.Broadcast.
 	streams   *pubsub.Topic[*StreamEvent]
 	agents    *pubsub.Topic[*AgentState]
-	tools *pubsub.Topic[*ToolExecution]
+	tools     *pubsub.Topic[*ToolExecution]
 	subagents *pubsub.Topic[*SubagentProgress]
 	threads   *pubsub.Broadcast[*ThreadStateEvent]
 }
@@ -75,6 +77,9 @@ type Deps struct {
 	MCPTools   []tool.Tool
 	Assembler  *prompt.Assembler
 	Hooks      *hooks.Dispatcher
+	// Scales is the process-wide learned token-scale store; owned by
+	// main.go (composition root), threaded to the runner factory.
+	Scales *tokenscale.Store
 }
 
 // NewResolver wires the GraphQL resolver from the application's
@@ -94,10 +99,11 @@ func NewResolver(d Deps) *Resolver {
 		mcpTools:   d.MCPTools,
 		assembler:  d.Assembler,
 		hooks:      d.Hooks,
+		scales:     d.Scales,
 
 		streams:   pubsub.NewTopic[*StreamEvent](),
 		agents:    pubsub.NewTopic[*AgentState](),
-		tools: pubsub.NewTopic[*ToolExecution](),
+		tools:     pubsub.NewTopic[*ToolExecution](),
 		subagents: pubsub.NewTopic[*SubagentProgress](),
 		threads:   pubsub.NewBroadcast[*ThreadStateEvent](),
 	}
@@ -123,7 +129,7 @@ func (r *Resolver) getOrCreateRunner(threadID string) (*agent.Runner, error) {
 // InsertMessage, and embed enqueue all happen in one place
 // (service/messages). Graph-side and runtime-side inserts converge
 // on the same code path.
-func (r *Resolver) storeMessage(msg *pb.Message, _text string) error {
+func (r *Resolver) storeMessage(msg *threadv1.Message, _text string) error {
 	return r.inserter.Insert(msg)
 }
 
@@ -252,4 +258,3 @@ func (r *Resolver) subscribeThreadState() chan *ThreadStateEvent {
 func (r *Resolver) publishThreadState(event *ThreadStateEvent) {
 	r.threads.Publish(event)
 }
-

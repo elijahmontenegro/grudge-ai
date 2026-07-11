@@ -8,13 +8,13 @@ import (
 
 // Skill represents a loaded skill definition.
 type Skill struct {
-	Name        string
-	Description string
-	WhenToUse   string
+	Name         string
+	Description  string
+	WhenToUse    string
 	AllowedTools []string
-	Arguments   []Argument
-	Content     string // markdown body after frontmatter
-	Path        string // source file path
+	Arguments    []Argument
+	Content      string // markdown body after frontmatter
+	Path         string // source file path
 }
 
 // Argument is a skill parameter.

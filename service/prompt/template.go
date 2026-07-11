@@ -7,7 +7,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/elijahmontenegro/grudge/service/internal/adoc"
+	"github.com/elijahmontenegro/grudge/adoc"
 )
 
 // Templates are baked into the binary. The composition root
@@ -27,11 +27,20 @@ type Assembler struct {
 	tmpl *template.Template
 }
 
-// TemplateData provides values for template rendering.
+// TemplateData provides values for template rendering. Deliberately
+// absent: the thread name. It is a UI label derived by truncating the
+// first message — a lossy echo of corpus content, and injecting it into
+// the model's context manufactured false facts twice (a title cut
+// mid-claim, "…the archive passphrase is...", read as a truncated
+// environment assignment, seeded a self-sustaining refusal chain). The
+// prompt boundary obeys the same law as the graph: derived projections
+// of the record are not observations. The model's knowledge of the
+// conversation is the conversation — window and retrieval carry the
+// content losslessly. Environment carries operational facts about the
+// WORLD only (sandbox, working dirs, time).
 type TemplateData struct {
 	UserName    string
-	ThreadName  string
-	Sandboxed   bool     // true when Bash + file tools run inside the Docker workspace
+	Sandboxed   bool // true when Bash + file tools run inside the Docker workspace
 	WorkingDirs []string
 	AgentsMD    []string // contents of AGENTS.md files from mounted dirs
 	PlanContent string   // compiled plan content (per-turn)

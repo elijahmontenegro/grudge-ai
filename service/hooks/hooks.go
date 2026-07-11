@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/elijahmontenegro/grudge/service/config"
 )
 
 // Event types for lifecycle hooks.
@@ -22,6 +20,16 @@ const (
 	UserPromptSubmit = "UserPromptSubmit"
 )
 
+// HookConfig defines one lifecycle event hook. This is both the domain
+// type and the settings wire shape — config.Settings embeds it
+// directly, so there is exactly one definition.
+type HookConfig struct {
+	Event   string `json:"event"`
+	Command string `json:"command"`
+	Match   string `json:"match"`
+	Timeout string `json:"timeout"`
+}
+
 // Result from hook execution.
 type Result struct {
 	Blocked bool   // true if the hook denied the action
@@ -30,11 +38,11 @@ type Result struct {
 
 // Dispatcher executes lifecycle hooks. Fail-closed: hook failure blocks the action.
 type Dispatcher struct {
-	hooks []config.HookConfig
+	hooks []HookConfig
 }
 
 // NewDispatcher creates a hook dispatcher from configuration.
-func NewDispatcher(hooks []config.HookConfig) *Dispatcher {
+func NewDispatcher(hooks []HookConfig) *Dispatcher {
 	return &Dispatcher{hooks: hooks}
 }
 

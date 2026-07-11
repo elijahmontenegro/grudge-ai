@@ -35,7 +35,7 @@ import numpy as np
 import torch
 
 
-PAIRS_FILE = Path(__file__).parent / "pairs.json"
+PAIRS_FILE = Path(__file__).parent.parent / "rrc" / "calibrate" / "seed" / "pairs.json"
 OUT_FILE = Path(__file__).parent / "results_paths.json"
 RERANK_TOP_K = 64  # RRC's RerankTopK default; rerank everything ≤ this many candidates
 

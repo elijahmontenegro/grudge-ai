@@ -11,7 +11,7 @@ import (
 	"iter"
 
 	"github.com/elijahmontenegro/grudge/core"
-	pb "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
+	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
 )
 
 // Completer wraps any core.Completer with the retry policy.
@@ -32,8 +32,8 @@ func NewCompleter(inner core.Completer, policy Policy, onEvent func(Event)) *Com
 
 // Complete retries end-to-end. Non-retryable errors surface on the
 // first attempt without consuming the retry budget.
-func (c *Completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*pb.CompletionResponse, error) {
-	var resp *pb.CompletionResponse
+func (c *Completer) Complete(ctx context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
+	var resp *llmv1.CompletionResponse
 	err := Do(ctx, c.Policy, c.OnEvent, func(ctx context.Context) error {
 		var e error
 		resp, e = c.Inner.Complete(ctx, req)
@@ -48,8 +48,8 @@ func (c *Completer) Complete(ctx context.Context, req *pb.CompletionRequest) (*p
 // the iteration and call Stream again. Once any successful chunk
 // has been yielded to the caller we can't replay — mid-stream
 // errors pass through unchanged.
-func (c *Completer) Stream(ctx context.Context, req *pb.CompletionRequest) iter.Seq2[*pb.StreamChunk, error] {
-	return func(yield func(*pb.StreamChunk, error) bool) {
+func (c *Completer) Stream(ctx context.Context, req *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
+	return func(yield func(*llmv1.StreamChunk, error) bool) {
 		err := Do(ctx, c.Policy, c.OnEvent, func(ctx context.Context) error {
 			next, stop := iter.Pull2(c.Inner.Stream(ctx, req))
 			defer stop()

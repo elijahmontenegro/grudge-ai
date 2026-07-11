@@ -90,7 +90,7 @@ type Settings struct {
 	McpServers  string `json:"mcpServers"`
 	Hooks       string `json:"hooks"`
 	Preferences string `json:"preferences"`
-	// Engine config as JSON: { edgeThreshold, scoreFloor, weightCE, weightTemp, radiusSize, rerankTopK }.
+	// Engine config as JSON, including thresholds, Local Context size, top-K, diversity, and budget controls.
 	// Live-tunable — the RRC engine re-projects stored edges under the new config
 	// at walk time, so saving here changes Selection behavior on the next turn
 	// without a restart. Raw reranker scores are preserved; only the fused

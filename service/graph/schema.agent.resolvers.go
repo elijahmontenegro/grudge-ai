@@ -13,8 +13,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/elijahmontenegro/grudge/proto/gen/go/grudge/v1"
-	"github.com/elijahmontenegro/grudge/rrc"
+	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
+	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/storage"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -55,28 +56,40 @@ func (r *mutationResolver) PauseAgent(ctx context.Context, threadID string) (boo
 
 // ResumeAgent is the resolver for the resumeAgent field.
 func (r *mutationResolver) ResumeAgent(ctx context.Context, threadID string, correction *string) (bool, error) {
-	if correction != nil && *correction != "" {
-		corpus, err := r.db.ThreadCorpus(threadID)
-		if err != nil {
-			return false, fmt.Errorf("load corpus: %w", err)
-		}
-		msg := &v1.Message{
-			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
-			Role:      v1.Role_ROLE_USER,
-			Content:   rrc.BlocksFromText(*correction),
-			Position:  int64(len(corpus)),
-			ThreadId:  threadID,
-			CreatedAt: timestamppb.Now(),
-		}
-		if err := r.storeMessage(msg, *correction); err != nil {
-			return false, fmt.Errorf("insert correction: %w", err)
-		}
-	}
+	// Precondition BEFORE side effect: a thread with no agent state has
+	// nothing to resume. Loading state first means a failed resume stores
+	// nothing — the old order stored the correction and then errored, so
+	// each retry of the "failed" mutation stacked another correction row
+	// into the corpus (measured live on a never-paused thread).
 	// Same full-row UPSERT concern as PauseAgent — preserve Mode/RoundCount
 	// rather than zeroing them via a partial state save.
 	st, err := r.db.GetAgentState(threadID)
 	if err != nil {
 		return false, fmt.Errorf("load state: %w", err)
+	}
+	if correction != nil && *correction != "" {
+		agentRunner, err := r.getOrCreateRunner(threadID)
+		if err != nil {
+			return false, fmt.Errorf("resume runner: %w", err)
+		}
+		// The correction is its own turn — a fresh user-authored discourse
+		// event, not part of any in-flight turn — so it carries turn
+		// identity (or it falls out of the Local Context window and
+		// TurnMessages entirely) and a runner-minted position (the old
+		// int64(len(corpus)) stamp collided with existing rows whenever
+		// history carried position gaps or duplicates).
+		msg := &threadv1.Message{
+			Id:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
+			Role:      threadv1.Role_ROLE_USER,
+			Content:   pbtext.BlocksFromText(*correction),
+			Position:  agentRunner.NextPosition(),
+			ThreadId:  threadID,
+			TurnId:    fmt.Sprintf("turn-%s-%d", threadID, time.Now().UnixNano()),
+			CreatedAt: timestamppb.Now(),
+		}
+		if err := r.storeMessage(msg, *correction); err != nil {
+			return false, fmt.Errorf("insert correction: %w", err)
+		}
 	}
 	// Two resume paths:
 	//   (a) Active autonomous loop, just paused → flip the pause gate.
@@ -305,7 +318,7 @@ func (r *mutationResolver) RejectPlan(ctx context.Context, threadID string, feed
 // re-renders with the edited version. The model will see the new content on
 // its next FileRead of plan.adoc.
 func (r *mutationResolver) UpdatePlanSource(ctx context.Context, threadID string, content string) (bool, error) {
-	planDir, err := storage.PlanDirForThread(r.cfg.DataDir, threadID)
+	planDir, err := datadir.PlanDirForThread(r.cfg.DataDir, threadID)
 	if err != nil {
 		return false, err
 	}

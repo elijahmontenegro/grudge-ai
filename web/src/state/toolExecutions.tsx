@@ -58,10 +58,9 @@ export interface LiveToolCall {
 }
 
 /** Parse the JSON payload the backend publishes for AskUserQuestion.
- *  Accepts two shapes: the structured `{questions: [...]}` form and
- *  the legacy plain `{question: "..."}` form (in case an old tool
- *  call is still live across a deploy). Returns null when neither
- *  parses. */
+ *  The backend emits exactly one shape — `{questions: [...]}`
+ *  (validated server-side before execution). Returns null when the
+ *  payload doesn't parse to that shape. */
 export function parseAskUserQuestionArgs(raw: string): AskUserQuestionItem[] | null {
   try {
     const parsed = JSON.parse(raw) as unknown
@@ -73,15 +72,10 @@ export function parseAskUserQuestionArgs(raw: string): AskUserQuestionItem[] | n
           .filter((q): q is AskUserQuestionItem => q !== null)
         return items.length > 0 ? items : null
       }
-      if (typeof obj.question === 'string') {
-        const q = normalizeQuestion(obj)
-        return q ? [q] : null
-      }
     }
   } catch {
-    // fall through — not JSON; treat the whole thing as a bare question
+    // not JSON — no valid question payload
   }
-  if (raw.trim()) return [{ question: raw }]
   return null
 }
 

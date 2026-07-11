@@ -50,6 +50,13 @@ services:
       context: ./containers/vllm
       dockerfile: Dockerfile
     image: grudge-vllm:latest
+    environment:
+      # vLLM ≥0.22's default V2 GPU model runner backs its token tables
+      # with UVA (pinned host memory). WSL cannot pin memory (documented
+      # CUDA-on-WSL limitation), so the V2 runner dies at init with
+      # "UVA is not available" and the container crash-loops. The V1
+      # runner allocates those tensors on-GPU and runs fine under WSL.
+      - VLLM_USE_V2_MODEL_RUNNER=0
     ports:
       - "8000:8000"
     volumes:
