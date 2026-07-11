@@ -59,7 +59,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 		if err != nil {
 			return AssembleResult{}, err
 		}
-		wire := groupsToWire(groups, nil)
+		wire := groupsToWire(groups, nil, "")
 		total := e.wireTokens(req.CountText, req.System, nil, wire, req.FixedTokens, req.PerMsgDelim)
 		if req.Budget <= 0 || total <= effectiveBudget {
 			localGroups, localWire = groups, wire
@@ -183,7 +183,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 		if c, ok := groupCost[g.RootID]; ok {
 			return c
 		}
-		c := e.wireTokens(req.CountText, nil, groupsToWire([]DeliveryGroup{g}, localIDs), nil, 0, req.PerMsgDelim)
+		c := e.wireTokens(req.CountText, nil, groupsToWire([]DeliveryGroup{g}, localIDs, req.ThreadID), nil, 0, req.PerMsgDelim)
 		if c < 1 {
 			c = 1
 		}
@@ -223,7 +223,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 			return corpusByID[groups[i].RootID].Position < corpusByID[groups[j].RootID].Position
 		})
 
-		selectedWire := groupsToWire(groups, localIDs)
+		selectedWire := groupsToWire(groups, localIDs, req.ThreadID)
 		finalWire = make([]*llmv1.LLMMessage, 0, 1+len(selectedWire)+len(localWire))
 		if req.System != nil {
 			finalWire = append(finalWire, req.System)
@@ -408,7 +408,16 @@ func closeRoots(index *ProtocolIndex, roots []*threadv1.Message, scores map[stri
 	return mergeDeliveryGroups(groups), nil
 }
 
-func groupsToWire(groups []DeliveryGroup, already map[string]bool) []*llmv1.LLMMessage {
+// crossThreadMarker is prepended to SELECTED messages delivered from a
+// thread other than the one being continued, so the model never
+// misattributes recalled material to the live conversation (measured:
+// cross-thread facts answered with "you told me earlier in this thread"
+// — a false provenance claim). Delivery honesty, same class as the
+// window: the model is told what it is actually looking at. Pure tool
+// messages are not annotated (their semantic turn-peers carry it).
+const crossThreadMarker = "[recalled from a different conversation]"
+
+func groupsToWire(groups []DeliveryGroup, already map[string]bool, currentThreadID string) []*llmv1.LLMMessage {
 	seen := make(map[string]bool)
 	for id := range already {
 		seen[id] = true
@@ -434,7 +443,16 @@ func groupsToWire(groups []DeliveryGroup, already map[string]bool) []*llmv1.LLMM
 	})
 	out := make([]*llmv1.LLMMessage, 0, len(messages))
 	for _, m := range messages {
-		out = append(out, messageToLLM(m))
+		lm := messageToLLM(m)
+		if currentThreadID != "" && m.ThreadId != currentThreadID && hasSemanticBlock(m.Content) {
+			annotated := make([]*threadv1.ContentBlock, 0, len(lm.Content)+1)
+			annotated = append(annotated, &threadv1.ContentBlock{Block: &threadv1.ContentBlock_Text{
+				Text: &threadv1.TextContent{Text: crossThreadMarker},
+			}})
+			annotated = append(annotated, lm.Content...)
+			lm = &llmv1.LLMMessage{Role: lm.Role, Content: annotated}
+		}
+		out = append(out, lm)
 	}
 	return out
 }
