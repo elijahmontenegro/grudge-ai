@@ -223,18 +223,12 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	} else if ok {
 		rrcCfg.Calibrator = art.Calibrator
 		s.CalibratorFitted = true
-		// The mass axis (B) is not a scorer property like A/C — it is a
-		// property of THIS deployment's usage (how durably a message that
-		// fed a past generation stays needed), so it cannot be seed-fit and
-		// must not be shipped as a universal constant. Until enough sound
-		// provenance history accrues for the stage-3 corpus refit, B carries
-		// the neutral structural-lift PRIOR. That state is load-bearing —
-		// the whole /\ mass lift rides B — so it is logged legibly rather
-		// than reverse-engineered from the code.
-		massAxis := fmt.Sprintf("structural-lift PRIOR, uncalibrated — refines per-deployment once %d provenance edges accrue", massRefitThreshold(art))
-		if art.MassSamples > 0 {
-			massAxis = fmt.Sprintf("corpus-fitted over %d mass pairs (last fit at %d edges; refines again at %d)", art.MassSamples, art.ProvenanceEdgesAtFit, massRefitThreshold(art))
-		}
+		// The mass axis (B) is a declared structural constant: the lift's
+		// magnitude has no label-free ground truth to measure, and no
+		// oracle runs inside the substrate to invent one. A and C are
+		// measured against the live scorer (seed references at first
+		// boot, drift-triggered re-measurement).
+		massAxis := "structural-lift prior (declared constant)"
 		log.Printf("Loaded acceptance calibrator (scorer=%s): A=%.3f B=%.3f C=%.3f | similarity+bias: seed-fit over %d pairs (log-loss %.3f) | mass axis: %s",
 			s.RerankerModelID, art.Calibrator.A, art.Calibrator.B, art.Calibrator.C,
 			art.Samples, art.LogLoss, massAxis)

@@ -73,7 +73,7 @@ type Result struct {
 // silently rescale that shift; preserving B/A keeps it. So the fitted
 // calibrator gets B = (prior.B/prior.A) · fittedA. B's true empirical value
 // comes later, from provenance-mass labeling over a replayed corpus
-// (rrc/calibrate/regenjudge), where mass actually varies in the data.
+// — no such stage exists; B is a declared structural constant.
 //
 // Scoring failures on individual triples abort the fit rather than silently
 // thinning the training set: a half-scored seed produces a calibrator that

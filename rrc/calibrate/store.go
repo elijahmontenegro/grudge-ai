@@ -15,23 +15,15 @@ import (
 // ScorerModelID records which reranker's score distribution the
 // coefficients were fit against — a calibrator is only valid for the
 // model it was trained on, so the loader can refuse a stale one after a
-// scorer swap. MassSamples/ProvenanceEdgesAtFit are the mass-refit
-// watermark: zero MassSamples means B still carries the seed fit's
-// ratio prior; the refit re-arms when the corpus's provenance structure
-// has doubled past ProvenanceEdgesAtFit.
+// scorer swap. B always carries the seed fit's declared structural
+// ratio — there is no history-fitting stage and no oracle in the
+// substrate; unknown legacy keys in older artifacts are ignored on
+// load.
 type Artifact struct {
 	Calibrator    Calibrator `json:"calibrator"`
 	ScorerModelID string     `json:"scorer_model_id"`
 	Samples       int        `json:"samples"`
 	LogLoss       float64    `json:"log_loss"`
-
-	MassSamples          int `json:"mass_samples,omitempty"`
-	ProvenanceEdgesAtFit int `json:"provenance_edges_at_fit,omitempty"`
-	// MassAttemptEdges is failure memory: the provenance-edge count at
-	// the last FAILED mass-refit attempt. Re-arming waits for the corpus
-	// to double past it, so a structurally doomed or judge-broken replay
-	// retries on growth, not on every reload.
-	MassAttemptEdges int `json:"mass_attempt_edges,omitempty"`
 }
 
 // Save writes a fitted calibrator artifact to path as JSON, creating

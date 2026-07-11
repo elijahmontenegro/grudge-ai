@@ -444,11 +444,15 @@ Acceptance is one law: *P(prereq | signals) >= LossRatio + mu*tokens*.
 
 - **P** fuses the raw signals -- semantic similarity (the scorer's raw
   cross-encoder score) and structural descendant mass (the provenance
-  walk) -- through a FITTED calibrator, sigma(A*sim + B*mass + C).
-  Coefficients are owned by fitting procedures (seed-fit at first boot per
-  scorer, drift-triggered refit, mass-refit on the corpus watermark),
-  never by hands. The zero-mass floor is this law evaluated at mass = 0,
-  not a second rule.
+  walk) -- through a MEASURED calibrator, sigma(A*sim + B*mass + C).
+  A and C are measured against the live scorer (indisputable seed
+  references scored at first boot; drift-triggered re-measurement --
+  reranker-only, no generative calls). B is a DECLARED structural
+  constant: the lift's magnitude has no label-free ground truth, and no
+  oracle runs inside the substrate to invent one -- generative judgment
+  belongs to the chat path exclusively; the substrate is non-generative
+  end to end. The zero-mass floor is this law evaluated at mass = 0, not
+  a second rule.
 - **LossRatio** is the precision stance -- V_harm/(V_gain+V_harm) -- the
   one honest hand-set scalar: a value judgment, not derivable from data.
 - **mu** is the token budget's shadow price, READ OFF the assembly shed
@@ -462,12 +466,10 @@ Acceptance is one law: *P(prereq | signals) >= LossRatio + mu*tokens*.
   overrun the budget. Warm-started dual feedback: no fixpoint, no knob.
 - **Diversity is not a knob**: a candidate's effective value is its NOVEL
   FRACTION -- value * (1 - max similarity to the already-kept) -- a
-  derived form with zero free parameters, itself scheduled to be replaced
-  by a third fitted calibrator signal, P(needed | sim, mass, redundancy),
-  when the corpus can feed the fit.
+  derived form with zero free parameters.
 
 Resource rules vs truth rules: caps and cadences (the provenance walk's
-compute cap, the refit watermarks) are permissible resource rules -- but
+compute cap) are permissible resource rules -- but
 WHAT they keep must follow the law's own currency (the walk truncates
 best-first by path-product bound into the anchor set, never by hop order),
 and truncation is always instrumented, never silent.

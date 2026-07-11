@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,8 +12,6 @@ import (
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
-	"github.com/elijahmontenegro/grudge/rrc/calibrate/massfit"
-	"github.com/elijahmontenegro/grudge/rrc/calibrate/regenjudge"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate/seed"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate/seedfit"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
@@ -246,8 +243,6 @@ func (h *Holder) maybeCalibrate(subs *Substrate) {
 	// against the live scorer.
 	prior := subs.Engine.Config().Calibrator
 	fitted := subs.CalibratorFitted
-	completer := subs.MainCompleter
-	chunkCfg := subs.Engine.Config().Chunk
 
 	go func() {
 		defer func() {
@@ -357,178 +352,5 @@ func (h *Holder) maybeCalibrate(subs *Substrate) {
 			return
 		}
 
-		// Stage 3 — mass refit: fit B empirically from replayed corpus
-		// history once the provenance structure is there.
-		h.maybeMassRefit(ctx, scorer, scorerModelID, completer, chunkCfg, calPath)
 	}()
-}
-
-// massRefitMinEdges arms the first mass refit: below this many recorded
-// provenance edges a replay would be as mass-starved as the seed set.
-// A documented constant, not a setting — like provenanceReachCap,
-// there is nothing for a user to know better about.
-const massRefitMinEdges = 64
-
-// massRefitThreshold is the provenance-edge count at which THIS artifact's
-// next mass refit arms: the base floor, or double the edge count of the
-// last successful fit, or double the last failed attempt — whichever is
-// highest (successful fits and failure memory both back off on corpus
-// doubling). The single source of truth for the arming gate and the
-// boot log's "when does the mass axis refine" figure, so the two can't
-// drift.
-func massRefitThreshold(art calibrate.Artifact) int {
-	t := massRefitMinEdges
-	if art.ProvenanceEdgesAtFit > 0 && 2*art.ProvenanceEdgesAtFit > t {
-		t = 2 * art.ProvenanceEdgesAtFit
-	}
-	if art.MassAttemptEdges > 0 && 2*art.MassAttemptEdges > t {
-		t = 2 * art.MassAttemptEdges
-	}
-	return t
-}
-
-// maybeMassRefit fits the calibrator's mass axis (B) from replayed
-// corpus history, watermark-gated: it runs when provenance structure
-// first crosses massRefitMinEdges, and re-runs when the structure has
-// doubled since the last mass fit — a knobless refresh schedule whose
-// per-run cost is bounded (massfit caps its judge calls) and whose
-// frequency decays as the corpus matures. The union fit (seed samples
-// anchoring the similarity axis with curated labels + replay samples
-// informing mass) passes the same absolute validity gate as every
-// other fit before it may persist.
-func (h *Holder) maybeMassRefit(ctx context.Context, scorer seedfit.Scorer, scorerModelID string, completer core.Completer, chunkCfg chunk.Config, calPath string) {
-	if completer == nil {
-		return // no judge available — replay labeling needs the main model
-	}
-	art, ok, err := calibrate.Load(calPath, scorerModelID)
-	if err != nil {
-		log.Printf("[Calibrate] mass refit: artifact unreadable (stage 1 will refit): %v", err)
-		return
-	}
-	if !ok {
-		return // stage 1 owns the artifact's existence
-	}
-	edgeCount, err := h.db.CountProvenanceEdges()
-	if err != nil {
-		log.Printf("[Calibrate] mass refit arming check failed: %v", err)
-		return
-	}
-	// Arming threshold: the base floor, the doubling watermark of the
-	// last successful mass fit, and the doubling watermark of the last
-	// FAILED attempt — failure memory, so an armed-but-failing replay
-	// (broken judge, unreachable structure, refused fit) retries on
-	// corpus growth, not on every reload.
-	if edgeCount < massRefitThreshold(art) {
-		return
-	}
-	recordAttempt := func() {
-		attempted := art
-		attempted.MassAttemptEdges = edgeCount
-		if err := calibrate.Save(calPath, attempted); err != nil {
-			log.Printf("[Calibrate] mass refit attempt watermark persist failed: %v", err)
-		}
-	}
-
-	corpus, err := h.db.AllCorpus()
-	if err != nil {
-		log.Printf("[Calibrate] mass refit corpus load failed: %v", err)
-		return
-	}
-	edges, err := h.db.AllEdges()
-	if err != nil {
-		log.Printf("[Calibrate] mass refit edge load failed: %v", err)
-		return
-	}
-
-	log.Printf("[Calibrate] mass refit armed for %s (%d provenance edges, prior fit at %d) — replaying corpus", scorerModelID, edgeCount, art.ProvenanceEdgesAtFit)
-	// Calibration introspection, env-gated: dump each labeled pair so a
-	// fit's outcome can be read against the data, not inferred from B.
-	if os.Getenv("GRUDGE_MASSFIT_DUMP") != "" {
-		massfit.OnSample = func(withMass bool, sim, mass float64, isPrereq bool) {
-			kind := "CONTRAST"
-			if withMass {
-				kind = "MASS"
-			}
-			log.Printf("[MassSample] %s sim=%.4f mass=%.4f prereq=%v", kind, sim, mass, isPrereq)
-		}
-	}
-	judge := regenjudge.New(completer, massfit.NewCorpusProvider(corpus))
-	replaySamples, stats, err := massfit.Replay(ctx, corpus, edges, scorer, judge, chunkCfg)
-	if err != nil {
-		// No reachable mass pairs is a cold-start deferral, not a failure:
-		// cross-thread edges exist but none connect an eligible candidate to a
-		// turn's cone yet. Distinct from a genuine judge/scorer fault below.
-		if errors.Is(err, massfit.ErrCorpusTooYoung) {
-			log.Printf("[Calibrate] mass refit deferred: no reachable mass pairs yet (%d edges) — rechecks on corpus growth", edgeCount)
-			recordAttempt()
-			return
-		}
-		// Abort whole; the attempt watermark defers the retry to the
-		// next corpus doubling instead of the next reload. No partial fit.
-		log.Printf("[Calibrate] mass replay failed (keeping current artifact): %v", err)
-		recordAttempt()
-		return
-	}
-	if stats.Truncated {
-		log.Printf("[Calibrate] mass replay: provenance walk hit its cap on at least one turn — masses are floor estimates there")
-	}
-	if stats.Dropped > 0 {
-		log.Printf("[Calibrate] mass replay: dropped %d sample(s) to transient scorer/judge failures (tolerated) — fit runs on the survivors", stats.Dropped)
-	}
-	seedSamples, _, _, err := seedfit.Samples(ctx, scorer, seed.Pairs(), 0)
-	if err != nil {
-		log.Printf("[Calibrate] mass refit seed scoring failed: %v", err)
-		recordAttempt()
-		return
-	}
-
-	union := append(seedSamples, replaySamples...)
-	cal, err := calibrate.Fit(union, calibrate.FitConfig{L2: 1e-4})
-	if err != nil {
-		log.Printf("[Calibrate] mass fit failed: %v", err)
-		return
-	}
-	if err := calibrate.Validate(*cal, union); err != nil {
-		log.Printf("[Calibrate] mass fit refused (keeping current artifact): %v", err)
-		recordAttempt()
-		return
-	}
-	// Persist-consistency: the boot health check judges this calibrator
-	// on the seed subsample; a union fit that fails it would oscillate.
-	if err := seedfit.Health(ctx, scorer, seed.Pairs(), *cal); err != nil {
-		log.Printf("[Calibrate] mass fit refused (fails the boot-health subsample; keeping current artifact): %v", err)
-		recordAttempt()
-		return
-	}
-	// B ≤ 0 is a pipeline-breakage signal, not a finding. The contrast
-	// draws are RANDOM old messages — the base rate of a random message
-	// being a true prerequisite is low, so for mass to anti-predict
-	// (mass-bearing candidates prerequisites LESS often than random
-	// draws) the judge or the replay would have to be systematically
-	// inverted. Persisting B ≤ 0 would silently flip the /\: provenance
-	// mass would penalize acceptance for exactly the roots it exists to
-	// lift. Refuse loudly and keep the current artifact; the doubling
-	// watermark retries with more data.
-	if cal.B <= 0 {
-		log.Printf("[Calibrate] mass fit refused: fitted B=%.3f ≤ 0 (mass anti-predicts labels — judge or replay pipeline suspect; %d mass / %d contrast pairs)", cal.B, stats.MassPairs, stats.ContrastPairs)
-		recordAttempt()
-		return
-	}
-	if err := calibrate.Save(calPath, calibrate.Artifact{
-		Calibrator:           *cal,
-		ScorerModelID:        scorerModelID,
-		Samples:              len(union),
-		LogLoss:              cal.LogLoss(union),
-		MassSamples:          len(replaySamples),
-		ProvenanceEdgesAtFit: edgeCount,
-	}); err != nil {
-		log.Printf("[Calibrate] mass fit persist failed: %v", err)
-		return
-	}
-	log.Printf("[Calibrate] mass-fit %s: %d seed + %d replay samples (%d mass / %d contrast over %d turns): A=%.3f B=%.3f C=%.3f",
-		scorerModelID, len(seedSamples), len(replaySamples), stats.MassPairs, stats.ContrastPairs, stats.TurnsSampled,
-		cal.A, cal.B, cal.C)
-	if err := h.ReloadProviders(ctx); err != nil {
-		log.Printf("[Calibrate] live swap failed (mass fit persisted; applies on next boot): %v", err)
-	}
 }

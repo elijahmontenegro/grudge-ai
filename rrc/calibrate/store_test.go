@@ -41,7 +41,7 @@ func TestSaveLoad_RoundTrip(t *testing.T) {
 	if got.Calibrator.Predict(0.8, 0) != cal.Predict(0.8, 0) {
 		t.Fatal("loaded calibrator predicts differently from the fitted one")
 	}
-	if got.Samples != len(samples) || got.MassSamples != 0 {
+	if got.Samples != len(samples) {
 		t.Fatalf("metadata mismatch: %+v", got)
 	}
 

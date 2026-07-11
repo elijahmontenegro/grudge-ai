@@ -2,23 +2,16 @@ package substrate
 
 import (
 	"context"
-	"fmt"
-	"iter"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
-	llmv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/llm/v1"
-	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
-	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
-	"github.com/elijahmontenegro/grudge/proto/pbtext"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 	"github.com/elijahmontenegro/grudge/rrc/calibrate/seedfit"
 	"github.com/elijahmontenegro/grudge/service/config"
 	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/storage"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // fakeSeedScorer scores the seed set the way a competent reranker would:
@@ -224,44 +217,9 @@ type collapsedScorerProvider struct{}
 
 func (collapsedScorerProvider) Scorer(string) (core.Scorer, error) { return collapsedScorer{}, nil }
 
-// markerCompleter is the fake judge model: answers YES exactly when the
-// judgment prompt contains the marker, NO otherwise — a deterministic
-// regenjudge stand-in that still exercises the real judge path.
-type markerCompleter struct{}
-
-func (markerCompleter) Complete(_ context.Context, req *llmv1.CompletionRequest) (*llmv1.CompletionResponse, error) {
-	prompt := ""
-	for _, m := range req.Messages {
-		prompt += pbtext.TextFromBlocks(m.Content)
-	}
-	answer := "NO"
-	if strings.Contains(prompt, "MAGICROOT") {
-		answer = "YES"
-	}
-	return &llmv1.CompletionResponse{
-		Message: &llmv1.LLMMessage{
-			Role:    threadv1.Role_ROLE_ASSISTANT,
-			Content: pbtext.BlocksFromText(answer),
-		},
-	}, nil
-}
-
-func (markerCompleter) Stream(_ context.Context, _ *llmv1.CompletionRequest) iter.Seq2[*llmv1.StreamChunk, error] {
-	return func(func(*llmv1.StreamChunk, error) bool) {} // never used by the judge
-}
-
-type markerCompleterProvider struct{}
-
-func (markerCompleterProvider) Completer(string) (core.Completer, error) {
-	return markerCompleter{}, nil
-}
-
 func init() {
 	core.RegisterProvider("holdertest-collapsed", func(core.ProviderConfig) (any, error) {
 		return collapsedScorerProvider{}, nil
-	})
-	core.RegisterProvider("holdertest-completer", func(core.ProviderConfig) (any, error) {
-		return markerCompleterProvider{}, nil
 	})
 }
 
@@ -368,147 +326,4 @@ func TestHolder_HealthyArtifactUntouched(t *testing.T) {
 	if !ok || after != before {
 		t.Fatalf("healthy pairing must leave the artifact untouched: %+v -> %+v", before, after)
 	}
-}
-
-// TestHolder_MassRefitFitsBFromCorpus is stage 3 end to end: once a
-// fitted artifact exists, the corpus carries enough provenance
-// structure, and a completer is configured, the holder replays the
-// corpus in the background, labels mass-bearing candidates through the
-// real regenjudge path (against the marker completer), union-fits with
-// the seed samples, and persists an artifact whose B is empirical —
-// with the watermark recorded for the doubling schedule.
-func TestHolder_MassRefitFitsBFromCorpus(t *testing.T) {
-	dataDir := t.TempDir()
-	cfg := &config.Config{
-		Paths: config.Paths{DataDir: dataDir},
-		Settings: config.Settings{
-			Providers: map[string]config.ProviderConfig{
-				"scorer": {Adapter: "holdertest-scorer", Model: "fake-reranker-1"},
-				"main":   {Adapter: "holdertest-completer", Model: "fake-judge-1"},
-			},
-		},
-	}
-	db, err := storage.Open(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	// The massfit fixture shape: root turn, banking turn, trigger turn.
-	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	mkMsg := func(id, turnID string, role threadv1.Role, text string, at time.Time) *threadv1.Message {
-		return &threadv1.Message{
-			Id: id, ThreadId: "t1", TurnId: turnID, Role: role,
-			Content: []*threadv1.ContentBlock{
-				{Block: &threadv1.ContentBlock_Text{Text: &threadv1.TextContent{Text: text}}},
-			},
-			CreatedAt: timestamppb.New(at),
-		}
-	}
-	if err := db.CreateThread(&threadv1.Thread{Id: "t1", Name: "t", CreatedAt: timestamppb.New(base)}); err != nil {
-		t.Fatal(err)
-	}
-	msgs := []*threadv1.Message{
-		mkMsg("m0", "turn-0", threadv1.Role_ROLE_USER, "the MAGICROOT fact: overflow wraps at INT_MAX", base),
-		mkMsg("m1", "turn-0", threadv1.Role_ROLE_ASSISTANT, "noted, the wraparound detail", base.Add(1*time.Second)),
-		mkMsg("m2", "turn-b", threadv1.Role_ROLE_USER, "name three pasta shapes", base.Add(10*time.Second)),
-		mkMsg("m3", "turn-b", threadv1.Role_ROLE_ASSISTANT, "penne rigatoni fusilli", base.Add(11*time.Second)),
-		mkMsg("m4", "turn-c", threadv1.Role_ROLE_USER, "remind me of that overflow case", base.Add(20*time.Second)),
-		mkMsg("m5", "turn-c", threadv1.Role_ROLE_ASSISTANT, "it is the MAGICROOT wraparound at INT_MAX", base.Add(21*time.Second)),
-		mkMsg("m6", "turn-d", threadv1.Role_ROLE_USER, "and the MAGICROOT case once more", base.Add(30*time.Second)),
-		mkMsg("m7", "turn-d", threadv1.Role_ROLE_ASSISTANT, "still the MAGICROOT wraparound", base.Add(31*time.Second)),
-		mkMsg("m8", "turn-e", threadv1.Role_ROLE_USER, "one more time, that overflow thing", base.Add(40*time.Second)),
-	}
-	for i, m := range msgs {
-		m.Position = int64(i)
-		if err := db.InsertMessage(m, nil); err != nil {
-			t.Fatal(err)
-		}
-	}
-	mkEdge := func(from, to string, w float32, at time.Time) *rrcv1.Edge {
-		return &rrcv1.Edge{
-			FromMessageId: from, ToMessageId: to, Score: w,
-			Source:       rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE,
-			DetectedAt:   timestamppb.New(at),
-			FromThreadId: "t1", ToThreadId: "t1",
-		}
-	}
-	for _, e := range []*rrcv1.Edge{
-		mkEdge("m0", "m1", 1.0, base.Add(2*time.Second)),
-		mkEdge("m2", "m3", 1.0, base.Add(12*time.Second)),
-		mkEdge("m0", "m3", 0.8, base.Add(12*time.Second)),
-		// The root keeps getting selected and banking weight — the
-		// fan-in accumulation that separates real roots from one-shot
-		// noise like m2.
-		mkEdge("m4", "m5", 1.0, base.Add(22*time.Second)),
-		mkEdge("m0", "m5", 0.85, base.Add(22*time.Second)),
-		mkEdge("m6", "m7", 1.0, base.Add(32*time.Second)),
-		mkEdge("m0", "m7", 0.9, base.Add(32*time.Second)),
-	} {
-		if err := db.InsertEdge(e); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Filler provenance structure to cross the arming floor. These
-	// connect nothing to any cone — arming counts raw structure, the
-	// replay decides reachability.
-	for i := 0; i < massRefitMinEdges; i++ {
-		f := fillerIDs(i)
-		if err := db.InsertEdge(mkEdge(f[0], f[1], 1.0, base.Add(-time.Hour))); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	h := NewHolder(cfg, db, holderTestEstimator{}, nil)
-	if err := h.Bootstrap(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	// Stage 1: cold-start seed fit.
-	waitCalibration(t, h)
-	calPath := datadir.CalibratorPath(dataDir)
-	art, ok, _ := calibrate.Load(calPath, "holdertest-scorer/fake-reranker-1@")
-	if !ok {
-		t.Fatal("seed fit never persisted")
-	}
-	if art.MassSamples != 0 {
-		t.Fatalf("seed fit must not claim mass samples: %+v", art)
-	}
-
-	// Next reload: health passes, mass refit arms and runs.
-	if err := h.ReloadProviders(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		art, ok, _ = calibrate.Load(calPath, "holdertest-scorer/fake-reranker-1@")
-		if ok && art.MassSamples > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("mass refit never landed: %+v", art)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if art.ProvenanceEdgesAtFit < massRefitMinEdges {
-		t.Fatalf("watermark not recorded: %+v", art)
-	}
-	if art.Calibrator.A <= 0 {
-		t.Fatalf("union fit lost the similarity axis: %+v", art.Calibrator)
-	}
-
-	// Idempotence: another reload must NOT re-run the replay — the
-	// doubling watermark is not crossed.
-	if err := h.ReloadProviders(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	waitCalibration(t, h)
-	again, _, _ := calibrate.Load(calPath, "holdertest-scorer/fake-reranker-1@")
-	if again != art {
-		t.Fatalf("watermark should hold the refit: %+v -> %+v", art, again)
-	}
-}
-
-// fillerIDs fabricates disconnected edge endpoints for the arming floor.
-func fillerIDs(i int) [2]string {
-	return [2]string{fmt.Sprintf("filler-a-%d", i), fmt.Sprintf("filler-b-%d", i)}
 }
