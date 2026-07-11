@@ -208,7 +208,7 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 	// (the rank-CFAR noise reference), interpreted within that event,
 	// and discarded. The one hand-set value judgment is LossRatio.
 	log.Printf("Acceptance: detection-theoretic (rank CFAR, R=%d ref/event, scorer=%s) | stance s0=-log2(1-LossRatio)=%.2f bits",
-		16, s.RerankerModelID, -math.Log2(1-rrcCfg.LossRatio))
+		rrc.ReferenceSampleSize, s.RerankerModelID, -math.Log2(1-rrcCfg.LossRatio))
 
 	// Searcher + ChunkOracle share the same embedder and model id.
 	// Construct before the engine so the oracle can flow in as an

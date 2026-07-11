@@ -416,7 +416,7 @@ func (e *Engine) referenceFloor(ctx context.Context, local *SerializedLocalConte
 	if e.scorer == nil || e.oracle == nil {
 		return nil, nil
 	}
-	refs, err := e.oracle.RandomChunks(ctx, referenceSampleSize, referenceSeed(local.Fingerprint), predicate)
+	refs, err := e.oracle.RandomChunks(ctx, ReferenceSampleSize, referenceSeed(local.Fingerprint), predicate)
 	if err != nil {
 		return nil, fmt.Errorf("reference draw: %w", err)
 	}

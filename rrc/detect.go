@@ -21,12 +21,16 @@ import (
 // consumes it and discarded — the perishable-inference law holds by
 // construction, not by discipline.
 
-// referenceSampleSize is R: how many reference chunks each selection
-// event draws to measure its noise floor. A resource constant (sample
-// size for floor estimation — HOW-MUCH class, like provenanceReachCap),
-// not a truth knob: the value stance enters through stanceBits, never
-// here. R=16 puts the beat-all detection at -log2(1/17) ≈ 4.09 bits.
-const referenceSampleSize = 16
+// ReferenceSampleSize is R: how many reference chunks each selection
+// event draws to measure its noise floor. Exported as the single source
+// of truth for telemetry and the invariance bench. A resource constant
+// (sample size for floor estimation — HOW-MUCH class, like
+// provenanceReachCap): it sets which quantile of the junk distribution
+// the beat-all floor estimates (R/(R+1) — at 64, the ~98.5th
+// percentile) and the evidence per detection (log2(R+1) ≈ 6.02 bits).
+// The bar's VALUE stays fully event-measured; R fixes only the ruler's
+// resolution.
+const ReferenceSampleSize = 64
 
 // minReferenceSample is the cold-start boundary: with fewer scoreable
 // references than this, no floor can be estimated and the event runs

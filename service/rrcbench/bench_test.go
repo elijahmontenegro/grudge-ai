@@ -62,7 +62,7 @@ func TestInvariance_ScorerWorkStaysFlat(t *testing.T) {
 	// detection law's noise reference (≤ chunks·R, R=16) — both
 	// per-event constants; the reference is what keeps acceptance
 	// corpus-invariant WITHOUT a fitted calibrator.
-	cosineBound := int64(localWindow * (rerankTopK + 16))
+	cosineBound := int64(localWindow * (rerankTopK + rrc.ReferenceSampleSize))
 	reachBound := int64(localWindow * provenanceReachCap)
 
 	type split struct{ total, cosine, reach int64 }
@@ -108,7 +108,7 @@ func TestInvariance_ScorerWorkStaysFlat(t *testing.T) {
 	// — a reference chunk that coincides with a top-K candidate reuses
 	// its cache entry, and that overlap shrinks as the corpus grows. A
 	// spread beyond chunks·R means candidate work is tracking N.
-	refSlack := int64(localWindow * 16)
+	refSlack := int64(localWindow * rrc.ReferenceSampleSize)
 	lo, hi := counts[0].cosine, counts[0].cosine
 	for _, c := range counts[1:] {
 		if c.cosine < lo {
