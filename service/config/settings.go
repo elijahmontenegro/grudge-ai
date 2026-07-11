@@ -58,9 +58,8 @@ func (e *EngineConfig) UnmarshalJSON(data []byte) error {
 	}
 	// Retired keys migrate by tolerated deletion: diversity_lambda died
 	// with the MMR λ knob (the redundancy discount is derived — the
-	// novel fraction — and later a fitted calibrator axis; never a
-	// configuration). An existing settings file keeps loading; the key
-	// drops on the next save.
+	// novel fraction — never a configuration). An existing settings file
+	// keeps loading; the key drops on the next save.
 	delete(fields, "diversity_lambda")
 	cleaned, err := json.Marshal(fields)
 	if err != nil {

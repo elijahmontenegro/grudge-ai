@@ -440,39 +440,68 @@ insufficient and removed; temporal-as-edge-signal was rejected as
 duplicating Local Context's job; hand weights and flat thresholds are rules
 where laws belong.)
 
-Acceptance is one law: *P(prereq | signals) >= LossRatio + mu*tokens*.
+Acceptance is one law: DETECTION against a noise floor the selection
+event measures about itself, priced by the budget. No fitted
+coefficients, no shipped labels, no persistent acceptance state of any
+kind exists anywhere in the substrate.
 
-- **P** fuses the raw signals -- semantic similarity (the scorer's raw
-  cross-encoder score) and structural descendant mass (the provenance
-  walk) -- through a MEASURED calibrator, sigma(A*sim + B*mass + C).
-  A and C are measured against the live scorer (indisputable seed
-  references scored at first boot; drift-triggered re-measurement --
-  reranker-only, no generative calls). B is a DECLARED structural
-  constant: the lift's magnitude has no label-free ground truth, and no
-  oracle runs inside the substrate to invent one -- generative judgment
-  belongs to the chat path exclusively; the substrate is non-generative
-  end to end. The zero-mass floor is this law evaluated at mass = 0, not
-  a second rule.
-- **LossRatio** is the precision stance -- V_harm/(V_gain+V_harm) -- the
-  one honest hand-set scalar: a value judgment, not derivable from data.
-- **mu** is the token budget's shadow price, READ OFF the assembly shed
-  equilibrium, never set: exactly zero whenever the budget has slack
-  (complementary slackness), and the marginal refused DENSITY (excess P
-  per wire token) when the budget binds. The shed ranks by density --
-  greedy knapsack, so a marginally-better giant can no longer crowd out
-  several cheap goods -- and the thread's next selection charges each
-  candidate mu times its delivery-cost lower bound. Selection is the price
-  filter; the shed is the hard enforcer; a one-call-stale price can never
-  overrun the budget. Warm-started dual feedback: no fixpoint, no knob.
-- **Diversity is not a knob**: a candidate's effective value is its NOVEL
-  FRACTION -- value * (1 - max similarity to the already-kept) -- a
-  derived form with zero free parameters.
+- **The semantic detector**: each selection event draws R = 16 reference
+  chunks from the searchable corpus (deterministically seeded by the
+  query fingerprint, filtered by the same scope/exclusion predicate as
+  candidates), scores them against the same query with the same
+  max-merge, and accepts a candidate when it beats the WHOLE sample. The
+  null probability is exact and distribution-free: under exchangeability
+  a background chunk outranks R references with probability 1/(R+1) — in
+  any scorer's units, which is what makes acceptance scorer-agnostic
+  with no calibration step: swap the scorer and the bar is correct at
+  the next event, because the bar is re-measured at every event. R is a
+  resource constant (sample size for floor estimation), not a truth
+  knob. A flat reference sample (zero spread) means the scoring
+  instrument is not discriminating — the event fails loudly: the
+  event-local, label-free scorer health check. Cold start (corpus
+  smaller than the minimum sample) runs ungated; the budget alone
+  arbitrates.
+- **The structural detector (mass), independent**: a candidate's mass
+  RANK within the walk's reached set (this turn's recorded ancestry,
+  bounded by the compute cap) gives the same exact rank statistics, so a
+  heavy hitter surfaces on structural evidence alone — junk similarity
+  included: the dropped-then-recalled regime the lift exists for. The
+  channels are NEVER summed: no exchange rate between similarity and
+  history exists anywhere. A candidate detected in both channels adds
+  its bits (the channels are measured independent).
+- **Value is surprisal**: bits = -log2(p), evidence against noise — the
+  one lawful common currency across channels. Stored/displayed
+  confidence is 1 - p (the formation-time audit on the edge); the raw
+  observation (CrossEncoderScore) is kept beside it, never overwritten.
+- **LossRatio** is the single hand-set scalar — V_harm/(V_gain+V_harm),
+  a value judgment — expressed as the stance s0 = -log2(1 - LossRatio)
+  bits: the minimum evidence to act on and the shed density's zero
+  point. The full gate: bits >= s0 + mu*tokens.
+- **mu** is the token budget's shadow price in bits per wire token, READ
+  OFF the assembly shed equilibrium, never set: exactly zero under slack
+  (complementary slackness), the marginal refused evidence-density when
+  the budget binds. The shed ranks by excess-evidence density (bits
+  above the stance per wire token); the thread's next selection charges
+  each candidate mu times its delivery-cost lower bound. Selection is
+  the price filter; the shed is the hard enforcer. Warm-started dual
+  feedback: no fixpoint, no knob.
+- **Diversity is not a knob**: a candidate's effective value is its
+  NOVEL FRACTION — value * (1 - max similarity to the kept set), and the
+  kept set is seeded with the QUERY itself, so a restatement of the
+  question (a question echo) discounts to ~0 and can neither lead the
+  ranking nor crowd the answer out under budget pressure.
+- **Traversal obeys the same law**: hop-1 edges carry this event's own
+  verdicts; hop>=2 edges are stored OBSERVATIONS interpreted by this
+  event's measured floor — detected or background, re-gated per event
+  with no rewrite. The perishable-inference law holds by construction:
+  every statistic is computed inside the event that consumes it and
+  discarded.
 
 Resource rules vs truth rules: caps and cadences (the provenance walk's
-compute cap) are permissible resource rules -- but
-WHAT they keep must follow the law's own currency (the walk truncates
-best-first by path-product bound into the anchor set, never by hop order),
-and truncation is always instrumented, never silent.
+compute cap, the reference sample size R) are permissible resource
+rules -- but WHAT they keep must follow the law's own currency (the walk
+truncates best-first by path-product bound into the anchor set, never by
+hop order), and truncation is always instrumented, never silent.
 
 ==== Bounded Selective Assembly
 
