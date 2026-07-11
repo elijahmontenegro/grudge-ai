@@ -160,20 +160,10 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	reachMass, reachThreads, reachTruncated := e.provenanceReach(walkAnchors, threadID, scope)
 	var provenanceReached int
 	if len(reachMass) > 0 {
-		// Value-stop under a binding budget: below massFloor, no
-		// candidate can clear priced acceptance even at sim = 1, so
-		// scoring a reach-only candidate under it is provably wasted
-		// scorer compute. Sound because the floor tests EXACT mass
-		// (post-walk), never the best-path bound. μ = 0 (slack) makes
-		// the floor non-positive — vacuous by complementary slackness.
-		massFloor := e.massFloorUnderPrice(price)
 		missing := make([]string, 0, len(reachMass))
 		for id := range reachMass {
 			if _, alreadyScored := bestScore[id]; alreadyScored {
 				continue // top-K cosine already surfaced it
-			}
-			if reachMass[id] < massFloor {
-				continue // sterile at the current price
 			}
 			// The walk already applied scope and excludes the cone (local
 			// context), so a reached id needs no further eligibility check.
@@ -224,31 +214,60 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 		}, nil
 	}
 
-	// Acceptance is calibrated expected value against the token budget's
-	// marginal price (A4, complete). Each candidate's raw similarity
-	// (candidate.score) and structural mass (reachMass) fuse through the
-	// Calibrator into P(prereq); accept when the excess over the
-	// precision stance covers the candidate's cost at the thread's
-	// realized shadow price: P ≥ LossRatio + μ·tokens. μ comes from the
-	// previous assembly's shed equilibrium — exactly zero under slack
-	// (complementary slackness), the marginal refused density when the
-	// budget bit — and tokens is the candidate's delivery-cost lower
-	// bound. Selection is the price filter; the shed stays the hard
-	// enforcer. The stored edge Score is the calibrated P — the
-	// formation-time audit record (traversal beyond hop 1 derives from
-	// CrossEncoderScore under the current calibrator; see selection.go).
+	// Acceptance is DETECTION against a noise floor the event measures
+	// about itself. The reference sample — R corpus chunks drawn
+	// deterministically for this event, scored against the same query
+	// with the same max-merge — is the background distribution; a
+	// candidate is accepted when it beats the WHOLE sample, whose exact
+	// rank-based null probability is 1/(R+1) under exchangeability,
+	// distribution-free, in any scorer's units. The stance s0 (LossRatio
+	// in bits) and the budget's realized price μ (bits per wire token)
+	// charge the detection: bits ≥ s0 + μ·tokens. With no measurable
+	// floor (cold start: corpus smaller than the minimum sample) the
+	// event runs UNGATED — the budget alone arbitrates; tiny corpora fit
+	// in budget anyway. The stored edge Score is the detection
+	// confidence (1 − p), the formation-time audit record;
+	// CrossEncoderScore keeps the raw observation.
+	var refScores []float64
+	if len(candidates) > 0 {
+		floor, ferr := e.referenceFloor(ctx, local, predicate)
+		if ferr != nil {
+			return nil, PrerequisiteSelectionTelemetry{}, ferr
+		}
+		refScores = floor
+	}
+	gated := len(refScores) >= minReferenceSample
+	if gated && flatReference(refScores) {
+		return nil, PrerequisiteSelectionTelemetry{}, fmt.Errorf("%w: reference sample is flat — the scoring instrument is not discriminating", ErrScorerFailed)
+	}
+	s0 := stanceBits(e.cfg.LossRatio)
+	beatAll := 1.0 / float64(len(refScores)+1)
 	var edges []*rrcv1.Edge
 	for _, candidate := range candidates {
 		sim := candidate.score
-		mass := reachMass[candidate.id]
-		p := e.cfg.Calibrator.Predict(sim, mass)
-		if !accept(p, e.cfg.LossRatio, price, bestTokens[candidate.id]) {
-			continue
+		var conf float64
+		if gated {
+			p := nullP(sim, refScores)
+			if p > beatAll {
+				continue // does not stand out from this event's background
+			}
+			bits := surprisalBits(p)
+			if bits < s0+price*float64(bestTokens[candidate.id]) {
+				continue // detection too weak for the stance at the current price
+			}
+			conf = confidenceFromBits(bits)
+		} else {
+			conf = sim
+			if conf < 0 {
+				conf = 0
+			} else if conf > 1 {
+				conf = 1
+			}
 		}
 		edge := &rrcv1.Edge{
 			FromMessageId:     candidate.id,
 			ToMessageId:       anchor.Id,
-			Score:             float32(p),
+			Score:             float32(conf),
 			Source:            rrcv1.EdgeSource_EDGE_SOURCE_CROSS_ENCODER,
 			CrossEncoderScore: float32(sim),
 			DetectedAt:        timestamppb.Now(),
@@ -341,24 +360,60 @@ func (e *Engine) scoreReachedMessages(ctx context.Context, local *SerializedLoca
 	return scored, nil
 }
 
-// massFloorUnderPrice: under shadow price μ, the mass below which NO
-// candidate clears priced acceptance even at sim = 1 and minimal cost
-// (t_min = 1 token): σ(A + B·m + C) < LossRatio + μ. A theorem of the
-// fitted acceptance law, not a knob — it moves when the fit moves.
-// μ = 0 (slack) yields a non-positive floor: vacuous by complementary
-// slackness, which is why the walk's yield is only ever priced when the
-// budget actually binds. A target ≥ 1 is unclearable at any mass.
-func (e *Engine) massFloorUnderPrice(mu float64) float64 {
-	if mu <= 0 {
-		return 0
+// referenceFloor measures the event's noise floor: the reference sample
+// (R corpus chunks, deterministically drawn for this fingerprint,
+// predicate-filtered exactly like candidates) scored against every query
+// chunk with the same max-merge and the same cache as candidates.
+// Returns one best-score per reference chunk. nil scorer or a corpus
+// smaller than the draw returns what exists — the caller decides gated
+// vs ungated by sample size.
+func (e *Engine) referenceFloor(ctx context.Context, local *SerializedLocalContext, predicate Predicate) ([]float64, error) {
+	if e.scorer == nil || e.oracle == nil {
+		return nil, nil
 	}
-	target := e.cfg.LossRatio + mu
-	if target >= 1 {
-		return math.Inf(1)
+	refs, err := e.oracle.RandomChunks(ctx, referenceSampleSize, referenceSeed(local.Fingerprint), predicate)
+	if err != nil {
+		return nil, fmt.Errorf("reference draw: %w", err)
 	}
-	c := e.cfg.Calibrator
-	if c.B <= 0 {
-		return 0
+	if len(refs) == 0 {
+		return nil, nil
 	}
-	return (math.Log(target/(1-target)) - c.A - c.C) / c.B
+	best := make([]float64, len(refs))
+	for i := range best {
+		best[i] = math.Inf(-1)
+	}
+	for _, localChunk := range local.Chunks {
+		var uncached []int
+		for i, ref := range refs {
+			if sc, ok := e.scores.getLocalContext(local.Fingerprint, localChunk.Index, ref.MessageID, ref.ChunkIndex); ok {
+				if sc > best[i] {
+					best[i] = sc
+				}
+			} else {
+				uncached = append(uncached, i)
+			}
+		}
+		if len(uncached) == 0 {
+			continue
+		}
+		texts := make([]string, len(uncached))
+		for j, i := range uncached {
+			texts[j] = refs[i].Text
+		}
+		scores, err := e.scorer.Score(ctx, localChunk.Text, texts)
+		if err != nil {
+			return nil, fmt.Errorf("%w: reference scoring: %v", ErrScorerFailed, err)
+		}
+		for j, i := range uncached {
+			var sc float64
+			if j < len(scores) {
+				sc = scores[j]
+			}
+			e.scores.setLocalContext(local.Fingerprint, localChunk.Index, refs[i].MessageID, refs[i].ChunkIndex, sc)
+			if sc > best[i] {
+				best[i] = sc
+			}
+		}
+	}
+	return best, nil
 }

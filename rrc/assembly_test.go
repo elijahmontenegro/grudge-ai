@@ -2,7 +2,6 @@ package rrc
 
 import (
 	"context"
-	"math"
 	"strings"
 	"testing"
 
@@ -261,22 +260,23 @@ func TestEquivalentProtocolClosuresShedTogether(t *testing.T) {
 }
 
 // TestAssemble_DensityShedRealizesPriceThatFiltersNextSelection pins the
-// budget-price law (A4-D1/D3) end to end. (1) The shed ranks by
-// excess-value DENSITY: a higher-score giant with terrible density sheds
-// before a cheap dense good — the old value-ranked shed would have
-// dropped the small group first and then the giant anyway. (2) The shed
-// equilibrium REALIZES the budget's shadow price μ — zero under slack
+// budget-price law end to end, in the detection law's currency (bits).
+// (1) The shed ranks by excess-EVIDENCE density — bits above the stance
+// per wire token: two groups detected at the same 2.32 bits (beat-all
+// over the standard 4-ref floor) shed giant-first. (2) The shed
+// equilibrium REALIZES μ in bits/token — zero under slack
 // (complementary slackness), the marginal refused density when binding.
 // (3) Warm-started dual feedback: the thread's next selection charges
-// μ·tokens, so a candidate whose P clears the precision stance but
-// cannot pay its cost at the realized price forms no edge — while the
-// identical candidate on a slack thread does.
+// μ·tokens, so a detected-but-costly candidate (2.32 bits of evidence,
+// ~650-token delivery cost) cannot pay at the realized price and forms
+// no edge — while the identical candidate on a slack thread does.
 func TestAssemble_DensityShedRealizesPriceThatFiltersNextSelection(t *testing.T) {
 	mc := newMockScorer()
 	o := newMockChunkOracle()
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
 	cfg.MinBatchStdDev = 0
+	seedNoiseFloor(o, mc)
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 	ctx := context.Background()
 
@@ -320,10 +320,12 @@ func TestAssemble_DensityShedRealizesPriceThatFiltersNextSelection(t *testing.T)
 		t.Fatalf("an untouched thread prices at zero (complementary slackness), got %v", free)
 	}
 
-	// (3) The dual: sim 0.65 → P = σ(12·0.65−7.2) ≈ 0.65 under
-	// DefaultConfig's bootstrap — clears the 0.5 stance, cannot pay
-	// μ·(~110 tokens) at the realized price (~0.0023·110 ≈ 0.25).
-	candText := strings.Repeat("marginal candidate content ", 16)
+	// (3) The dual: sim 0.65 beats the 0.49 floor → 2.32 bits of
+	// evidence, above the 1-bit stance — but at ~650 delivery tokens and
+	// the realized μ (≈0.006 bits/token from the giant's refusal), the
+	// price term alone (~4 bits) exceeds the 4-ref evidence ceiling. The
+	// same candidate on a slack thread (μ=0) forms its edge.
+	candText := strings.Repeat("marginal candidate content ", 96)
 	addMsg(o, "cand", 3, "tp", candText)
 	addMsg(o, "q2", 0, "t-free", "the follow-up query")
 	addMsg(o, "cand2", 1, "t-free", candText)
@@ -345,30 +347,9 @@ func TestAssemble_DensityShedRealizesPriceThatFiltersNextSelection(t *testing.T)
 		return len(edges)
 	}
 	if n := sel("tp", "q", "fp-priced"); n != 0 {
-		t.Fatalf("P≈0.65 cannot pay μ·tokens at price %v on the priced thread; got %d edges", price, n)
+		t.Fatalf("2.32 bits cannot pay μ·tokens at price %v on the priced thread; got %d edges", price, n)
 	}
 	if n := sel("t-free", "q2", "fp-free"); n != 1 {
 		t.Fatalf("the identical candidate on a slack thread (μ=0) must form its edge; got %d", n)
-	}
-}
-
-// TestMassFloorUnderPrice pins the floor's arithmetic: vacuous at μ=0
-// (complementary slackness), unclearable when LossRatio+μ ≥ 1, and
-// monotone in the price while clearable. Under sane fits the floor stays
-// negative until extreme prices — the acceptance term μ·tokens, not the
-// reach prune, is the working part of the law at ordinary prices.
-func TestMassFloorUnderPrice(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Chunk.Estimator = charEstimator{}
-	e := NewEngine(cfg, newMockScorer(), WithChunkOracle(newMockChunkOracle()))
-	if f := e.massFloorUnderPrice(0); f != 0 {
-		t.Fatalf("slack must be vacuous: %v", f)
-	}
-	if f := e.massFloorUnderPrice(0.6); !math.IsInf(f, 1) {
-		t.Fatalf("LossRatio+μ ≥ 1 is unclearable at any mass: %v", f)
-	}
-	lo, hi := e.massFloorUnderPrice(0.2), e.massFloorUnderPrice(0.4)
-	if !(hi > lo) {
-		t.Fatalf("floor must rise with the price: %v vs %v", lo, hi)
 	}
 }

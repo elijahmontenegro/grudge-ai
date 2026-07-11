@@ -58,7 +58,11 @@ func TestInvariance_ScorerWorkStaysFlat(t *testing.T) {
 	// (cosine), and by ceiling where saturation applies (reach).
 	const rerankTopK = 64
 	const provenanceReachCap = 64
-	cosineBound := int64(localWindow * rerankTopK)
+	// The cosine path scores candidates (≤ chunks·topK) plus the
+	// detection law's noise reference (≤ chunks·R, R=16) — both
+	// per-event constants; the reference is what keeps acceptance
+	// corpus-invariant WITHOUT a fitted calibrator.
+	cosineBound := int64(localWindow * (rerankTopK + 16))
 	reachBound := int64(localWindow * provenanceReachCap)
 
 	type split struct{ total, cosine, reach int64 }
@@ -89,7 +93,7 @@ func TestInvariance_ScorerWorkStaysFlat(t *testing.T) {
 		db.Close()
 
 		if counts[idx].cosine > cosineBound {
-			t.Errorf("N=%d: cosine path scored %d pairs, exceeds chunks*RerankTopK=%d — an O(N) scoring leak",
+			t.Errorf("N=%d: cosine path scored %d pairs, exceeds chunks*(RerankTopK+R)=%d — an O(N) scoring leak",
 				n, counts[idx].cosine, cosineBound)
 		}
 		if counts[idx].reach > reachBound {
@@ -98,15 +102,25 @@ func TestInvariance_ScorerWorkStaysFlat(t *testing.T) {
 		}
 	}
 
-	// The cosine component must be EXACTLY flat once N >> RerankTopK: every
-	// chunk's top-K saturates, so any variation across corpus sizes means
-	// candidate work is tracking N.
+	// The cosine component must be flat-to-within-the-reference once
+	// N >> RerankTopK: candidate work saturates at chunks·topK exactly,
+	// and the only lawful variation is the noise reference (≤ chunks·R)
+	// — a reference chunk that coincides with a top-K candidate reuses
+	// its cache entry, and that overlap shrinks as the corpus grows. A
+	// spread beyond chunks·R means candidate work is tracking N.
+	refSlack := int64(localWindow * 16)
+	lo, hi := counts[0].cosine, counts[0].cosine
 	for _, c := range counts[1:] {
-		if c.cosine != counts[0].cosine {
-			t.Errorf("cosine pairs vary with corpus size: %v — top-K work is not corpus-invariant",
-				counts)
-			break
+		if c.cosine < lo {
+			lo = c.cosine
 		}
+		if c.cosine > hi {
+			hi = c.cosine
+		}
+	}
+	if hi-lo > refSlack {
+		t.Errorf("cosine pairs vary beyond the reference slack (%d): %v — top-K work is not corpus-invariant",
+			refSlack, counts)
 	}
 	t.Logf("scorer pairs across N=%v: %+v (ceilings: cosine %d, reach %d)",
 		sizes, counts, cosineBound, reachBound)

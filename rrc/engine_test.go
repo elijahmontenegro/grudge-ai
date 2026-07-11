@@ -25,11 +25,19 @@ import (
 // call convention used below.
 type mockScorer struct {
 	pairScores map[string]float64
+	defaults   map[string]float64 // candidate text → score for ANY query (noise refs)
 	callCount  int
 }
 
 func newMockScorer() *mockScorer {
-	return &mockScorer{pairScores: make(map[string]float64)}
+	return &mockScorer{pairScores: make(map[string]float64), defaults: make(map[string]float64)}
+}
+
+// SetDefault registers a query-independent score for a candidate text —
+// how the standard noise reference scores against whatever query a
+// fixture uses.
+func (m *mockScorer) SetDefault(text string, score float64) {
+	m.defaults[text] = score
 }
 
 // SetScore registers the reranker score the mock will return for a
@@ -44,7 +52,11 @@ func (m *mockScorer) Score(_ context.Context, query string, candidates []string)
 	m.callCount++
 	scores := make([]float64, len(candidates))
 	for i, c := range candidates {
-		scores[i] = m.pairScores[c+"|"+query]
+		if sc, ok := m.pairScores[c+"|"+query]; ok {
+			scores[i] = sc
+		} else {
+			scores[i] = m.defaults[c]
+		}
 	}
 	return scores, nil
 }
@@ -239,14 +251,22 @@ func testConfig() EngineConfig {
 func testEngine(mc *mockScorer, o *mockChunkOracle) *Engine {
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
-	// Fixtures assert accept/reject at a 0.5 similarity boundary, so
-	// install a bootstrap calibrator centered at 0.5
-	// (Predict(0.5,0)=0.5=LossRatio → the boundary) with the mass term
-	// off. steep=40 makes it effectively a hard step so 0.5-vs-0.49
-	// tests stay crisp.
-	cfg.Calibrator = calibrate.Bootstrap(0.5, 40.0, 0)
 	cfg.MinBatchStdDev = 0
+	seedNoiseFloor(o, mc)
 	return NewEngine(cfg, mc, WithChunkOracle(o))
+}
+
+// seedNoiseFloor installs the standard background sample: four noise
+// chunks scoring {.35,.40,.45,.49} against any query, so detection's
+// beat-all bar sits at 0.49 — the fixtures' historical 0.5 accept
+// boundary keeps its meaning under the detection law (0.5 stands out,
+// 0.49 does not).
+func seedNoiseFloor(o *mockChunkOracle, mc *mockScorer) {
+	o.RegisterNoise("noise-w", "noise-x", "noise-y", "noise-z")
+	mc.SetDefault("noise-w", 0.35)
+	mc.SetDefault("noise-x", 0.40)
+	mc.SetDefault("noise-y", 0.45)
+	mc.SetDefault("noise-z", 0.49)
 }
 
 func testSerializedLocalContext(anchor *threadv1.Message) *SerializedLocalContext {
@@ -789,6 +809,7 @@ func threeGateConfig() EngineConfig {
 }
 
 func threeGateEngine(mc *mockScorer, o *mockChunkOracle) *Engine {
+	seedNoiseFloor(o, mc)
 	return NewEngine(threeGateConfig(), mc, WithChunkOracle(o))
 }
 
@@ -842,6 +863,7 @@ func TestSelectPrereqs_CrossThreadGatesUniformly(t *testing.T) {
 	o.SetRetrievalScore("c", 0.7)
 	o.SetRetrievalScore("d", 0.6)
 	o.SetRetrievalScore("e", 0.5)
+	seedNoiseFloor(o, mc)
 	e := NewEngine(cfg, mc, WithChunkOracle(o))
 
 	addMsg(o, "mCross", 0, "tOther", "cross")
@@ -860,6 +882,7 @@ func TestSelectPrereqs_CrossThreadGatesUniformly(t *testing.T) {
 	mc2.SetScore("low-cross", "q2", 0.4)
 	mc2.SetScore("low-same", "q2", 0.4)
 	o2 := newMockChunkOracle()
+	seedNoiseFloor(o2, mc2)
 	e2 := NewEngine(cfg, mc2, WithChunkOracle(o2))
 	addMsg(o2, "lowCross", 0, "tOther", "low-cross")
 	addMsg(o2, "lowSame", 0, "tQ", "low-same")

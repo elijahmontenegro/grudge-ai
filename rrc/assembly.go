@@ -189,8 +189,13 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 		groupCost[g.RootID] = c
 		return c
 	}
+	shedStance := stanceBits(e.cfg.LossRatio)
 	densityOf := func(g DeliveryGroup) float64 {
-		return (g.Score - e.cfg.LossRatio) / float64(costOf(g))
+		// Value is EVIDENCE: the group's detection confidence converted
+		// back to surprisal bits, less the stance's zero point, per wire
+		// token. μ realized off this equilibrium is therefore in
+		// bits/token — the same units the next selection charges.
+		return (bitsFromConfidence(g.Score) - shedStance) / float64(costOf(g))
 	}
 	realizedPrice := 0.0
 	for {

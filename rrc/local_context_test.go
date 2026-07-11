@@ -218,7 +218,10 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	if _, _, err := engine.SelectPrerequisites(t.Context(), serialized, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
-	if scorer.callCount != 1 {
+	// Two scorer calls per uncached event: the candidate batch and the
+	// reference-floor batch (both keyed by the same fingerprint). The
+	// repeat event must add none.
+	if scorer.callCount != 2 {
 		t.Fatalf("exact serialized Local Context should hit cache; scorer calls=%d", scorer.callCount)
 	}
 	changed := *serialized
@@ -226,7 +229,7 @@ func TestSelectPrerequisitesCacheUsesFingerprint(t *testing.T) {
 	if _, _, err := engine.SelectPrerequisites(t.Context(), &changed, anchor, threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1"); err != nil {
 		t.Fatal(err)
 	}
-	if scorer.callCount != 2 {
+	if scorer.callCount != 4 {
 		t.Fatalf("changed fingerprint should miss cache; scorer calls=%d", scorer.callCount)
 	}
 }
