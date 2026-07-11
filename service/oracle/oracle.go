@@ -402,3 +402,45 @@ func (o *ChunkOracle) EnsureVector(ctx context.Context, ref rrc.ChunkRef) ([]flo
 	}
 	return vec, nil
 }
+
+// RandomChunks draws the acceptance law's noise reference: up to n
+// corpus chunks, deterministically pseudo-random per seed, filtered by
+// the same predicate contract as NearestChunks (scope consistency: a
+// THREAD-scoped query measures a thread-scoped floor). Over-fetches to
+// survive predicate filtering; returning fewer than n on a small or
+// heavily-excluded corpus is valid — the engine degrades to ungated.
+func (o *ChunkOracle) RandomChunks(_ context.Context, n int, seed uint64, predicate rrc.Predicate) ([]rrc.ChunkRef, error) {
+	if o == nil || o.db == nil || n <= 0 {
+		return nil, nil
+	}
+	match := rrc.CompilePredicate(predicate)
+	meta := map[string]string{"model_id": o.model}
+	out := make([]rrc.ChunkRef, 0, n)
+	// Widen past exclusions the same way NearestChunks does; bounded by
+	// two doublings — a reference sample does not need to fight for the
+	// last row, it needs to be cheap and unbiased.
+	for fetch := n * 4; ; fetch *= 2 {
+		rows, err := o.db.RandomChunkRefs(fetch, seed)
+		if err != nil {
+			return nil, fmt.Errorf("RandomChunks: %w", err)
+		}
+		out = out[:0]
+		for _, r := range rows {
+			if !match(rrc.CandidateAttrs{MessageID: r.MessageID, ThreadID: r.ThreadID, Metadata: meta}) {
+				continue
+			}
+			out = append(out, rrc.ChunkRef{
+				MessageID:  r.MessageID,
+				ChunkIndex: r.ChunkIndex,
+				ThreadID:   r.ThreadID,
+				Text:       r.Text,
+			})
+			if len(out) >= n {
+				return out, nil
+			}
+		}
+		if len(rows) < fetch || fetch >= n*16 {
+			return out, nil
+		}
+	}
+}

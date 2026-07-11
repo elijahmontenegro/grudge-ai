@@ -59,6 +59,10 @@ func (o fixedOracle) EnsureVector(context.Context, rrc.ChunkRef) ([]float32, err
 func (o fixedOracle) NearestChunks(context.Context, string, int, rrc.Predicate) ([]rrc.ChunkRef, error) {
 	return []rrc.ChunkRef{o.candidate}, nil
 }
+func (o fixedOracle) RandomChunks(_ context.Context, _ int, _ uint64, _ rrc.Predicate) ([]rrc.ChunkRef, error) {
+	return nil, nil // ungated — these tests exercise the bridge, not the gate
+}
+
 func (o fixedOracle) RepresentativeVectors(_ context.Context, _ []string) (map[string][]float32, error) {
 	return nil, nil
 }

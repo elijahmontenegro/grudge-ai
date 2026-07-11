@@ -3,6 +3,7 @@ package rrc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -56,6 +57,7 @@ type mockChunkOracle struct {
 	texts     map[string]string
 	threads   map[string]string  // id → thread, mirrors the real oracle's RAM map
 	retrieval map[string]float64 // text → RetrievalScore for nil-scorer path
+	noise     []ChunkRef         // RandomChunks' background sample (RegisterNoise)
 }
 
 func newMockChunkOracle() *mockChunkOracle {
@@ -129,6 +131,30 @@ func (o *mockChunkOracle) NearestChunks(_ context.Context, _ string, k int, pred
 		out = out[:k]
 	}
 	return out, nil
+}
+
+// RegisterNoise seeds the mock's background sample — what RandomChunks
+// returns as the acceptance law's noise reference. Tests that exercise
+// the detection gate register noise texts (scored low by their mock
+// scorer); tests that don't leave it empty and run ungated.
+func (o *mockChunkOracle) RegisterNoise(texts ...string) {
+	for i, t := range texts {
+		o.noise = append(o.noise, ChunkRef{
+			MessageID:  fmt.Sprintf("noise-%d", len(o.noise)+i),
+			ChunkIndex: 0,
+			ThreadID:   "noise-thread",
+			Text:       t,
+		})
+	}
+}
+
+// RandomChunks returns the registered noise sample, deterministic and
+// seed-independent (the mock's draw is its registration order).
+func (o *mockChunkOracle) RandomChunks(_ context.Context, n int, _ uint64, _ Predicate) ([]ChunkRef, error) {
+	if n > len(o.noise) {
+		n = len(o.noise)
+	}
+	return append([]ChunkRef(nil), o.noise[:n]...), nil
 }
 
 // RepresentativeVectors in the mock returns no vectors: the engine's
@@ -1068,6 +1094,10 @@ func (o *vectorOracle) NearestChunks(_ context.Context, _ string, k int, _ Predi
 		out = out[:k]
 	}
 	return out, nil
+}
+
+func (o *vectorOracle) RandomChunks(_ context.Context, _ int, _ uint64, _ Predicate) ([]ChunkRef, error) {
+	return nil, nil // ungated — vectorOracle exercises MMR, not the gate
 }
 
 func (o *vectorOracle) EnsureVector(_ context.Context, ref ChunkRef) ([]float32, error) {

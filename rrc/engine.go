@@ -79,6 +79,15 @@ type ChunkOracle interface {
 	// backend-specific piece of MMR — the greedy loop itself lives on the
 	// engine (ApplyMMR).
 	RepresentativeVectors(ctx context.Context, messageIDs []string) (map[string][]float32, error)
+	// RandomChunks returns up to n reference chunks drawn
+	// deterministically pseudo-randomly (same seed, same draw) from the
+	// searchable corpus, filtered by the same predicate contract as
+	// NearestChunks. This is the acceptance law's noise reference: an
+	// unbiased background sample for the event to measure its floor
+	// against — never the top-K pool, which is the corpus's upper tail
+	// by construction. Returning fewer than n rows (small corpus) is
+	// valid; the caller degrades to ungated.
+	RandomChunks(ctx context.Context, n int, seed uint64, predicate Predicate) ([]ChunkRef, error)
 }
 
 type Option func(*Engine)

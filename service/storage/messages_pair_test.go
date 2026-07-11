@@ -1,7 +1,10 @@
 package storage
 
 import (
+	"fmt"
 	"testing"
+
+	"github.com/elijahmontenegro/grudge/proto/pbtext"
 
 	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
@@ -250,5 +253,53 @@ func TestEdgeScorerModel_RoundTripAndV4Migration(t *testing.T) {
 	edges, err = db2.AllEdges()
 	if err != nil || len(edges) != 1 || edges[0].ScorerModel != "zerank-test" {
 		t.Fatalf("data must survive migration: edges=%v err=%v", edges, err)
+	}
+}
+
+// TestRandomChunkRefs_DeterministicPerSeed pins the noise reference's
+// draw contract: same seed → identical sample (the determinism suite
+// depends on it); different seeds → different orderings; limit
+// honored.
+func TestRandomChunkRefs_DeterministicPerSeed(t *testing.T) {
+	db := testDB(t)
+	if err := db.CreateThread(&threadv1.Thread{Id: "tr", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 12; i++ {
+		m := &threadv1.Message{
+			Id: fmt.Sprintf("rm%d", i), ThreadId: "tr",
+			Role: threadv1.Role_ROLE_USER, Position: int64(i),
+			Content: pbtext.BlocksFromText(fmt.Sprintf("reference row %d", i)),
+		}
+		if err := db.InsertMessage(m, []Chunk{{MessageID: m.Id, ChunkIndex: 0, Text: fmt.Sprintf("chunk %d", i), TokenEst: 3}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a1, err := db.RandomChunkRefs(6, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a2, _ := db.RandomChunkRefs(6, 42)
+	if len(a1) != 6 || len(a2) != 6 {
+		t.Fatalf("limit not honored: %d/%d", len(a1), len(a2))
+	}
+	for i := range a1 {
+		if a1[i] != a2[i] {
+			t.Fatalf("same seed diverged at %d: %+v vs %+v", i, a1[i], a2[i])
+		}
+	}
+	b, _ := db.RandomChunkRefs(6, 43)
+	same := true
+	for i := range a1 {
+		if a1[i] != b[i] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("different seeds should draw different orderings")
+	}
+	if a1[0].ThreadID != "tr" || a1[0].Text == "" {
+		t.Fatalf("ref missing fields: %+v", a1[0])
 	}
 }

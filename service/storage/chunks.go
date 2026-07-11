@@ -117,3 +117,43 @@ func (d *DB) ChunkExists(messageID string) (bool, error) {
 	}
 	return err == nil, err
 }
+
+// RandomChunkRef is one row of the acceptance law's noise reference: a
+// corpus chunk with the fields the oracle needs to build an rrc.ChunkRef.
+type RandomChunkRef struct {
+	MessageID  string
+	ChunkIndex int
+	Text       string
+	ThreadID   string
+}
+
+// RandomChunkRefs draws `limit` chunks deterministically pseudo-randomly:
+// rows ordered by a Knuth multiplicative hash of (rowid + seed) — the
+// seed mixes BEFORE the multiply (added after, it would shift all values
+// equally and preserve the ordering) — so the
+// same seed always draws the same sample and different seeds draw
+// independent ones. This is the selection event's background sample —
+// unbiased by similarity, unlike any ANN shortlist.
+func (d *DB) RandomChunkRefs(limit int, seed uint64) ([]RandomChunkRef, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := d.Query(`
+		SELECT c.message_id, c.chunk_index, c.text, m.thread_id
+		FROM chunks c JOIN messages m ON m.id = c.message_id
+		ORDER BY ((c.rowid + ?) * 2654435761) % 4294967296
+		LIMIT ?`, int64(seed%4294967296), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RandomChunkRef
+	for rows.Next() {
+		var r RandomChunkRef
+		if err := rows.Scan(&r.MessageID, &r.ChunkIndex, &r.Text, &r.ThreadID); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
