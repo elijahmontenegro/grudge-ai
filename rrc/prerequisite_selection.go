@@ -235,7 +235,21 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	// CrossEncoderScore keeps the raw observation.
 	var refScores []float64
 	if len(candidates) > 0 {
-		floor, ferr := e.referenceFloor(ctx, local, predicate)
+		// CFAR discipline: reference cells must never contain the test
+		// cells. The draw excludes the candidates under test — otherwise
+		// a scoped small corpus draws the candidates themselves as
+		// "background", the floor becomes the best candidate's own
+		// score, and nothing can beat it (measured: a THREAD-scoped
+		// recall event whose reference set contained the planted fact at
+		// 0.903 admitted nothing). With the candidates excluded, a tiny
+		// scoped corpus yields too few references and the event runs
+		// ungated — the designed cold-start posture, per scope.
+		candIDs := make([]string, 0, len(candidates))
+		for _, cand := range candidates {
+			candIDs = append(candIDs, cand.id)
+		}
+		refPredicate := PredAnd{Children: []Predicate{predicate, PredExcludeMessageIDs{MessageIDs: candIDs}}}
+		floor, ferr := e.referenceFloor(ctx, local, refPredicate)
 		if ferr != nil {
 			return nil, PrerequisiteSelectionTelemetry{}, nil, ferr
 		}

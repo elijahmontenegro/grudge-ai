@@ -372,3 +372,50 @@ func gradedVec(dist int) []float32 {
 	}
 	return vector
 }
+
+// TestRandomChunksRespectsExclusion pins the CFAR reference discipline:
+// the noise draw must honor the exclusion predicate — reference cells
+// never contain the test cells. Without it, a scoped small corpus draws
+// the candidates themselves as "background" and the floor becomes the
+// best candidate's own score (measured live: a planted fact at 0.903
+// poisoned its own floor and recall admitted nothing).
+func TestRandomChunksRespectsExclusion(t *testing.T) {
+	db, err := storage.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateThread(&threadv1.Thread{Id: "t1", CreatedAt: timestamppb.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		insertVectorMessage(t, db, fmt.Sprintf("m%d", i), "t1", int64(i), basisVector(i))
+	}
+	oracle, err := NewChunkOracle(db, fixedEmbedder{vector: basisVector(0)}, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	excluded := rrc.PredAnd{Children: []rrc.Predicate{
+		rrc.PredThread{ThreadID: "t1"},
+		rrc.PredExcludeMessageIDs{MessageIDs: []string{"m0", "m1", "m2"}},
+	}}
+	refs, err := oracle.RandomChunks(t.Context(), 16, 7, excluded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 5 {
+		t.Fatalf("expected the 5 non-excluded chunks, got %d", len(refs))
+	}
+	for _, r := range refs {
+		if r.MessageID == "m0" || r.MessageID == "m1" || r.MessageID == "m2" {
+			t.Fatalf("excluded candidate %s drawn as reference", r.MessageID)
+		}
+	}
+	// Determinism: same seed, same draw order.
+	again, _ := oracle.RandomChunks(t.Context(), 16, 7, excluded)
+	for i := range refs {
+		if refs[i].MessageID != again[i].MessageID {
+			t.Fatal("same seed must reproduce the draw")
+		}
+	}
+}
