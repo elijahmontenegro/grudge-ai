@@ -2,21 +2,15 @@ package substrate
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc"
-	"github.com/elijahmontenegro/grudge/rrc/calibrate"
-	"github.com/elijahmontenegro/grudge/rrc/calibrate/seed"
-	"github.com/elijahmontenegro/grudge/rrc/calibrate/seedfit"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/service/config"
-	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/search"
 	"github.com/elijahmontenegro/grudge/service/storage"
 )
@@ -39,10 +33,6 @@ type Holder struct {
 
 	current atomic.Pointer[Substrate]
 	embeds  atomic.Pointer[search.EmbedQueue]
-
-	// calibrating is true while a background seed-set fit is in flight —
-	// see maybeCalibrate. Guards fit-stacking across rapid reloads.
-	calibrating atomic.Bool
 
 	mu sync.Mutex
 }
@@ -212,145 +202,5 @@ func (h *Holder) buildAndSwap(ctx context.Context, opts ...Option) error {
 		h.onReload()
 	}
 
-	// Self-calibration: if this substrate has a scorer but no fitted
-	// calibrator for it (Build fell back to the bootstrap), fit one in the
-	// background from the embedded seed set and swap it in live. Same
-	// self-service posture as the embedding backfill — the user configures
-	// a scorer; calibration is the system's job, not a command to run.
-	h.maybeCalibrate(subs)
 	return nil
-}
-
-// maybeCalibrate launches a background seed-set fit when the freshly-swapped
-// substrate is running on the bootstrap calibrator. Caller holds h.mu (it is
-// invoked from buildAndSwap), so reading cfg/subs here is race-free; the
-// goroutine itself touches only immutable copies and re-enters the holder
-// through ReloadProviders.
-func (h *Holder) maybeCalibrate(subs *Substrate) {
-	if subs.Scorer == nil || subs.RerankerModelID == "" {
-		return // nothing to calibrate against
-	}
-	if !h.calibrating.CompareAndSwap(false, true) {
-		return // a calibration stage is already in flight
-	}
-
-	scorer := subs.Scorer
-	scorerModelID := subs.RerankerModelID
-	calPath := datadir.CalibratorPath(h.cfg.DataDir)
-	// The live calibrator: the bootstrap when no artifact loaded, the
-	// persisted fit otherwise. Seed fits carry its structural-lift
-	// ratio forward (see seedfit.Fit); the health check judges it
-	// against the live scorer.
-	prior := subs.Engine.Config().Calibrator
-	fitted := subs.CalibratorFitted
-
-	go func() {
-		defer func() {
-			h.calibrating.Store(false)
-			// Scorer-swap staleness: if the user swapped scorers while
-			// this stage ran, the artifact we produced is for the OLD
-			// scorer and the new one is sitting on the bootstrap with
-			// nothing scheduled. Re-evaluate once against the current
-			// substrate; convergent because it only fires on identity
-			// change.
-			if cur := h.current.Load(); cur != nil && cur.RerankerModelID != scorerModelID {
-				h.maybeCalibrate(cur)
-			}
-		}()
-
-		// Independent context: the caller's reload ctx ends with the
-		// request that triggered it, but calibration is a background job
-		// that should survive it. Bounded so a wedged scorer or judge
-		// can't leak the goroutine forever (the mass replay's judge
-		// calls dominate the budget).
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-
-		// Stage 1 — cold start: no fitted artifact for this scorer.
-		if !fitted {
-			log.Printf("[Calibrate] no fitted calibrator for scorer=%s — fitting from seed set in background", scorerModelID)
-			var cal calibrate.Calibrator
-			var res *seedfit.Result
-			var err error
-			// Transport failures get a bounded retry: the ordinary boot
-			// race is spidey up before the scorer container finishes
-			// warming, and nothing external schedules another reload.
-			// Validity refusals (ErrInvalid) do NOT retry — a collapsed
-			// scorer stays collapsed for the next 30 seconds too.
-			for attempt := 1; ; attempt++ {
-				cal, res, err = seedfit.EnsureFitted(ctx, scorer, scorerModelID, calPath, seed.Pairs(), prior)
-				if err == nil || errors.Is(err, calibrate.ErrInvalid) || attempt >= 5 {
-					break
-				}
-				log.Printf("[Calibrate] seed fit attempt %d failed (retrying in 30s): %v", attempt, err)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(30 * time.Second):
-				}
-			}
-			if err != nil {
-				// Fail loudly, stay on bootstrap. The next reload retries.
-				// The fit's validity gate lands here too: a collapsed
-				// scorer cannot persist an artifact.
-				log.Printf("[Calibrate] seed fit failed (staying on bootstrap): %v", err)
-				return
-			}
-			if res != nil {
-				log.Printf("[Calibrate] fitted %s over %d samples (%d pos/%d neg, log-loss %.4f): A=%.3f B=%.3f C=%.3f",
-					scorerModelID, res.Samples, res.Positives, res.Negatives, res.LogLoss,
-					cal.A, cal.B, cal.C)
-			}
-
-			// Swap in via the normal rebuild: Build loads the artifact we
-			// just wrote. A concurrent scorer swap is handled by the
-			// deferred identity re-check above — the nested reload's own
-			// maybeCalibrate is CAS-suppressed while this goroutine runs,
-			// so the re-check is the mechanism, not the reload.
-			if err := h.ReloadProviders(ctx); err != nil {
-				log.Printf("[Calibrate] live swap failed (fit persisted; applies on next boot): %v", err)
-			}
-			return
-		}
-
-		// Stage 2 — health: the artifact fits ONCE per scorer-id, but the
-		// scorer behind an unchanged id can drift (a vLLM upgrade shifting
-		// the chat template). Re-verify the persisted calibrator against
-		// the LIVE scorer on the deterministic seed subsample, judged by
-		// the same absolute validity predicate every fit passes through.
-		if err := seedfit.Health(ctx, scorer, seed.Pairs(), prior); err != nil {
-			if !errors.Is(err, calibrate.ErrInvalid) {
-				// Could not check (scorer unreachable, transport failure):
-				// skip — never refit on a question that wasn't answered.
-				log.Printf("[Calibrate] scorer health check skipped: %v", err)
-				return
-			}
-			// The pairing is broken NOW. Refit against the live scorer —
-			// the fit's own validity gate means a still-broken scorer
-			// refuses to produce an artifact, so the persisted one is
-			// never overwritten by garbage.
-			log.Printf("[Calibrate] scorer health check FAILED for %s — refitting: %v", scorerModelID, err)
-			res, ferr := seedfit.Fit(ctx, scorer, seed.Pairs(), prior)
-			if ferr != nil {
-				log.Printf("[Calibrate] refit refused (scorer still broken; keeping persisted artifact): %v", ferr)
-				return
-			}
-			if err := calibrate.Save(calPath, calibrate.Artifact{
-				Calibrator:    res.Calibrator,
-				ScorerModelID: scorerModelID,
-				Samples:       res.Samples,
-				LogLoss:       res.LogLoss,
-			}); err != nil {
-				log.Printf("[Calibrate] refit persist failed: %v", err)
-				return
-			}
-			log.Printf("[Calibrate] refitted %s over %d samples (log-loss %.4f): A=%.3f B=%.3f C=%.3f",
-				scorerModelID, res.Samples, res.LogLoss, res.Calibrator.A, res.Calibrator.B, res.Calibrator.C)
-			if err := h.ReloadProviders(ctx); err != nil {
-				log.Printf("[Calibrate] live swap failed (refit persisted; applies on next boot): %v", err)
-			}
-			return
-		}
-
-	}()
 }

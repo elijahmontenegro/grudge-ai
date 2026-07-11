@@ -1,7 +1,6 @@
 package rrc
 
 import (
-	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 )
 
@@ -19,16 +18,6 @@ import (
 // to negligible. Edge formation is now a pure CE gate; trajectory
 // continuity is Local Context's concern.
 type EngineConfig struct {
-	// Calibrator maps the raw signals (semantic similarity, structural
-	// descendant mass) into one currency — P(prereq | sim, mass) — so
-	// acceptance is calibrated expected value against the token budget's
-	// marginal price, not a flat threshold on a raw score. This is the A4
-	// acceptance mechanism. The default is a bootstrap calibrator
-	// (DefaultConfig) that reproduces the precision-first operating point
-	// until a fitted model replaces it per-deployment (the runtime
-	// self-fits from the embedded seed set on first boot per scorer).
-	Calibrator calibrate.Calibrator
-
 	// ScorerModelID names the instrument whose units every formed edge's
 	// observations are in (raw similarity, provenance contribution
 	// weights) — stamped onto edges at formation as an observation
@@ -125,21 +114,12 @@ type EngineConfig struct {
 // edges for that round only. Independent of edge scoring.
 func DefaultConfig() EngineConfig {
 	return EngineConfig{
-		// Bootstrap calibrator + loss ratio. Until the rrc/calibrate offline
-		// pipeline fits real coefficients against counterfactual-coherence
-		// labels for a deployment's scorer, this reproduces the shipped
-		// precision-first operating point: with μ=0 (budget slack) acceptance
-		// is P(prereq|sim,mass) ≥ LossRatio(0.5). The bootstrap sigmoid is
-		// steep in similarity centered near the old 0.60 floor
-		// (A·0.60 + C ≈ 0 → P ≈ 0.5), so a candidate at sim=0.60/mass=0 sits
-		// right at the accept boundary — matching the retired EdgeThreshold.
-		// The positive mass term (B) lets a provenance-reached root clear the
-		// boundary at low similarity, which the flat cutoff never could — the
-		// whole point of the /\. These are a bootstrap, NOT a tuned magic
-		// number: the empirical flip is a fitted Calibrator, not a re-hunt of
-		// a threshold. See docs/JOURNAL and the structural-lift design.
-		Calibrator: calibrate.Bootstrap(0.60, 12.0, 6.0),
-		LossRatio:  0.5,
+		// LossRatio is the single hand-set value judgment. Acceptance
+		// itself carries no coefficients: every threshold is measured by
+		// the selection event about itself (rank-CFAR detection against
+		// the event's noise reference; mass ranks within the reached
+		// set), interpreted within that event, and discarded.
+		LossRatio: 0.5,
 
 		MinBatchStdDev:   0.05,
 		RerankTopK:       64,

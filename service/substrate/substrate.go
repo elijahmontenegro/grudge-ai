@@ -16,13 +16,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 
 	"github.com/elijahmontenegro/grudge/core"
 	"github.com/elijahmontenegro/grudge/rrc"
-	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 	"github.com/elijahmontenegro/grudge/rrc/chunk"
 	"github.com/elijahmontenegro/grudge/service/config"
-	"github.com/elijahmontenegro/grudge/service/datadir"
 	"github.com/elijahmontenegro/grudge/service/oracle"
 	"github.com/elijahmontenegro/grudge/service/search"
 	"github.com/elijahmontenegro/grudge/service/storage"
@@ -51,12 +50,6 @@ type Substrate struct {
 	// id, harmless.
 	RerankerModelID string
 	EmbedModelID    string
-
-	// CalibratorFitted reports whether Build loaded a persisted fitted
-	// acceptance calibrator for the configured scorer (vs. the bootstrap
-	// default). False + Scorer present is the Holder's trigger to fit one
-	// in the background — see Holder.maybeCalibrate.
-	CalibratorFitted bool
 }
 
 // Option configures Build at the seams that aren't expressible
@@ -210,29 +203,12 @@ func Build(ctx context.Context, cfg *config.Config, db *storage.DB, opts ...Opti
 		rrcCfg = se.ApplyTo(rrcCfg)
 	}
 
-	// Load a fitted acceptance calibrator if one has been produced for
-	// this scorer (the Holder self-fits in the background on first boot
-	// per scorer). Absent → keep the DefaultConfig bootstrap calibrator
-	// (which reproduces the precision-first operating point). A calibrator
-	// fit against a different scorer is refused (Load returns ok=false),
-	// so a scorer swap doesn't silently mis-gate. This is the seam that
-	// makes A4 a real calibrated cutover rather than a permanent bootstrap.
-	calPath := datadir.CalibratorPath(cfg.DataDir)
-	if art, ok, err := calibrate.Load(calPath, s.RerankerModelID); err != nil {
-		log.Printf("WARNING: calibrator load failed, using bootstrap: %v", err)
-	} else if ok {
-		rrcCfg.Calibrator = art.Calibrator
-		s.CalibratorFitted = true
-		// The mass axis (B) is a declared structural constant: the lift's
-		// magnitude has no label-free ground truth to measure, and no
-		// oracle runs inside the substrate to invent one. A and C are
-		// measured against the live scorer (seed references at first
-		// boot, drift-triggered re-measurement).
-		massAxis := "structural-lift prior (declared constant)"
-		log.Printf("Loaded acceptance calibrator (scorer=%s): A=%.3f B=%.3f C=%.3f | similarity+bias: seed-fit over %d pairs (log-loss %.3f) | mass axis: %s",
-			s.RerankerModelID, art.Calibrator.A, art.Calibrator.B, art.Calibrator.C,
-			art.Samples, art.LogLoss, massAxis)
-	}
+	// Acceptance carries no fitted artifact and no persistent state:
+	// every threshold is measured by the selection event about itself
+	// (the rank-CFAR noise reference), interpreted within that event,
+	// and discarded. The one hand-set value judgment is LossRatio.
+	log.Printf("Acceptance: detection-theoretic (rank CFAR, R=%d ref/event, scorer=%s) | stance s0=-log2(1-LossRatio)=%.2f bits",
+		16, s.RerankerModelID, -math.Log2(1-rrcCfg.LossRatio))
 
 	// Searcher + ChunkOracle share the same embedder and model id.
 	// Construct before the engine so the oracle can flow in as an

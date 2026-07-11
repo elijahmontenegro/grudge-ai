@@ -31,8 +31,8 @@ type Settings struct {
 // engine's live-tunable knobs. It deliberately mirrors the tunable
 // subset of rrc.EngineConfig rather than serializing it directly: the
 // wire contract (required keys, DisallowUnknownFields, validation)
-// lives here, and construction-time fields on the rrc side (Calibrator,
-// Chunk.Estimator) never leak into the settings file. ApplyTo /
+// lives here, and construction-time fields on the rrc side
+// (Chunk.Estimator) never leak into the settings file. ApplyTo /
 // EngineConfigFromRRC are the only conversion points. Zero-value
 // Engine means "use the rrc default" — handled at the service
 // boundary.

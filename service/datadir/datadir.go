@@ -74,12 +74,6 @@ func AttachmentsDir(dataDir, threadID string) (string, error) {
 	return filepath.Join(ws, "_attachments"), nil
 }
 
-// CalibratorPath is the fitted-calibrator artifact location, produced
-// by the substrate Holder's background self-fit and loaded at boot.
-func CalibratorPath(dataDir string) string {
-	return filepath.Join(dataDir, "calibrator.json")
-}
-
 // TokenScalePath is the learned per-model token-scale artifact,
 // written by rrc/tokenscale as completions report usage and loaded at
 // boot.

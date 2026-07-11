@@ -12,7 +12,6 @@ import (
 	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
 	threadv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/thread/v1"
 	"github.com/elijahmontenegro/grudge/proto/pbtext"
-	"github.com/elijahmontenegro/grudge/rrc/calibrate"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -720,11 +719,10 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.MinBatchStdDev != 0.05 {
 		t.Fatalf("expected MinBatchStdDev 0.05 (flat-spread guard), got %f", cfg.MinBatchStdDev)
 	}
-	// The bootstrap calibrator centers the accept boundary near the
-	// old 0.60 operating point: Predict(0.60, 0) ≈ LossRatio.
-	p := cfg.Calibrator.Predict(0.60, 0)
-	if p < 0.45 || p > 0.55 {
-		t.Fatalf("bootstrap calibrator should put sim=0.60/mass=0 at the accept boundary, got P=%f", p)
+	// Acceptance carries no coefficients: the stance is the single
+	// hand-set value judgment, in bits.
+	if got := stanceBits(cfg.LossRatio); got != 1 {
+		t.Fatalf("LossRatio 0.5 is a 1-bit stance, got %v", got)
 	}
 }
 
@@ -796,14 +794,10 @@ func TestSelectPrereqs_SkipsSelf(t *testing.T) {
 func threeGateConfig() EngineConfig {
 	cfg := DefaultConfig()
 	cfg.Chunk.Estimator = charEstimator{}
-	// Bootstrap calibrator centered at 0.5 with the mass term off, so the
-	// legacy fixtures' 0.1/0.4/0.5/0.6 CE values map to accept/reject at the
-	// same boundary through A4's calibrated path (Predict(0.5,0)=0.5). steep
-	// makes it a near-hard step for crisp boundary assertions. MinBatchStdDev
-	// (Gate 3) is retained — it's orthogonal to acceptance and survived A4.
-	// The z-score gate (Gate 2) was subsumed by calibration and removed;
-	// Gate-2-specific tests are updated to the calibrated model.
-	cfg.Calibrator = calibrate.Bootstrap(0.5, 40.0, 0)
+	// MinBatchStdDev (Gate 3) is retained — a flat candidate batch means
+	// the scorer isn't discriminating this round. Acceptance itself is
+	// the detection gate against the standard noise floor (seeded by
+	// threeGateEngine).
 	cfg.MinBatchStdDev = 0.05
 	return cfg
 }

@@ -248,7 +248,7 @@ func TestIndexAddIgnoresOtherModels(t *testing.T) {
 	}
 }
 
-func (o *ChunkOracle) resetExamined()      { o.examined.Store(0) }
+func (o *ChunkOracle) resetExamined()       { o.examined.Store(0) }
 func (o *ChunkOracle) examinedCount() int64 { return o.examined.Load() }
 
 // TestNearestChunksWorkInvariant is the deterministic guard the partition-graph

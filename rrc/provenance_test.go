@@ -146,42 +146,6 @@ func TestProvenanceReach_SurfacesAmputatedRoot(t *testing.T) {
 	}
 }
 
-// TestCalibratedAcceptance_MassLiftsLowSimilarityRoot is the A4 payoff: under
-// the calibrated acceptance model, a low-similarity candidate that the old
-// flat EdgeThreshold=0.60 would have cut IS accepted when structural mass
-// lifts its P(prereq) over the loss-ratio floor — the /\ working end to end.
-func TestCalibratedAcceptance_MassLiftsLowSimilarityRoot(t *testing.T) {
-	cfg := DefaultConfig() // default bootstrap calibrator (sim@0.60, mass on) + LossRatio 0.5
-
-	// Low similarity alone: below the boundary → rejected.
-	pSimOnly := cfg.Calibrator.Predict(0.15, 0.0)
-	if accept(pSimOnly, cfg.LossRatio, 0, 0) {
-		t.Fatalf("low-sim/no-mass should be rejected; P=%.3f", pSimOnly)
-	}
-	// Same low similarity, but high structural mass → lifted over the floor.
-	pWithMass := cfg.Calibrator.Predict(0.15, 1.0)
-	if !accept(pWithMass, cfg.LossRatio, 0, 0) {
-		t.Fatalf("low-sim + high-mass root should be accepted (the /\\); P=%.3f", pWithMass)
-	}
-	// The retired flat threshold (0.60) would have cut the raw 0.15
-	// score unconditionally — mass had no voice under it.
-}
-
-// TestCalibratedAcceptance_AbstainsWhenNothingClears confirms abstention
-// (valid zero-return) emerges: with budget slack (μ=0) and no candidate
-// clearing the precision floor, acceptance selects nothing rather than
-// forcing low-confidence picks.
-func TestCalibratedAcceptance_AbstainsWhenNothingClears(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Chunk.Estimator = charEstimator{}
-	// A field of weak, structureless candidates — none clears the floor.
-	for _, sim := range []float64{0.1, 0.2, 0.3, 0.35} {
-		if accept(cfg.Calibrator.Predict(sim, 0.0), cfg.LossRatio, 0, 0) {
-			t.Fatalf("weak candidate sim=%.2f should not clear the floor", sim)
-		}
-	}
-}
-
 func messageIDsOf(sel []*rrcv1.SelectedMessage) []string {
 	out := make([]string, len(sel))
 	for i, s := range sel {
