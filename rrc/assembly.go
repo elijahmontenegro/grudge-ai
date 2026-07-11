@@ -120,7 +120,7 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 
 		if len(selected.Selected) > 1 {
 			mmrStart := time.Now()
-			ranked, mmrErr := e.ApplyMMR(ctx, selected.Selected)
+			ranked, mmrErr := e.ApplyMMR(ctx, selected.Selected, serializedLocal.MessageIDs)
 			mmrMs = time.Since(mmrStart).Milliseconds()
 			if mmrErr != nil {
 				e.logger.Warn("RRC: MMR rerank skipped", "localContext", serializedLocal.Fingerprint, "err", mmrErr)

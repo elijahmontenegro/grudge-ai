@@ -1169,7 +1169,7 @@ func TestApplyMMR_ReordersNearDuplicates(t *testing.T) {
 		{MessageId: "distinct", EffectiveScore: 0.60},
 	}
 
-	out, err := e.ApplyMMR(context.Background(), selected)
+	out, err := e.ApplyMMR(context.Background(), selected, nil)
 	if err != nil {
 		t.Fatalf("ApplyMMR error: %v", err)
 	}
@@ -1218,7 +1218,7 @@ func TestApplyMMR_NoOracleError(t *testing.T) {
 	_, err := e.ApplyMMR(context.Background(), []*rrcv1.SelectedMessage{
 		{MessageId: "a", EffectiveScore: 0.5},
 		{MessageId: "b", EffectiveScore: 0.4},
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected ApplyMMR error without oracle wired")
 	}
@@ -1249,7 +1249,7 @@ func TestApplyMMR_ExactScores(t *testing.T) {
 		{MessageId: "far", EffectiveScore: 0.50},
 	}
 	e := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(o))
-	out, err := e.ApplyMMR(context.Background(), selected)
+	out, err := e.ApplyMMR(context.Background(), selected, nil)
 	if err != nil {
 		t.Fatalf("ApplyMMR error: %v", err)
 	}
@@ -1442,7 +1442,7 @@ func TestSelect_ProvenanceWeightIsRawEvidence(t *testing.T) {
 		{MessageId: "near", EffectiveScore: 0.90, ProvenanceWeight: 0.59},
 	}
 	me := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(o))
-	out2, err := me.ApplyMMR(context.Background(), mmrIn)
+	out2, err := me.ApplyMMR(context.Background(), mmrIn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1565,5 +1565,47 @@ func TestSelect_MassChannelRescuesDroppedContext(t *testing.T) {
 	}
 	if got["light"] {
 		t.Fatalf("mass rank-2 of 2 (0.58 bits < 1-bit stance) must not surface; edges=%v", got)
+	}
+}
+
+// TestApplyMMR_QuerySeedKillsEchoes pins S5: the kept set is seeded with
+// the QUERY, so a candidate that is a restatement of the question (a
+// question echo — the measured 0.82-echo-vs-0.72-fact pathology)
+// discounts to ~0 while the genuinely novel answer keeps its value and
+// leads the ranking.
+func TestApplyMMR_QuerySeedKillsEchoes(t *testing.T) {
+	o := newVectorOracle()
+	o.set("query-msg", []float32{1, 0, 0})
+	o.set("echo", []float32{0.99, 0.01, 0}) // ~restates the question
+	o.set("fact", []float32{0, 1, 0})       // orthogonal: the answer
+	e := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(o))
+
+	selected := []*rrcv1.SelectedMessage{
+		{MessageId: "echo", EffectiveScore: 0.94}, // echoes out-score answers
+		{MessageId: "fact", EffectiveScore: 0.66},
+	}
+	out, err := e.ApplyMMR(context.Background(), selected, []string{"query-msg"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[0].MessageId != "fact" {
+		t.Fatalf("the answer must lead once the echo is discounted against the query; got %s", out[0].MessageId)
+	}
+	var echoScore float64
+	for _, s := range out {
+		if s.MessageId == "echo" {
+			echoScore = float64(s.EffectiveScore)
+		}
+	}
+	if echoScore > 0.05 {
+		t.Fatalf("query-redundant echo should discount to ~0, got %v", echoScore)
+	}
+	// Without query seeding the echo leads on raw score — the old shape.
+	out2, err := e.ApplyMMR(context.Background(), selected, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out2[0].MessageId != "echo" {
+		t.Fatalf("nil query keeps the candidate-only form; got %s first", out2[0].MessageId)
 	}
 }

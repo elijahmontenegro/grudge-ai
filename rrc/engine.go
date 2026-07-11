@@ -263,7 +263,16 @@ func (e *Engine) selectLocked(anchorID string, scope threadv1.SelectionScope, th
 // engine-owned. When the oracle has no representation for any candidate
 // the input is returned unchanged — unmeasurable redundancy must not
 // silently rescale scores.
-func (e *Engine) ApplyMMR(ctx context.Context, selected []*rrcv1.SelectedMessage) ([]*rrcv1.SelectedMessage, error) {
+// queryIDs seeds the kept set with the QUERY itself (the current
+// turn's local-context messages): a candidate redundant with the
+// question — a question ECHO, a restatement from an earlier attempt —
+// carries ~zero novel information given the question is already on the
+// wire, and discounts to ~0 before any candidate is kept. Measured
+// pathology: an assistant's own "the user wants their dietary
+// restrictions" restatement out-scored the actual restrictions 0.82 to
+// 0.72; query-seeding sheds the echo first instead of letting it crowd.
+// Nil queryIDs (tests, external callers) keeps the candidate-only form.
+func (e *Engine) ApplyMMR(ctx context.Context, selected []*rrcv1.SelectedMessage, queryIDs []string) ([]*rrcv1.SelectedMessage, error) {
 	if len(selected) <= 1 {
 		return selected, nil
 	}
@@ -271,17 +280,51 @@ func (e *Engine) ApplyMMR(ctx context.Context, selected []*rrcv1.SelectedMessage
 		return selected, fmt.Errorf("ApplyMMR: no chunk oracle configured")
 	}
 	original := make(map[string]float64, len(selected))
-	ids := make([]string, 0, len(selected))
+	ids := make([]string, 0, len(selected)+len(queryIDs))
 	for _, item := range selected {
 		original[item.MessageId] = float64(item.EffectiveScore)
 		ids = append(ids, item.MessageId)
 	}
+	ids = append(ids, queryIDs...)
 	repVecs, err := e.oracle.RepresentativeVectors(ctx, ids)
 	if err != nil {
 		return selected, fmt.Errorf("ApplyMMR: representative vectors: %w", err)
 	}
 	if len(repVecs) == 0 {
 		return selected, nil
+	}
+	queryVecs := make([][]float32, 0, len(queryIDs))
+	for _, qid := range queryIDs {
+		if v := repVecs[qid]; v != nil {
+			queryVecs = append(queryVecs, v)
+		}
+	}
+	// simToKept starts from redundancy WITH THE QUERY and accumulates
+	// kept candidates as they are picked.
+	simToKept := func(candVec []float32, kept []*rrcv1.SelectedMessage) float64 {
+		if candVec == nil {
+			return 0
+		}
+		maxSim := 0.0
+		for _, qv := range queryVecs {
+			if s := cosineSim(candVec, qv); s > maxSim {
+				maxSim = s
+			}
+		}
+		for _, k := range kept {
+			if kv := repVecs[k.MessageId]; kv != nil {
+				if s := cosineSim(candVec, kv); s > maxSim {
+					maxSim = s
+				}
+			}
+		}
+		if maxSim < 0 {
+			maxSim = 0
+		}
+		if maxSim > 1 {
+			maxSim = 1
+		}
+		return maxSim
 	}
 
 	// Copy each SelectedMessage before rewriting EffectiveScore so
@@ -298,34 +341,31 @@ func (e *Engine) ApplyMMR(ctx context.Context, selected []*rrcv1.SelectedMessage
 	})
 
 	out := make([]*rrcv1.SelectedMessage, 0, len(selected))
-	out = append(out, remaining[0])
-	remaining = remaining[1:]
+	// The first pick is query-aware too: an echo must not lead the
+	// ranking just because its raw score tops the list.
+	{
+		bestIdx := 0
+		bestScore := math.Inf(-1)
+		for i, cand := range remaining {
+			eff := original[cand.MessageId] * (1.0 - simToKept(repVecs[cand.MessageId], nil))
+			if eff > bestScore {
+				bestScore = eff
+				bestIdx = i
+			}
+		}
+		pick := remaining[bestIdx]
+		if len(queryVecs) > 0 {
+			pick.EffectiveScore = float32(bestScore)
+		}
+		out = append(out, pick)
+		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
+	}
 
 	for len(remaining) > 0 {
 		bestIdx := -1
 		bestScore := math.Inf(-1)
 		for i, cand := range remaining {
-			candVec := repVecs[cand.MessageId]
-			var maxSim float64
-			for _, kept := range out {
-				if candVec == nil {
-					continue
-				}
-				keptVec := repVecs[kept.MessageId]
-				if keptVec == nil {
-					continue
-				}
-				if s := cosineSim(candVec, keptVec); s > maxSim {
-					maxSim = s
-				}
-			}
-			if maxSim < 0 {
-				maxSim = 0
-			}
-			if maxSim > 1 {
-				maxSim = 1
-			}
-			effective := original[cand.MessageId] * (1.0 - maxSim)
+			effective := original[cand.MessageId] * (1.0 - simToKept(repVecs[cand.MessageId], out))
 			if effective > bestScore {
 				bestScore = effective
 				bestIdx = i
