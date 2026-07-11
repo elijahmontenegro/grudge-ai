@@ -189,16 +189,20 @@ func (e *Engine) Config() EngineConfig { return e.cfg }
 func (e *Engine) Select(anchorID string, scope threadv1.SelectionScope, threadID string) (*rrcv1.SelectionResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.selectLocked(anchorID, scope, threadID)
+	return e.selectLocked(anchorID, scope, threadID, nil)
 }
 
-// selectLocked is Select's body. Caller holds e.mu.
-func (e *Engine) selectLocked(anchorID string, scope threadv1.SelectionScope, threadID string) (*rrcv1.SelectionResult, error) {
+// selectLocked is Select's body. Caller holds e.mu. refFloor is the
+// event's measured noise floor (from the same event's prerequisite
+// selection) — the instrument that interprets stored hop≥2
+// observations; nil (standalone Select, cold start) falls back to raw
+// scorer units.
+func (e *Engine) selectLocked(anchorID string, scope threadv1.SelectionScope, threadID string, refFloor []float64) (*rrcv1.SelectionResult, error) {
 	if scope == threadv1.SelectionScope_SELECTION_SCOPE_THREAD && threadID == "" {
 		return nil, ErrThreadNotFound
 	}
 
-	selected, belowFloor := extractSubgraph(e.dag, anchorID, threadID, scope, e.cfg)
+	selected, belowFloor := extractSubgraph(e.dag, anchorID, threadID, scope, e.cfg, refFloor)
 	selected = transitiveReduction(selected)
 	result := &rrcv1.SelectionResult{
 		EventId:         "sel-" + anchorID,

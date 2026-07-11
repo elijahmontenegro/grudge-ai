@@ -100,13 +100,14 @@ func (e *Engine) Assemble(ctx context.Context, req AssembleRequest) (AssembleRes
 	case serializedLocal != nil:
 		e.mu.Lock()
 		var err error
-		edges, prerequisiteSelection, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Scope, req.ThreadID)
+		var eventFloor []float64
+		edges, prerequisiteSelection, eventFloor, err = e.selectPrerequisitesLocked(ctx, serializedLocal, req.Anchor, req.Scope, req.ThreadID)
 		if err != nil {
 			e.mu.Unlock()
 			return AssembleResult{}, fmt.Errorf("assemble SelectPrerequisites: %w", err)
 		}
 		selectStart := time.Now()
-		selected, err = e.selectLocked(req.Anchor.Id, req.Scope, req.ThreadID)
+		selected, err = e.selectLocked(req.Anchor.Id, req.Scope, req.ThreadID, eventFloor)
 		selectMs = time.Since(selectStart).Milliseconds()
 		if err != nil {
 			e.mu.Unlock()

@@ -39,30 +39,37 @@ type selectionEntry struct {
 // σ(A·0.38+C) ≈ 0.13 — the same laundering class the provenance
 // channel's raw-weight banking fix killed.
 
-// seedEdgeScore is the hop-1 currency: the stored calibrated verdict.
+// seedEdgeScore is the hop-1 currency: the stored detection verdict.
 // A seed edge points into the CURRENT anchor — a message that did not
 // exist before this turn — so its stored Score is THIS selection
-// event's own acceptance P, consumed within the event that produced it:
-// fresh by construction, present circumstance included (mass
-// legitimately prices entry into the present turn, once).
+// event's own acceptance confidence, consumed within the event that
+// produced it: fresh by construction.
 func seedEdgeScore(edge *rrcv1.Edge) float64 {
 	return float64(edge.Score)
 }
 
-// relationalEdgeScore is the hop≥2 currency: the pair's semantic
-// dependency strength, derived from the recorded observation
-// (CrossEncoderScore) under the CURRENT calibrator at mass zero.
-// Circumstance never fossilizes into relation — structural liveness has
-// its own channel (the provenance mass walk); this walk is dependency
-// closure only. Deriving at read time is what makes calibration
-// genuinely retroactive: a curve refit re-gates every historical edge
-// with no rewrite (stored-P consumption delivered that only for
-// LossRatio changes). edge.Score remains WRITTEN as the formation-time
-// audit record; it is never load-bearing after its own event. A legacy
-// edge with no recorded observation prices to σ(C) ≈ 0 and dies — the
-// derive-from-observation analog of the zero-evidence provenance skip.
-func relationalEdgeScore(edge *rrcv1.Edge, cfg EngineConfig) float64 {
-	return cfg.Calibrator.Predict(float64(edge.CrossEncoderScore), 0)
+// relationalEdgeScore is the hop≥2 currency: the recorded OBSERVATION
+// (CrossEncoderScore, scorer units) interpreted by THIS event's
+// instrument — the measured noise floor. An edge whose raw observation
+// beats the whole reference sample is a detected dependency and carries
+// its detection confidence; one that doesn't is indistinguishable from
+// background and contributes nothing. Interpreting at read time is what
+// makes history genuinely re-gated per event with no rewrite — and it
+// is the perishable-inference law verbatim: observations keep,
+// interpreted by the current instrument; verdicts never outlive their
+// event. With no measurable floor (standalone Select, cold start) the
+// raw observation itself is the value — an honest scorer-units
+// fallback gated by the stance downstream.
+func relationalEdgeScore(edge *rrcv1.Edge, refFloor []float64) float64 {
+	raw := float64(edge.CrossEncoderScore)
+	if len(refFloor) >= minReferenceSample {
+		p := nullP(raw, refFloor)
+		if p > 1.0/float64(len(refFloor)+1) {
+			return 0 // background at this event's floor
+		}
+		return confidenceFromBits(surprisalBits(p))
+	}
+	return raw
 }
 
 // extractSubgraph performs best-first backward traversal from promptID through
@@ -75,7 +82,7 @@ func relationalEdgeScore(edge *rrcv1.Edge, cfg EngineConfig) float64 {
 // separate rebuild path: the fit moves, every historical edge re-gates,
 // nothing is rewritten. Hop-1 edges are this selection event's own
 // fresh verdicts (seedEdgeScore).
-func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threadv1.SelectionScope, cfg EngineConfig) ([]selectionEntry, map[string]float64) {
+func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threadv1.SelectionScope, cfg EngineConfig, refFloor []float64) ([]selectionEntry, map[string]float64) {
 	visited := make(map[string]bool)
 	visited[promptID] = true
 	belowFloor := make(map[string]float64) // messageID -> score (excluded by floor)
@@ -152,7 +159,7 @@ func extractSubgraph(d *dag, promptID string, promptThreadID string, scope threa
 			if !scopeAllows(edge, promptThreadID, scope) {
 				continue
 			}
-			edgeScore := relationalEdgeScore(edge, cfg)
+			edgeScore := relationalEdgeScore(edge, refFloor)
 			if !accept(edgeScore, cfg.LossRatio, 0, 0) {
 				continue
 			}

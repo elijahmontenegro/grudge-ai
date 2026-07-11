@@ -23,20 +23,24 @@ import (
 func (e *Engine) SelectPrerequisites(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.selectPrerequisitesLocked(ctx, local, anchor, scope, threadID)
+	edges, tel, _, err := e.selectPrerequisitesLocked(ctx, local, anchor, scope, threadID)
+	return edges, tel, err
 }
 
 // selectPrerequisitesLocked is SelectPrerequisites' body. Caller holds e.mu.
 // Candidate generation is the ANN oracle's job now, so it needs no corpus.
-func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, error) {
+// selectPrerequisitesLocked also returns the event's measured noise
+// floor (nil when ungated) so the same event's traversal can interpret
+// stored observations with it — the floor never outlives the event.
+func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *SerializedLocalContext, anchor *threadv1.Message, scope threadv1.SelectionScope, threadID string) ([]*rrcv1.Edge, PrerequisiteSelectionTelemetry, []float64, error) {
 	if local == nil || len(local.Chunks) == 0 {
-		return nil, PrerequisiteSelectionTelemetry{}, nil
+		return nil, PrerequisiteSelectionTelemetry{}, nil, nil
 	}
 	if anchor == nil {
-		return nil, PrerequisiteSelectionTelemetry{}, fmt.Errorf("SelectPrerequisites: nil anchor")
+		return nil, PrerequisiteSelectionTelemetry{}, nil, fmt.Errorf("SelectPrerequisites: nil anchor")
 	}
 	if e.oracle == nil {
-		return nil, PrerequisiteSelectionTelemetry{}, fmt.Errorf("%w: no chunk oracle configured", ErrScorerUnavailable)
+		return nil, PrerequisiteSelectionTelemetry{}, nil, fmt.Errorf("%w: no chunk oracle configured", ErrScorerUnavailable)
 	}
 
 	started := time.Now()
@@ -77,7 +81,7 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 		}
 		retrieved, err := e.oracle.NearestChunks(ctx, localChunk.Text, k, predicate)
 		if err != nil {
-			return nil, PrerequisiteSelectionTelemetry{}, fmt.Errorf("nearest chunks: %w", err)
+			return nil, PrerequisiteSelectionTelemetry{}, nil, fmt.Errorf("nearest chunks: %w", err)
 		}
 		// Candidates are already scope-filtered and local-excluded by the
 		// predicate; record each one's thread for its edge.
@@ -111,7 +115,7 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 				}
 				scores, err := e.scorer.Score(ctx, localChunk.Text, texts)
 				if err != nil {
-					return nil, PrerequisiteSelectionTelemetry{}, fmt.Errorf("%w: %v", ErrScorerFailed, err)
+					return nil, PrerequisiteSelectionTelemetry{}, nil, fmt.Errorf("%w: %v", ErrScorerFailed, err)
 				}
 				for i, idx := range uncached {
 					var score float64
@@ -173,7 +177,7 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 		if len(missing) > 0 {
 			provReached, err := e.scoreReachedMessages(ctx, local, missing, bestScore, bestTokens)
 			if err != nil {
-				return nil, PrerequisiteSelectionTelemetry{}, err
+				return nil, PrerequisiteSelectionTelemetry{}, nil, err
 			}
 			provenanceReached = provReached
 			totalReranked += provReached
@@ -212,7 +216,7 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 			PriorsConsidered: len(candidates),
 			CandidatesScored: len(candidates),
 			Reranked:         totalReranked,
-		}, nil
+		}, nil, nil
 	}
 
 	// Acceptance is DETECTION against a noise floor the event measures
@@ -233,13 +237,13 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	if len(candidates) > 0 {
 		floor, ferr := e.referenceFloor(ctx, local, predicate)
 		if ferr != nil {
-			return nil, PrerequisiteSelectionTelemetry{}, ferr
+			return nil, PrerequisiteSelectionTelemetry{}, nil, ferr
 		}
 		refScores = floor
 	}
 	gated := len(refScores) >= minReferenceSample
 	if gated && flatReference(refScores) {
-		return nil, PrerequisiteSelectionTelemetry{}, fmt.Errorf("%w: reference sample is flat — the scoring instrument is not discriminating", ErrScorerFailed)
+		return nil, PrerequisiteSelectionTelemetry{}, nil, fmt.Errorf("%w: reference sample is flat — the scoring instrument is not discriminating", ErrScorerFailed)
 	}
 	s0 := stanceBits(e.cfg.LossRatio)
 	beatAll := 1.0 / float64(len(refScores)+1)
@@ -324,6 +328,10 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 		"candidates", len(candidates), "localContextChunks", len(local.Chunks),
 		"retrieved", totalRetrieved, "cached", totalCached, "reranked", totalReranked,
 		"edges", len(edges), "dur", duration)
+	var eventFloor []float64
+	if gated {
+		eventFloor = refScores
+	}
 	return edges, PrerequisiteSelectionTelemetry{
 		DurationMs:          duration.Milliseconds(),
 		PriorsConsidered:    len(candidates),
@@ -332,7 +340,7 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 		EdgesFormed:         len(edges),
 		ProvenanceReached:   provenanceReached,
 		ProvenanceTruncated: reachTruncated,
-	}, nil
+	}, eventFloor, nil
 }
 
 type PrerequisiteSelectionTelemetry struct {

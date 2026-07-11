@@ -1330,12 +1330,14 @@ func TestSelect_LiftNeverLaundersIntoTransitivePull(t *testing.T) {
 	}
 }
 
-// TestSelect_RefitReGatesHistoryWithoutRewrite pins A3's retroactivity:
-// a calibrator change re-prices every historical hop≥2 edge at walk
-// time — no rewrite, no migration, no version stamp. The identical
-// stored edge is pulled under a permissive curve and refused under a
-// stiff one.
-func TestSelect_RefitReGatesHistoryWithoutRewrite(t *testing.T) {
+// TestSelect_EventFloorReGatesHistoryWithoutRewrite pins A3's
+// retroactivity in the detection law: stored hop≥2 observations are
+// interpreted by THIS event's measured noise floor — no rewrite, no
+// migration, no version stamp. The identical stored edge is traversed
+// under an event whose background is quiet (raw 0.65 beats the floor)
+// and refused under an event whose background is loud (0.65 is
+// indistinguishable from it).
+func TestSelect_EventFloorReGatesHistoryWithoutRewrite(t *testing.T) {
 	edges := []*rrcv1.Edge{
 		{FromMessageId: "c1", ToMessageId: "anchor",
 			Score: 0.9, CrossEncoderScore: 0.8,
@@ -1344,12 +1346,12 @@ func TestSelect_RefitReGatesHistoryWithoutRewrite(t *testing.T) {
 			Score: 0.9, CrossEncoderScore: 0.65,
 			FromThreadId: "t1", ToThreadId: "t1"},
 	}
-	run := func(cfg EngineConfig) map[string]bool {
-		e := NewEngine(cfg, newMockScorer(), WithChunkOracle(newMockChunkOracle()))
+	run := func(floor []float64) map[string]bool {
+		e := NewEngine(testConfig(), newMockScorer(), WithChunkOracle(newMockChunkOracle()))
 		for _, ed := range edges {
 			e.dag.AddEdge(ed)
 		}
-		result, err := e.Select("anchor", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+		result, err := e.selectLocked("anchor", threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1", floor)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1360,16 +1362,14 @@ func TestSelect_RefitReGatesHistoryWithoutRewrite(t *testing.T) {
 		return got
 	}
 
-	permissive := testConfig()
-	permissive.Calibrator = calibrate.Bootstrap(0.50, 12.0, 6.0) // floor 0.50: rel(0.65)≈0.86
-	stiff := testConfig()
-	stiff.Calibrator = calibrate.Bootstrap(0.75, 12.0, 6.0) // floor 0.75: rel(0.65)≈0.23
+	quiet := []float64{0.10, 0.15, 0.20, 0.25} // 0.65 beats all → detected
+	loud := []float64{0.50, 0.60, 0.70, 0.75}  // 0.65 loses to 0.70/0.75 → background
 
-	if got := run(permissive); !got["c2"] {
-		t.Fatalf("permissive curve must pull the 0.65-dependency chain, got %v", got)
+	if got := run(quiet); !got["c2"] {
+		t.Fatalf("quiet-background event must pull the 0.65-dependency chain, got %v", got)
 	}
-	if got := run(stiff); got["c2"] {
-		t.Fatalf("stiff curve must refuse the same stored edge — history re-gated with no rewrite, got %v", got)
+	if got := run(loud); got["c2"] {
+		t.Fatalf("loud-background event must refuse the same stored edge — history re-gated with no rewrite, got %v", got)
 	}
 }
 
@@ -1424,9 +1424,12 @@ func TestSelect_ProvenanceWeightIsRawEvidence(t *testing.T) {
 	if math.Abs(float64(m0.ProvenanceWeight)-0.525) > 1e-6 {
 		t.Fatalf("m0 provenance_weight = %v, want 0.525 (raw chain product)", m0.ProvenanceWeight)
 	}
-	wantEffective := 0.8 * e.cfg.Calibrator.Predict(0.75, 0)
+	// Standalone Select carries no event floor: the hop-2 relational
+	// value falls back to the raw observation itself (scorer units), so
+	// the chain is entry verdict × raw observation = 0.8 × 0.75.
+	wantEffective := 0.8 * 0.75
 	if math.Abs(float64(m0.EffectiveScore)-wantEffective) > 1e-5 {
-		t.Fatalf("m0 effective = %v, want %v (entry verdict × relational strength)", m0.EffectiveScore, wantEffective)
+		t.Fatalf("m0 effective = %v, want %v (entry verdict × raw observation)", m0.EffectiveScore, wantEffective)
 	}
 
 	// MMR rewrites EffectiveScore (negative for near-duplicates) but must
