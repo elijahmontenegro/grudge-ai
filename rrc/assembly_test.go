@@ -229,7 +229,7 @@ func TestDeliveryGroupsPreserveStoredChronology(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wire := groupsToWire([]DeliveryGroup{callGroup, middleGroup}, nil, "")
+	wire := groupsToWire([]DeliveryGroup{callGroup, middleGroup}, nil)
 	if len(wire) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(wire))
 	}
@@ -351,41 +351,5 @@ func TestAssemble_DensityShedRealizesPriceThatFiltersNextSelection(t *testing.T)
 	}
 	if n := sel("t-free", "q2", "fp-free"); n != 1 {
 		t.Fatalf("the identical candidate on a slack thread (μ=0) must form its edge; got %d", n)
-	}
-}
-
-// TestGroupsToWire_CrossThreadAnnotation pins delivery honesty: a
-// selected message from a DIFFERENT thread is prefixed with the
-// cross-thread marker so the model cannot misattribute recalled
-// material to the live conversation; same-thread messages and pure
-// tool messages are untouched.
-func TestGroupsToWire_CrossThreadAnnotation(t *testing.T) {
-	local := &threadv1.Message{Id: "l1", ThreadId: "t-cur", Role: threadv1.Role_ROLE_USER,
-		Content: pbtext.BlocksFromText("local text")}
-	foreign := &threadv1.Message{Id: "f1", ThreadId: "t-other", Role: threadv1.Role_ROLE_USER,
-		Content: pbtext.BlocksFromText("foreign fact")}
-	foreignTool := storedResult("f2", "t-other", "op-x", 3)
-	wire := groupsToWire([]DeliveryGroup{
-		{RootID: "l1", RootIDs: []string{"l1"}, Messages: []*threadv1.Message{local}},
-		{RootID: "f1", RootIDs: []string{"f1"}, Messages: []*threadv1.Message{foreign, foreignTool}},
-	}, nil, "t-cur")
-	byFirst := map[string]string{}
-	for _, m := range wire {
-		if len(m.Content) > 0 && m.Content[0].GetText() != nil {
-			byFirst[m.Content[len(m.Content)-1].GetText().GetText()] = m.Content[0].GetText().Text
-		}
-	}
-	if byFirst["foreign fact"] != crossThreadMarker {
-		t.Fatalf("foreign semantic message must carry the marker, got %q", byFirst["foreign fact"])
-	}
-	if byFirst["local text"] != "local text" {
-		t.Fatalf("local message must be untouched, got %q", byFirst["local text"])
-	}
-	for _, m := range wire {
-		if tr := m.Content[len(m.Content)-1].GetToolResult(); tr != nil {
-			if m.Content[0].GetText() != nil && m.Content[0].GetText().Text == crossThreadMarker {
-				t.Fatal("pure tool message must not be annotated")
-			}
-		}
 	}
 }
