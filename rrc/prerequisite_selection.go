@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	rrcv1 "github.com/elijahmontenegro/grudge/proto/gen/go/grudge/rrc/v1"
@@ -242,20 +243,56 @@ func (e *Engine) selectPrerequisitesLocked(ctx context.Context, local *Serialize
 	}
 	s0 := stanceBits(e.cfg.LossRatio)
 	beatAll := 1.0 / float64(len(refScores)+1)
+	// The mass channel is an INDEPENDENT detector — never summed with
+	// similarity through an exchange rate. Its null population is the
+	// walk's reached set itself: a candidate's mass rank among this
+	// turn's structural ancestry gives an exact rank-based null
+	// probability, so a heavy hitter surfaces on structural evidence
+	// alone (junk similarity included — the dropped-then-recalled
+	// regime), gated by the same stance and price in the same bits.
+	// Detections that pass BOTH channels add their bits (the channels
+	// are measured independent) — richer joint evidence, higher audit
+	// confidence.
+	massBits := make(map[string]float64, len(reachMass))
+	if n := len(reachMass); n > 0 {
+		ranked := make([]string, 0, n)
+		for id := range reachMass {
+			ranked = append(ranked, id)
+		}
+		sort.Slice(ranked, func(i, j int) bool {
+			if reachMass[ranked[i]] != reachMass[ranked[j]] {
+				return reachMass[ranked[i]] > reachMass[ranked[j]]
+			}
+			return ranked[i] < ranked[j]
+		})
+		for i, id := range ranked {
+			massBits[id] = surprisalBits(float64(i+1) / float64(n+1))
+		}
+	}
 	var edges []*rrcv1.Edge
 	for _, candidate := range candidates {
 		sim := candidate.score
+		priceBits := s0 + price*float64(bestTokens[candidate.id])
 		var conf float64
 		if gated {
-			p := nullP(sim, refScores)
-			if p > beatAll {
-				continue // does not stand out from this event's background
+			semBits := 0.0
+			if p := nullP(sim, refScores); p <= beatAll {
+				semBits = surprisalBits(p)
 			}
-			bits := surprisalBits(p)
-			if bits < s0+price*float64(bestTokens[candidate.id]) {
-				continue // detection too weak for the stance at the current price
+			mBits := massBits[candidate.id]
+			semDetected := semBits > 0 && semBits >= priceBits
+			massDetected := mBits > 0 && mBits >= priceBits
+			if !semDetected && !massDetected {
+				continue // stands out in neither channel at this price
 			}
-			conf = confidenceFromBits(bits)
+			total := 0.0
+			if semDetected {
+				total += semBits
+			}
+			if massDetected {
+				total += mBits
+			}
+			conf = confidenceFromBits(total)
 		} else {
 			conf = sim
 			if conf < 0 {

@@ -1508,3 +1508,59 @@ func TestEdgesCarryInstrumentIdentity(t *testing.T) {
 		t.Fatalf("cross-encoder edge stamp: %+v", ceEdges)
 	}
 }
+
+// TestSelect_MassChannelRescuesDroppedContext pins S3: the mass channel
+// is an independent detector over the reached set's own rank
+// distribution. A candidate whose similarity CANNOT beat the noise floor
+// (the dropped-then-recalled regime: deixis shares no content with its
+// referent) is accepted on structural evidence alone when its mass leads
+// the reached set (rank 1 of 2 → -log2(1/3) ≈ 1.58 bits ≥ the 1-bit
+// stance), while a junk-sim candidate at the bottom of the reached set
+// (rank 2 of 2 → 0.58 bits) stays out. No exchange rate anywhere.
+func TestSelect_MassChannelRescuesDroppedContext(t *testing.T) {
+	mc := newMockScorer()
+	o := newMockChunkOracle()
+	e := testEngine(mc, o)
+
+	// Window anchor w; heavy and light are its recorded ancestry.
+	addMsg(o, "heavy", 0, "t1", "the heavy root")
+	addMsg(o, "light", 1, "t1", "the light noise")
+	w := addMsg(o, "w", 2, "t1", "what did that do again?")
+	// Provenance: heavy fed w's generation twice over (mass 1.7), light
+	// barely (0.2).
+	e.dag.AddEdge(&rrcv1.Edge{FromMessageId: "heavy", ToMessageId: "w",
+		Score: 0.9, Source: rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE,
+		FromThreadId: "t1", ToThreadId: "t1"})
+	e.dag.AddEdge(&rrcv1.Edge{FromMessageId: "heavy", ToMessageId: "w",
+		Score: 0.8, Source: rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE,
+		FromThreadId: "t1", ToThreadId: "t1"})
+	e.dag.AddEdge(&rrcv1.Edge{FromMessageId: "light", ToMessageId: "w",
+		Score: 0.2, Source: rrcv1.EdgeSource_EDGE_SOURCE_PROVENANCE,
+		FromThreadId: "t1", ToThreadId: "t1"})
+
+	// Both score BELOW the 0.49 noise floor against the deictic query —
+	// the semantic channel sees nothing.
+	mc.SetScore("the heavy root", "what did that do again?", 0.2)
+	mc.SetScore("the light noise", "what did that do again?", 0.2)
+
+	local := &SerializedLocalContext{
+		EventID: "sel-w", Fingerprint: "fp-mass-rescue",
+		MessageIDs: []string{"w"},
+		Chunks:     []SerializedLocalContextChunk{{Index: 0, Text: "what did that do again?"}},
+	}
+	edges, _, err := e.SelectPrerequisites(context.Background(), local, w,
+		threadv1.SelectionScope_SELECTION_SCOPE_THREAD, "t1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, ed := range edges {
+		got[ed.FromMessageId] = true
+	}
+	if !got["heavy"] {
+		t.Fatalf("mass rank-1 must surface on structural evidence alone; edges=%v", got)
+	}
+	if got["light"] {
+		t.Fatalf("mass rank-2 of 2 (0.58 bits < 1-bit stance) must not surface; edges=%v", got)
+	}
+}
